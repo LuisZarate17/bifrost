@@ -16,6 +16,8 @@ dist
 /models/
 /captures/
 /evals/out/
+/evals/shots/
+/evals/**/*.png
 /*.png
 
 # Windows / editor noise

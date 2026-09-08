@@ -202,7 +202,8 @@ your bug.
 ## Stage E — Live with it
 
 ### E1 — Two weeks
-**Do:** Use it. Tune the default prompt — expect ~20 rewrites. Keep a scratch list of what
+**Do:** Use it. Tune the default prompt — expect ~20 rewrites, but run each candidate against
+the eval set (F1) rather than judging it on the screenshot in front of you. Keep a scratch list of what
 actually annoyed you.
 **Done when:** You reach for it without deciding to.
 **Then:** pick the next thing off the "after v1" list in PLAN.md, ordered by what you missed —
@@ -219,13 +220,23 @@ syntax-highlighted code on a dark theme. Nobody benchmarks your actual use case 
 So make swapping models a ten-minute job instead of a vibes decision.
 
 ### F1 — Build a personal bench harness
-**Do:** Extend A4's code to loop over a folder of screenshots × a list of Ollama model tags,
-and print a table: model · did it get it right · time to first token · time to full answer ·
+**Do:** Extend A4's code to loop over **screenshots × model tags × prompt variants**, and print
+a table: model · prompt · did it get it right · time to first token · time to full answer ·
 resident VRAM.
+
+**The prompt is a dimension, not a constant.** It does all the intent-guessing in this app, so
+it gets tested exactly like a model does. A prompt tweak that fixes today's screenshot routinely
+breaks one you fixed last week, and you will not notice without a fixed set to re-run. Prompt
+and model also interact — a prompt tuned for one model may be wrong for its replacement, so a
+model swap means re-testing prompts, not carrying the old one over.
 
 **Seed it with A2's artifacts** — keep those screenshots and timings, don't throw them away.
 
-**Done when:** testing a new model is one command.
+**Note:** `evals/shots/` is gitignored. Screenshots of a real desktop can contain anything, so
+the eval set stays local and is never committed, private repo or not.
+
+**Done when:** testing a new model *or a new prompt* is one command, and you can see whether a
+change regressed anything.
 
 ### F2 — Grow the eval set from real failures
 **Do:** Every time the model misreads something during normal use, **save that screenshot into

@@ -52,6 +52,21 @@ lead with problem-detection without assuming a problem exists — roughly:
 **Most important tunable in v1, and it's a string.** Config file, not source. Expect twenty
 rewrites in week one.
 
+### The prompt gets tested, not just tweaked
+
+Because it does all the intent-guessing, **the prompt deserves the same treatment as the model
+— measured against a fixed set of screenshots, not adjusted by feel.** Two reasons this matters
+more than it looks:
+
+- A prompt change that fixes the screenshot in front of you often quietly breaks a case you
+  fixed last week. Without a fixed set to re-run, you won't notice.
+- Prompt and model interact. A prompt tuned for one model can be the wrong prompt for its
+  replacement, so a model swap means re-testing prompts too — not assuming the old one carries.
+
+So the bench harness (BUILD.md F1) varies **model × prompt × screenshot**, and a prompt change
+ships only if it doesn't regress the set. Keep the last few variants in the config with a note
+on what each was trying to fix — the failed ones are as informative as the winner.
+
 ---
 
 ## 3. Environment (verified — do not re-derive)
