@@ -114,13 +114,53 @@ its own follow-up screenshot. One Win32 call does both:
 
 ## 6. Model
 
-- **Q8, not Q4.** Screen content is mostly code and terminals, so reading small dense text
-  accurately is the whole job. Vision models degrade under quantization harder than text
-  models, and a misread stack trace is worse than a slow answer.
-- Qwen2.5-VL / Qwen3-VL class, 7–8B. Check ollama.com for current tags.
-- **Resident, `keep_alive: -1`.** With instant-answer there's no typing time to hide a cold
-  start behind.
-- A 1080p screen is a few hundred image tokens. Measure the real number at P0.
+- **Qwen3-VL** is the family. Size and quant get settled empirically at A2 — 8B@Q4_K_M vs
+  4B@Q8 on real screenshots of Luis's own code. See BUILD.md for why benchmarks don't decide it.
+- Reading small dense text accurately is the whole job; a misread stack trace is worse than a
+  slow answer. Vision models degrade under quantization harder than text models, so bias toward
+  precision when it's close.
+- A 1080p screen is a few hundred image tokens. Measure the real number at A2.
+
+---
+
+## 6b. Power control — explicit on/off, never a timeout
+
+**Revised 2026-09-08.** An earlier draft said `keep_alive: -1` — keep the model resident
+forever. That was written before we measured what resident actually costs.
+
+**Measured on this machine:**
+
+| State | GPU memory | Notes |
+|---|---|---|
+| Off | **454 MiB** | baseline, Warden holding nothing |
+| Model loaded | **5,705 MiB** | ~5.2 GB, about a third of the card |
+| Unloaded again | **454 MiB** | card gives it back exactly |
+
+Warm-up cost: **~18 s** on the first load after a reboot, **~7 s** on later loads in the same
+session — the difference is Windows' disk cache on a 4.9 GB file.
+
+**Holding 5 GB permanently is the wrong default**, especially since the popup has to work over
+games and a modern title wants 8–12 GB. Warden would be competing with the thing you're using
+it on.
+
+**So: no timeout at all. Three explicit states, and you always know which one you're in.**
+
+| State | Meaning |
+|---|---|
+| **Off** | Default. Card free. Nothing loaded. |
+| **Warming** | Loading, ~7 s (~18 s after a reboot). |
+| **Ready** | Loaded and instant. |
+
+Warm up and turn off are both deliberate actions — hotkey or tray. A timeout is rejected
+because it decides for you and leaves you guessing whether the next press is instant or an
+18-second stall.
+
+**The state readout must come from the GPU, not from Ollama.** `ollama ps` reports what Ollama
+*believes* is loaded. Read actual VRAM via NVML (the `nvml-wrapper` crate) so "Off" means the
+card genuinely gave the memory back — verified, not assumed. Polling `nvidia-smi` also works but
+spawns a process per sample.
+
+Mechanism, already proven to work: load with `keep_alive: -1`, unload with `keep_alive: 0`.
 
 ---
 
@@ -163,8 +203,14 @@ history & persistence · region select · chat window · terminal mode (TUI,
 - **The popup captures itself.** Without the exclusion flag, a follow-up screenshot contains
   Warden's own last answer and the model reads itself back.
 - **GDI capture returns black** on fullscreen and hardware-accelerated content. Use WGC.
-- **Ollama unloads the model** after five minutes. `keep_alive: -1` — and it matters more here
-  than in a chat app, since nothing masks the cold start.
+- **Ollama unloads the model** after five minutes by default, and nothing masks the cold start
+  here. Handled by the explicit power control in §6b — not by a longer timeout.
+- **`ollama ps` is not proof.** It reports what Ollama believes is loaded. Only NVML / the card
+  itself proves memory was actually released.
+- **A broken CUDA install fails silently** — Ollama just runs on CPU with no error. If inference
+  feels slow, check `ggml-cuda.dll` exists before debugging anything else. Cost real time in A1.
+- **`ollama app.exe` opens a blocking first-run GUI.** Use `ollama.exe serve` detached.
+- **Ollama has no autostart entry** — it does not survive a reboot.
 - **Tauri buffers streamed responses** through `proxy_localhost_stream` — fine in dev, broken in
   the packaged `.exe`. Use `tauri::ipc::Channel` or events.
 - **The popup must not steal focus.** `WS_EX_NOACTIVATE`.

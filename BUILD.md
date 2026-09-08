@@ -1,6 +1,6 @@
 # Warden — Build Plan
 
-Companion to [PLAN.md](PLAN.md). Fifteen chunks in five stages. **Each chunk is one sitting
+Companion to [PLAN.md](PLAN.md). Nineteen chunks in six stages. **Each chunk is one sitting
 and one execution chat.** Every one ends in something observable, so you can always stop.
 
 Author has read about Rust but never written it. Chunks are sized for that.
@@ -52,9 +52,10 @@ Rust 1.98.1 (MSVC), Ollama 0.33.3, `llama3.1:8b`. GPU verified: **100% GPU, 152 
 vs 12.74 on CPU. Full write-up: **[docs/A1-results.md](docs/A1-results.md)**.
 
 Two findings that change later chunks:
-- **Cold load is 17.9 s; warm is 0.002 s.** `keep_alive: -1` is not optional — measured, and
-  worse than the plan assumed.
-- **Ollama has no autostart entry.** It won't survive a reboot. C4 has to solve this.
+- **Cold load is 17.9 s; warm is 0.002 s.** This first led to "keep the model resident forever,"
+  but measuring the cost — 5.2 GB of a 16 GB card — reversed that. See **C4**, which replaces
+  the always-resident idea with explicit on/off.
+- **Ollama has no autostart entry.** It won't survive a reboot. **C5** has to solve this.
 
 Gotchas if repeating: `ollama app.exe` opens a blocking first-run GUI (this killed two automated
 attempts) — use `ollama.exe serve` detached instead. A broken CUDA extraction fails **silently**
@@ -124,9 +125,34 @@ taskbar. Windows toasts share that corner and will sometimes overlap — accepte
 **Do:** A text box that asks again against the capture already in memory.
 **Done when:** Second question, no new screenshot taken.
 
-### C4 — Stop launching it
-**Do:** Tray icon, launch on login, model warmed on start (`keep_alive: -1`), `Esc` dismisses.
+### C4 — Power control (explicit on/off, verified against the card)
+**Why this exists:** the model costs **5.2 GB of a 16 GB card** while loaded. Holding it there
+permanently is wrong when the popup has to work over games that want 8–12 GB. A timeout is also
+wrong — it decides for you and leaves you guessing whether the next press is instant or an
+18-second stall. So: explicit states you control and can see.
+
+**Do:**
+- Three states, surfaced in the tray: **Off** (card free) · **Warming** · **Ready**.
+- Warm up = `POST /api/generate` with `keep_alive: -1`. Turn off = same call with
+  `keep_alive: 0`. Both are already proven to work on this machine.
+- A hotkey (or tray click) for each.
+- **Read the state from the GPU, not from Ollama.** Use NVML via the `nvml-wrapper` crate.
+  `ollama ps` reports what Ollama *believes*; NVML reports what the card actually holds.
+  Show the real MB figure in the tray tooltip.
+- Decide what the capture hotkey does while Off: auto-warm then answer (showing a "warming"
+  state so the delay is explained), rather than failing silently.
+
+**Done when:** you can turn it off and watch VRAM return to the 454 MiB baseline — confirmed
+against `nvidia-smi`, not against Ollama's own claim.
+
+**Reference numbers measured 2026-09-08:** off 454 MiB · loaded 5,705 MiB · unloaded 454 MiB ·
+warm-up ~7 s in-session, ~18 s after a reboot (disk cache).
+
+### C5 — Stop launching it
+**Do:** Launch on login, `Esc` dismisses, tray menu tidy.
 **Done when:** You never open it on purpose.
+**Watch for:** Ollama itself has **no autostart entry** (found in A1) — it won't survive a
+reboot. Warden either starts it or tells you clearly that it's not running.
 
 ---
 

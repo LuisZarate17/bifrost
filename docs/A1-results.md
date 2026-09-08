@@ -33,9 +33,15 @@ Same prompt, same model:
 | Load duration | **17.94 s** | 0.002 s |
 | Total | **32.85 s** | **0.70 s** |
 
-This is the `keep_alive: -1` decision validated with a real measurement, and the stall is worse
-than the plan assumed. An 18-second load is exactly the "first press after lunch" failure that
-would stop the habit forming. **Do not ship without the model held resident.**
+An 18-second load is exactly the "first press after lunch" failure that would stop the habit
+forming.
+
+> **Superseded 2026-09-08.** This first read as "hold the model resident forever." Measuring the
+> *cost* of resident — **5,705 MiB of a 16,303 MiB card** — reversed that conclusion. Warden now
+> uses explicit on/off states instead of any timeout. See PLAN.md §6b and BUILD.md C4.
+>
+> A follow-up measurement also showed warm-up is **~7 s in-session**, not 18 — the 18 s figure is
+> the first read of a 4.9 GB file off cold disk. Later loads hit Windows' file cache.
 
 Also note: first-run numbers are meaningless on Blackwell — kernel warmup made the cold run
 report a prompt eval rate of 1.55 tok/s, versus 90.76 tok/s warm. **Always measure warm.**
