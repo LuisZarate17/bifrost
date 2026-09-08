@@ -1,0 +1,32 @@
+# Rust
+/target
+**/target
+# Cargo.lock is committed on purpose — this is a binary, not a library.
+
+# Tauri
+src-tauri/target
+src-tauri/gen
+
+# Node / React
+node_modules
+dist
+.vite
+
+# Project-specific
+/models/
+/captures/
+/evals/out/
+/*.png
+
+# Windows / editor noise
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# Secrets
+.env
+.env.*
+*.local
