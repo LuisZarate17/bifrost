@@ -47,10 +47,18 @@ and GUI grounding that identifies buttons and fields in screenshots.
 **A4 is already a useful tool**, in a terminal, before any GUI exists. If everything after this
 stalls, you still have something.
 
-### A1 — Toolchain
-**Do:** Install `rustup` (MSVC toolchain) and Ollama. Pull any small text model and run it.
-**Done when:** `ollama run <model>` answers you, and you've seen tokens/sec on the 5070 Ti.
-**Watch for:** Rust on Windows needs MSVC build tools; rustup will prompt. Say yes.
+### A1 — Toolchain — DONE 2026-09-07
+Rust 1.98.1 (MSVC), Ollama 0.33.3, `llama3.1:8b`. GPU verified: **100% GPU, 152 tok/s warm**
+vs 12.74 on CPU. Full write-up: **[docs/A1-results.md](docs/A1-results.md)**.
+
+Two findings that change later chunks:
+- **Cold load is 17.9 s; warm is 0.002 s.** `keep_alive: -1` is not optional — measured, and
+  worse than the plan assumed.
+- **Ollama has no autostart entry.** It won't survive a reboot. C4 has to solve this.
+
+Gotchas if repeating: `ollama app.exe` opens a blocking first-run GUI (this killed two automated
+attempts) — use `ollama.exe serve` detached instead. A broken CUDA extraction fails **silently**
+and simply runs on CPU, so check `ggml-cuda.dll` exists before debugging anything else.
 
 ### A2 — The bake-off
 **Do:** Pull **Qwen3-VL-8B (Q4_K_M)** and **Qwen3-VL-4B (Q8)**. Screenshot your real editor and

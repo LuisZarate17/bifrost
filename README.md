@@ -3,8 +3,9 @@
 Press a hotkey, get an answer about whatever is on screen, from a model that never leaves the
 machine.
 
-**Status:** Not started. Planning docs only, no code yet. Next up: **A1 — Toolchain** (install
-rustup + Ollama).
+**Status:** No application code yet. **A1 (toolchain) is done** — Rust 1.98.1 (MSVC), Ollama
+0.33.3, GPU inference verified at 152 tok/s. See [docs/A1-results.md](docs/A1-results.md).
+Next up: **A2 — the vision model bake-off**.
 
 ## How it works
 
