@@ -101,11 +101,21 @@ Gotcha if repeating: **Ollama's prompt cache invalidates the obvious protocol.**
 image at once, so repeat runs return prefill in 5 ms instead of ~450 ms and every model looks
 identical. Only unloading clears it — see A2-results.md.
 
-### A3 — First Rust: capture a PNG
-**Do:** `cargo new` a CLI. Add [`windows-capture`](https://crates.io/crates/windows-capture).
-Grab the full screen, write `out.png`.
-**Done when:** `out.png` looks exactly like your screen.
-**Watch for:** This is where cargo, `Result` and `?` stop feeling foreign. Take your time.
+### A3 — First Rust: capture a PNG — DONE 2026-09-10
+`capture/` captures the primary monitor via `windows-capture` 2.0.1 and writes a 1920×1080
+`out.png`. Verified against fullscreen hardware-decoded video — full colour, no black frame,
+so this is genuinely WGC and not GDI. Full write-up: **[docs/A3-results.md](docs/A3-results.md)**.
+
+Two findings that change later chunks:
+- **The MSVC build tools were missing entirely.** A1 recorded the toolchain as verified but only
+  ever exercised Ollama; nothing had reached the link step, because `frametest` fails at the
+  borrow check first. Installed at A3. **B1 needs them too** — Tauri on Windows expects MSVC.
+- **The B3 borrow fight happened here, early.** `Frame`/`FrameBuffer` are `!Send`/`!Sync` and
+  their buffer is unmapped when the callback returns, so the pixels must be copied out with
+  `.to_vec()` before they can leave. B3 is the same problem behind a button.
+
+Gate worth reusing: a throwaway `cargo new` + `cargo run` printing `Hello, world!` proves compile
+**and link** in ten seconds, before any dependency can muddy the diagnosis.
 
 ### A4 — First useful thing
 **Do:** Extend A3 — base64 the PNG, POST to Ollama with the default prompt, print the answer.

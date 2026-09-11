@@ -80,7 +80,16 @@ strong OCR, GUI grounding). A misread stack trace is worse than a slow answer.
 
 ---
 
-## A3 — First Rust: capture a PNG
+## A3 — First Rust: capture a PNG — DONE 2026-09-10
+
+> Built as `capture/` using `windows-capture` 2.0.1. Writes a 1920×1080 `out.png`, verified
+> against fullscreen hardware-decoded video (no black frame — genuinely WGC, not GDI).
+> See [docs/A3-results.md](docs/A3-results.md).
+>
+> **The MSVC build tools were missing** and had to be installed first — A1 recorded the toolchain
+> as verified but only ever tested Ollama, and nothing had reached the link step. If repeating on
+> a fresh machine, install `Microsoft.VisualStudio.2022.BuildTools` (VCTools workload) and prove
+> it with a throwaway `cargo run` before adding any dependency.
 
 `cargo new` a CLI in the repo. Use the [`windows-capture`](https://crates.io/crates/windows-capture)
 crate (Windows Graphics Capture API). Capture the full screen and write `out.png`.

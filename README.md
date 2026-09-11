@@ -3,7 +3,7 @@
 Press a hotkey, get an answer about whatever is on screen, from a model that never leaves the
 machine.
 
-**Status:** No application code yet. **A1 and A2 are done.**
+**Status:** **A1, A2 and A3 are done** — the screen capture works; nothing talks to the model yet.
 
 - **A1 — toolchain.** Rust 1.98.1 (MSVC), Ollama 0.33.3, GPU verified at 152 tok/s.
   See [docs/A1-results.md](docs/A1-results.md).
@@ -11,8 +11,16 @@ machine.
   repo's own code. **Chose `qwen3-vl:8b-instruct-q4_K_M`** — the only candidate that correctly
   concluded a broken file wouldn't compile. Both 4B models called it fine, and higher precision
   bought nothing. See [docs/A2-results.md](docs/A2-results.md).
+- **A3 — screen capture.** `capture/` grabs the primary monitor via Windows Graphics Capture and
+  writes a 1920×1080 PNG. Verified against fullscreen hardware-decoded video — no black frame,
+  so it is genuinely WGC and not GDI. See [docs/A3-results.md](docs/A3-results.md).
 
-Next up: **A3 — first Rust, capture the screen to a PNG.**
+Next up: **A4 — send the capture to the model and stream the answer.** That's the first chunk
+that is useful on its own, in a terminal, with no GUI.
+
+```
+cd capture && cargo run -- 5     # wait 5s, capture the screen, write out.png
+```
 
 ## How it works
 

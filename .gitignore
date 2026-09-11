@@ -19,6 +19,7 @@ dist
 /evals/shots/
 /evals/**/*.png
 /*.png
+/capture/*.png
 
 # Windows / editor noise
 Thumbs.db

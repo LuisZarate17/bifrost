@@ -12,6 +12,23 @@
 
 Both `cargo` and `ollama` are on the user PATH.
 
+> **Corrected 2026-09-10 at A3.** This chunk verified that Rust was *installed*. It never
+> verified that Rust could *build* anything — the only thing exercised was Ollama. **The MSVC
+> build tools were missing entirely**: no Visual Studio, no Build Tools, no Windows SDK, no
+> `link.exe`. `rustup` had the `x86_64-pc-windows-msvc` toolchain, which needs a linker it did
+> not have.
+>
+> The gap survived two chunks because nothing ever reached the link step —
+> `evals/fixtures/frametest` fails at the **borrow check**, which happens earlier. A3's first
+> `cargo run` would have died with `linker 'link.exe' not found`.
+>
+> Fixed at A3 by installing `Microsoft.VisualStudio.2022.BuildTools` with the VCTools workload.
+> See [A3-results.md](A3-results.md).
+>
+> **Generalised lesson: "installed" is not "verified."** The gate now used is a throwaway
+> `cargo new` + `cargo run` printing `Hello, world!` — ten seconds, and it proves compile *and*
+> link before any dependency is involved.
+
 ## GPU verification — passed
 
 | Signal | Result |
