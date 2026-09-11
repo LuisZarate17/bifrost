@@ -3,7 +3,8 @@
 > Press one key. Warden looks at your screen and answers immediately, in a corner popup that
 > nobody you're screen sharing with can see. Entirely on your own machine.
 
-**Status:** v1 fully scoped 2026-09-07. Not started.
+**Status:** v1 fully scoped 2026-09-07. **Stage A: A1 and A2 done** (toolchain verified; model
+chosen — `qwen3-vl:8b-instruct-q4_K_M`). Next: A3, the first Rust.
 **Repo root:** `C:\Users\you\source\repos\warden`
 
 ---
@@ -78,7 +79,7 @@ on what each was trying to fix — the failed ones are as informative as the win
 | Display | **One monitor, 1920×1080, 100% scaling** — no DPI handling needed at all |
 | Machine | **Not domain-joined**, Windows Defender only — no endpoint security to fight |
 | Installed | Docker Desktop 4.82, Node 24.18 |
-| **Not** installed | Rust toolchain, Ollama, Python, CUDA toolkit |
+| **Not** installed | Python, CUDA toolkit. *(Rust 1.98.1 and Ollama 0.33.3 installed at A1.)* |
 | Author's Rust | **Read about it, never written it.** Plan accordingly. |
 | Time pressure | None stated. Size phases by scope, never by weeks. |
 
@@ -129,12 +130,18 @@ its own follow-up screenshot. One Win32 call does both:
 
 ## 6. Model
 
-- **Qwen3-VL** is the family. Size and quant get settled empirically at A2 — 8B@Q4_K_M vs
-  4B@Q8 on real screenshots of Luis's own code. See BUILD.md for why benchmarks don't decide it.
+- **Settled at A2 on 2026-09-08: `qwen3-vl:8b-instruct-q4_K_M`.** 8,151 MiB resident, 1.2 s to
+  first token, 3.7 s cold load. Chosen because it was the only model that correctly concluded a
+  broken file would not compile. Full write-up: [docs/A2-results.md](docs/A2-results.md).
 - Reading small dense text accurately is the whole job; a misread stack trace is worse than a
-  slow answer. Vision models degrade under quantization harder than text models, so bias toward
-  precision when it's close.
-- A 1080p screen is a few hundred image tokens. Measure the real number at A2.
+  slow answer.
+- ~~Vision models degrade under quantization harder than text models, so bias toward precision
+  when it's close.~~ **Retired 2026-09-08.** Measured across a full 2×2, quantization changed
+  time-to-first-token by under 2% and did not fix a single accuracy failure — while Q8 cost
+  +3.2 GB of VRAM and half the decode speed at 8B. **Size decides accuracy here, not precision.**
+- **A 1080p screen costs 2,042 image tokens** (measured: 2,077 with the image, 35 without).
+  `num_ctx` must be set explicitly — Ollama silently defaults to 4k on a card under 24 GiB, which
+  would truncate exactly this.
 
 ---
 
@@ -143,32 +150,33 @@ its own follow-up screenshot. One Win32 call does both:
 **Revised 2026-09-08.** An earlier draft said `keep_alive: -1` — keep the model resident
 forever. That was written before we measured what resident actually costs.
 
-**Measured on this machine:**
+**Re-measured at A2 on 2026-09-08 with the model actually chosen.** The numbers below originally
+came from `llama3.1:8b`, a stand-in from A1. The real figures for `qwen3-vl:8b-instruct-q4_K_M`:
 
 | State | GPU memory | Notes |
 |---|---|---|
-| Off | **454 MiB** | baseline, Warden holding nothing |
-| Model loaded | **5,705 MiB** | ~5.2 GB, about a third of the card |
-| Unloaded again | **454 MiB** | card gives it back exactly |
+| Off | **~950 MiB** | Baseline **drifts** — it was 667, 1033 and 945 MiB at different points in one session, depending on what else is open. Sample it fresh; never hard-code it |
+| Model loaded | **9,108 MiB** total, **+8,151 MiB** over baseline | Half the card |
+| Unloaded again | **~950 MiB** | Card gives it back exactly — verified on all four candidates |
 
-Warm-up cost: **~18 s** on the first load after a reboot, **~7 s** on later loads in the same
-session — the difference is Windows' disk cache on a 4.9 GB file.
+**Cold load is 3.7 s**, not the ~7–18 s this section previously assumed. A1's 18 s figure was a
+4.9 GB text model read off cold disk; the vision models load faster despite being larger.
+That materially softens the "first press after lunch" problem this whole section was built around.
 
-**Holding 5 GB permanently is the wrong default**, especially since the popup has to work over
-games and a modern title wants 8–12 GB. Warden would be competing with the thing you're using
-it on.
+**Holding 8 GB permanently is still the wrong default** — more wrong than when this said 5 GB.
+The popup has to work over games wanting 8–12 GB, and 8,151 MiB leaves only ~7 GB of a 16 GB card.
+Explicit on/off stands.
 
 **So: no timeout at all. Three explicit states, and you always know which one you're in.**
 
 | State | Meaning |
 |---|---|
 | **Off** | Default. Card free. Nothing loaded. |
-| **Warming** | Loading, ~7 s (~18 s after a reboot). |
+| **Warming** | Loading, **~3.7 s** (measured at A2 for the chosen model). |
 | **Ready** | Loaded and instant. |
 
 Warm up and turn off are both deliberate actions — hotkey or tray. A timeout is rejected
-because it decides for you and leaves you guessing whether the next press is instant or an
-18-second stall.
+because it decides for you and leaves you guessing whether the next press is instant or a stall.
 
 **The state readout must come from the GPU, not from Ollama.** `ollama ps` reports what Ollama
 *believes* is loaded. Read actual VRAM via NVML (the `nvml-wrapper` crate) so "Off" means the

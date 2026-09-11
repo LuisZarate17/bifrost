@@ -19,19 +19,34 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ### The size/quant question — settle it with your own screenshots
 
-The benchmark gap between Qwen3-VL **4B (95.3 DocVQA)** and **8B (96.1)** is **under one point**,
-while the VRAM difference is large — reports put 8B at Q4_K_M around 12 GB.
+> **SETTLED 2026-09-08 — `qwen3-vl:8b-instruct-q4_K_M`.** Measured on the full 2×2, not the pair
+> below. **Size decides accuracy; quantization decides nothing.** Both 4B models called a file
+> that does not compile "fine"; both 8B models found the bug. Q8 changed time-to-first-token by
+> under 2% while costing +3.2 GB of VRAM. The section below is kept as the reasoning that went
+> *into* A2 — see [docs/A2-results.md](docs/A2-results.md) for what came out.
 
-That inverts the usual advice. At a fixed 16 GB budget you're really choosing between
-**a bigger model at lower precision** and **a smaller model at higher precision** — and for a
-resident, always-warm tool where latency is the product, 4B at Q8 may well win.
+The benchmark gap between Qwen3-VL **4B (95.3 DocVQA)** and **8B (96.1)** is **under one point**.
 
-**So A2 is a bake-off, not a download:**
+> **Corrected 2026-09-08.** This section used to say the VRAM difference was large — *"reports
+> put 8B at Q4_K_M around 12 GB"* — and framed A2 as a forced choice between a bigger model at
+> lower precision and a smaller one at higher precision. **Checked against the Ollama registry,
+> that gap mostly isn't there.** The earlier figure was never measured on this machine.
 
-| Candidate | Why it might win |
-|---|---|
-| Qwen3-VL **8B @ Q4_K_M** | More capable model; the benchmark leader |
-| Qwen3-VL **4B @ Q8** | Higher precision where it matters for small text, far more headroom, faster TTFT |
+| Candidate — real tag | Download | Why it might win |
+|---|---|---|
+| `qwen3-vl:8b-instruct-q4_K_M` | **6.14 GB** | More capable model; the benchmark leader |
+| `qwen3-vl:4b-instruct-q8_0` | **5.09 GB** | Higher precision where it matters for small text, faster TTFT |
+
+**About 1 GB apart, not seven.** On a 16 GB card both fit with headroom, so memory no longer
+forces the decision — it comes down to which one reads your screenshots correctly. Note these
+are *download* sizes; resident VRAM will be higher once the KV cache and vision encoder are
+counted, which is exactly why A2 measures it rather than assuming.
+
+**So A2 is still a bake-off, not a download** — but it's an accuracy bake-off, not a budget one.
+
+**Use the Instruct variants.** `-thinking-` builds exist at the same sizes (e.g.
+`qwen3-vl:8b-thinking-q4_K_M`). Latency is the product here, so Instruct is the default —
+record that as a deliberate choice rather than an oversight.
 
 Judge them on **your own screenshots of code and terminals**, not on benchmark numbers.
 Also **cap the context well below the 256K default** — you're sending one screenshot, not a book,
@@ -61,15 +76,30 @@ Gotchas if repeating: `ollama app.exe` opens a blocking first-run GUI (this kill
 attempts) — use `ollama.exe serve` detached instead. A broken CUDA extraction fails **silently**
 and simply runs on CPU, so check `ggml-cuda.dll` exists before debugging anything else.
 
-### A2 — The bake-off
-**Do:** Pull **Qwen3-VL-8B (Q4_K_M)** and **Qwen3-VL-4B (Q8)**. Screenshot your real editor and
-a terminal with an error in it. Send both images to both models via `curl` against
-`/api/generate` with a base64 image.
-**Done when:** You've picked one, for a reason you can state.
-**Record for each:** did it read the code correctly · time to first token · time to full answer ·
-VRAM resident · image token count.
-**Watch for:** If both misread code, the fix isn't more quantization — try Gemma 3 before you
-compromise on accuracy. A misread stack trace is worse than a slow answer.
+### A2 — The bake-off — DONE 2026-09-08
+**Chosen: `qwen3-vl:8b-instruct-q4_K_M`** — the only model that correctly concluded the editor
+screenshot would not compile, inside C4's VRAM budget. Full write-up:
+**[docs/A2-results.md](docs/A2-results.md)**.
+
+Ran the full 2×2 (4B/8B × Q4_K_M/Q8_0) rather than the planned pair, because the pair varies size
+and quantization together and could not have explained its own result. Harness: `evals/bench.mjs`.
+
+Three findings that change later chunks:
+- **Q8 buys nothing.** TTFT is set entirely by model size (528 vs 526 ms at 4B; 1165 vs 1151 ms at
+  8B — quantization moves it under 2%). At 8B, Q8 costs +3.2 GB VRAM and halves decode, and made
+  case-02's conclusion *worse*. **PLAN.md §6's "bias toward precision" is retired.**
+- **Both 4B models called the broken file fine.** Reading text accurately is not reasoning about
+  code — exactly the split case-02 was built to expose.
+- **Cold load is 2.0–4.7 s**, not the 7–18 s A1 measured and C4 assumes. **C4 should be re-read
+  against this.** Also: a 1080p screen costs **2,042 image tokens**.
+
+**The prompt matters more than the model.** A terser, fault-presupposing variant ("What's wrong on
+this screen?") made *both* surviving models hallucinate errors that don't exist and miss the real
+bug. Do not adopt one at E1 without re-running the eval set.
+
+Gotcha if repeating: **Ollama's prompt cache invalidates the obvious protocol.** It caches every
+image at once, so repeat runs return prefill in 5 ms instead of ~450 ms and every model looks
+identical. Only unloading clears it — see A2-results.md.
 
 ### A3 — First Rust: capture a PNG
 **Do:** `cargo new` a CLI. Add [`windows-capture`](https://crates.io/crates/windows-capture).

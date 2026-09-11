@@ -39,18 +39,30 @@ Verify the GPU is actually being used, don't assume.
 
 ---
 
-## A2 — The model bake-off
+## A2 — The model bake-off — DONE 2026-09-08
+
+> **Result: `qwen3-vl:8b-instruct-q4_K_M`.** Ran the full 2×2 rather than the pair below. Both 4B
+> models read the code correctly and still called a file that doesn't compile "fine"; quantization
+> changed time-to-first-token by under 2% and fixed no accuracy failure. Harness at
+> `evals/bench.mjs`, write-up at [docs/A2-results.md](docs/A2-results.md). The packet below is
+> kept as the brief that went in.
 
 This is the most important chunk in Stage A. **Don't just pull one model.**
 
 My screen is mostly **code and terminals**, so reading small dense text accurately is the entire
-job. Benchmarks put Qwen3-VL-4B at 95.3 on DocVQA and 8B at 96.1 — under a point apart — while
-8B at Q4_K_M reportedly needs ~12 GB VRAM. At a fixed 16 GB budget with the model resident all
-day, a smaller model at higher precision may beat a bigger one at lower precision.
+job. Benchmarks put Qwen3-VL-4B at 95.3 on DocVQA and 8B at 96.1 — under a point apart.
 
-**Pull both:**
-- Qwen3-VL **8B at Q4_K_M**
-- Qwen3-VL **4B at Q8**
+**Pull both** (tags verified against the Ollama registry 2026-09-08):
+- `qwen3-vl:8b-instruct-q4_K_M` — 6.14 GB download
+- `qwen3-vl:4b-instruct-q8_0` — 5.09 GB download
+
+Use the **Instruct** builds, not the `-thinking-` ones: latency is the product here.
+
+An earlier draft of this packet claimed 8B at Q4_K_M needs ~12 GB VRAM, and told you to weigh a
+bigger-but-coarser model against a smaller-but-precise one. **That figure was wrong** — the two
+downloads are about 1 GB apart and both fit a 16 GB card comfortably. Memory doesn't force this
+decision. Pick on which one reads your screenshots correctly, and measure resident VRAM anyway,
+since it runs higher than the download size once the KV cache and vision encoder load.
 
 **Test both on my own screenshots** — a real editor with code, and a terminal with an error.
 Send via `curl` to `/api/generate` with a base64 image.

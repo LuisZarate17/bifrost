@@ -3,9 +3,16 @@
 Press a hotkey, get an answer about whatever is on screen, from a model that never leaves the
 machine.
 
-**Status:** No application code yet. **A1 (toolchain) is done** — Rust 1.98.1 (MSVC), Ollama
-0.33.3, GPU inference verified at 152 tok/s. See [docs/A1-results.md](docs/A1-results.md).
-Next up: **A2 — the vision model bake-off**.
+**Status:** No application code yet. **A1 and A2 are done.**
+
+- **A1 — toolchain.** Rust 1.98.1 (MSVC), Ollama 0.33.3, GPU verified at 152 tok/s.
+  See [docs/A1-results.md](docs/A1-results.md).
+- **A2 — model bake-off.** Ran the full 2×2 (4B/8B × Q4_K_M/Q8_0) on real screenshots of this
+  repo's own code. **Chose `qwen3-vl:8b-instruct-q4_K_M`** — the only candidate that correctly
+  concluded a broken file wouldn't compile. Both 4B models called it fine, and higher precision
+  bought nothing. See [docs/A2-results.md](docs/A2-results.md).
+
+Next up: **A3 — first Rust, capture the screen to a PNG.**
 
 ## How it works
 
