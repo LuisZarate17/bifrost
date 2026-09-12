@@ -3,7 +3,17 @@
 Press a hotkey, get an answer about whatever is on screen, from a model that never leaves the
 machine.
 
-**Status:** **A1, A2 and A3 are done** — the screen capture works; nothing talks to the model yet.
+**Status:** **Stage A is complete.** One terminal command captures the screen and streams a real
+answer about it. No GUI yet — that's Stage B.
+
+```
+cd capture
+cargo run                                       # answer about your screen, now
+cargo run -- 12                                 # wait 12s first
+cargo run -- --model qwen3-vl:4b-instruct-q8_0  # try a different model
+```
+
+Needs `ollama serve` running. The prompt lives in `capture/prompt.txt`, not in source.
 
 - **A1 — toolchain.** Rust 1.98.1 (MSVC), Ollama 0.33.3, GPU verified at 152 tok/s.
   See [docs/A1-results.md](docs/A1-results.md).
@@ -14,13 +24,11 @@ machine.
 - **A3 — screen capture.** `capture/` grabs the primary monitor via Windows Graphics Capture and
   writes a 1920×1080 PNG. Verified against fullscreen hardware-decoded video — no black frame,
   so it is genuinely WGC and not GDI. See [docs/A3-results.md](docs/A3-results.md).
+- **A4 — the whole loop.** PNG encoded in memory, base64, POSTed to Ollama, answer streamed
+  token by token. Cross-validates A2 exactly: 2,077 tokens in, 1.19 s to first token.
+  See [docs/A4-results.md](docs/A4-results.md).
 
-Next up: **A4 — send the capture to the model and stream the answer.** That's the first chunk
-that is useful on its own, in a terminal, with no GUI.
-
-```
-cd capture && cargo run -- 5     # wait 5s, capture the screen, write out.png
-```
+Next up: **B1 — scaffold Tauri**, and Stage B builds the GUI around this.
 
 ## How it works
 

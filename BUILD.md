@@ -117,11 +117,27 @@ Two findings that change later chunks:
 Gate worth reusing: a throwaway `cargo new` + `cargo run` printing `Hello, world!` proves compile
 **and link** in ten seconds, before any dependency can muddy the diagnosis.
 
-### A4 — First useful thing
-**Do:** Extend A3 — base64 the PNG, POST to Ollama with the default prompt, print the answer.
-**Done when:** One command gives you a real answer about your screen. **No GUI.**
-**Watch for:** Ollama streams newline-delimited JSON, not one blob. Parse line by line with
-`serde_json`.
+### A4 — First useful thing — DONE 2026-09-12 · **STAGE A COMPLETE**
+`cd capture && cargo run` captures the screen and streams a real answer about it. Prompt lives in
+`capture/prompt.txt`; `--model` swaps models without recompiling. Full write-up:
+**[docs/A4-results.md](docs/A4-results.md)**.
+
+Cross-validates A2 exactly — **2,077 tokens in, 1.19 s to first token, 9.0 s total** — from a
+completely separate harness, which is the check that `num_ctx` took and the screen wasn't
+silently truncated.
+
+Three findings that change later chunks:
+- **Smart App Control blocks Rust proc-macros.** `rustc` is denied loading unsigned proc-macro
+  DLLs; the symptom is `can't find crate for <x>_derive` while the DLL sits on disk intact.
+  Workaround is `cargo clean -p` that crate and rebuild. **Recurs.** See PLAN.md §3.
+- **`reqwest` 0.13 needs NASM on Windows with default features** (switched to `aws-lc-rs`). Use
+  `default-features = false, features = ["blocking","json","native-tls"]`. **B2 inherits this.**
+- **The buffering bug B2 warns about was felt here deliberately.** `.text()` gave 14.5 s of
+  silence then a dump; `BufReader::lines()` gave first text at 1.5 s. Note `stdout().flush()`
+  after each token is not optional — stdout is line-buffered and rebuilds the bug without it.
+
+**Warden found its own bug.** On the first end-to-end run it read a Windows Security toast off the
+screen and corrected a misdiagnosis of the proc-macro failure. The thesis works.
 
 ---
 

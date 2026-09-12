@@ -3,8 +3,9 @@
 > Press one key. Warden looks at your screen and answers immediately, in a corner popup that
 > nobody you're screen sharing with can see. Entirely on your own machine.
 
-**Status:** v1 fully scoped 2026-09-07. **Stage A: A1 and A2 done** (toolchain verified; model
-chosen — `qwen3-vl:8b-instruct-q4_K_M`). Next: A3, the first Rust.
+**Status:** v1 fully scoped 2026-09-07. **Stage A is COMPLETE** (A1–A4). Model
+chosen: `qwen3-vl:8b-instruct-q4_K_M`. One terminal command now answers about the screen.
+**Next: B1** — scaffold Tauri.
 **Repo root:** `C:\Users\you\source\repos\warden`
 
 ---
@@ -77,11 +78,38 @@ on what each was trying to fix — the failed ones are as informative as the win
 | GPU | RTX 5070 Ti, **16 GB** VRAM, Blackwell, compute cap 12.0, driver 610.62 |
 | CPU | Ryzen 7 9700X, 8c/16t · 31 GB RAM |
 | Display | **One monitor, 1920×1080, 100% scaling** — no DPI handling needed at all |
-| Machine | **Not domain-joined**, Windows Defender only — no endpoint security to fight |
+| Machine | **Not domain-joined**, Windows Defender only — but see the Smart App Control note below |
 | Installed | Docker Desktop 4.82, Node 24.18 |
 | **Not** installed | Python, CUDA toolkit. *(Rust 1.98.1 and Ollama 0.33.3 installed at A1.)* |
 | Author's Rust | **Read about it, never written it.** Plan accordingly. |
 | Time pressure | None stated. Size phases by scope, never by weeks. |
+
+### Smart App Control blocks Rust proc-macros — found at A4, 2026-09-12
+
+This section used to say *"no endpoint security to fight."* **That was wrong.**
+
+**Smart App Control is ON** (`SmartAppControlState: On`). It blocks unsigned binaries by
+reputation — and **every proc-macro crate is an unsigned DLL that `rustc` must load at compile
+time.** A build failed with `error[E0463]: can't find crate for zerovec_derive` while the DLL sat
+on disk, intact, 1.5 MB. The real cause, from `Microsoft-Windows-CodeIntegrity/Operational`:
+
+```
+Event 3077: Code Integrity determined that a process (…\rustc.exe) attempted to load
+…\zerovec_derive-….dll that did not meet the Enterprise signing level requirements
+```
+
+**Symptom to recognise:** a dependency fails with "can't find crate" for a **proc-macro** whose
+DLL is present and correctly sized. Not stale cargo state — a load block.
+
+**Workaround:** `cargo clean -p <crate> -p <crate>-derive` and rebuild. The new DLL has a new hash
+SAC has not evaluated, so it loads. **This recurs** on new crates, fresh clones, and after any
+`cargo clean`.
+
+**Not fixed by choice.** Smart App Control can be disabled, but **cannot be re-enabled without
+resetting Windows.** That is irreversible, so it stays the user's call. Rebuilding costs seconds.
+
+**Also missing until A3: the MSVC build tools.** A1 recorded the toolchain as verified but only
+exercised Ollama, and nothing ever reached the link step. Installed at A3; **B1 needs them too.**
 
 ---
 

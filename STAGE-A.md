@@ -104,7 +104,16 @@ compiler is complaining about when it complains.
 
 ---
 
-## A4 — First useful thing
+## A4 — First useful thing — DONE 2026-09-12
+
+> Built into `capture/`. `cargo run` captures the screen and streams a real answer.
+> Prompt in `capture/prompt.txt`, `--model` flag to swap models.
+> See [docs/A4-results.md](docs/A4-results.md).
+>
+> **Gotchas found:** Smart App Control blocks Rust proc-macro DLLs (symptom: `can't find crate
+> for <x>_derive` with the DLL present) — `cargo clean -p` that crate and rebuild. And `reqwest`
+> 0.13 needs NASM on Windows unless you select `native-tls`.
+
 
 Extend A3: base64 the captured PNG, POST it to Ollama with a default prompt, stream the answer
 to stdout.
@@ -122,7 +131,7 @@ it constantly):
 
 ---
 
-## Done with Stage A when
+## Done with Stage A when — ACHIEVED 2026-09-12
 
 I can run one terminal command and get a useful answer about whatever is on my screen, and I
 know which model I'm using and why.
