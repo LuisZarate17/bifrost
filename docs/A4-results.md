@@ -39,7 +39,9 @@ the only difference is whether the response body is read as it arrives:
 only symptom is a wait, and the only defence is the instinct to notice it.
 
 That matters because BUILD.md calls a buffering bug **the single worst trap in this project** —
-B2 warns that `proxy_localhost_stream` buffers, works in dev, and breaks silently once packaged.
+B2 warns against buffering the response instead of streaming it. *(The specific mechanism named
+here originally — `proxy_localhost_stream` — turned out not to be a Tauri symbol at all; corrected
+at B2, see docs/B2-results.md.)*
 Now there is a felt reference point for what "it buffered" looks like.
 
 Two subtleties worth keeping:

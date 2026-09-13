@@ -176,8 +176,8 @@ and by Warden reading its own screen.
 ## Next
 
 **B2 — streaming into the UI.** BUILD.md calls it the most important trap in the project:
-`proxy_localhost_stream` buffers, works in dev, and breaks silently once packaged. Use
-`tauri::ipc::Channel`.
+a command that returns its payload buffers it. Use `tauri::ipc::Channel`. *(This originally named
+`proxy_localhost_stream`, which is not a Tauri symbol — corrected at B2.)*
 
 A4 built the reflex for exactly this — a buffered response gave 14.5 s of silence against 1.5 s
 streamed. B2 is the same failure one layer up, and the same tell: *it arrived all at once.*

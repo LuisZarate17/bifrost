@@ -262,8 +262,11 @@ history & persistence · region select · chat window · terminal mode (TUI,
   feels slow, check `ggml-cuda.dll` exists before debugging anything else. Cost real time in A1.
 - **`ollama app.exe` opens a blocking first-run GUI.** Use `ollama.exe serve` detached.
 - **Ollama has no autostart entry** — it does not survive a reboot.
-- **Tauri buffers streamed responses** through `proxy_localhost_stream` — fine in dev, broken in
-  the packaged `.exe`. Use `tauri::ipc::Channel` or events.
+- **A Tauri command that returns its payload buffers it.** One IPC reply per `invoke()`, so the
+  whole answer lands at once — identically in dev and packaged. Stream through
+  `tauri::ipc::Channel`; Tauri's own docs call it "the recommended mechanism for streaming data
+  such as streamed HTTP responses." *(Corrected at B2: the earlier note blamed
+  `proxy_localhost_stream`, which is not a Tauri symbol at all.)*
 - **The popup must not steal focus.** `WS_EX_NOACTIVATE`.
 - **Hotkey registration can fail silently.** Fail loudly instead.
 - **HDR** makes captures wash out, and the model misreads a screenshot that looked fine to you.

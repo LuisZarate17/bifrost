@@ -62,12 +62,16 @@ but keep the CLI — it's the way to test the pipeline without the GUI in the wa
   `num_ctx` didn't take.
 - Expect **1.2 s to first token**, ~9 s total.
 
-**`reqwest` must stay pinned this way** or the Windows build demands NASM:
+**`reqwest` must keep `native-tls`** or the Windows build demands NASM — 0.13 switched its default
+TLS backend to `aws-lc-rs`. Two variants are in use:
 ```toml
+# capture/ — synchronous CLI
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "native-tls"] }
+# src-tauri/ — async, streams the body
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json", "stream"] }
 ```
-(0.13 switched its default TLS backend to `aws-lc-rs`. Moving into async Tauri means dropping
-`blocking`, not changing the TLS choice.)
+The `stream` feature is what provides `bytes_stream()`. Going async drops `blocking` and adds
+`stream`; the TLS choice never changes.
 
 **Smart App Control is ON.** It can block `rustc` from loading unsigned proc-macro DLLs. Symptom:
 `error[E0463]: can't find crate for <x>_derive` while the DLL is present and correctly sized.
@@ -92,16 +96,26 @@ Tauri 2.11.5 + React + TypeScript at the repo root. Window titled **Warden**, id
 
 ---
 
-## B2 — Streaming into the UI
+## B2 — Streaming into the UI — DONE 2026-09-12
+
+> Async command + `tauri::ipc::Channel`. Streams in dev and in the packaged `.exe`; the Rust-side
+> and UI-side TTFT match exactly, so nothing batches in between.
+> See [docs/B2-results.md](docs/B2-results.md).
+
 
 **Do:** Move A4's Ollama call into `src-tauri`. Stream tokens up to React with
 `tauri::ipc::Channel`.
 
 **Done when:** tokens appear word by word **in a built `.exe`**, not just in `dev`.
 
-**Watch for — the most important trap in this project.** Do **not** route this through
-`proxy_localhost_stream`. It buffers: works perfectly in development, breaks silently once
-packaged, so you'd ship it and find out later.
+**Watch for — the trap this chunk exists to avoid.** **Never return the answer as the command's
+`Result`.** Tauri sends exactly one IPC reply per `invoke()`, so a command whose return value
+carries the payload buffers the entire thing. `Result<(), String>` should carry only success or
+failure; every token goes through the `Channel`.
+
+*(An earlier version of this packet blamed `proxy_localhost_stream` and claimed it breaks only
+when packaged. That symbol does not exist in Tauri, and `Result` buffering is identical in dev and
+release — see docs/B2-results.md.)*
 
 A4 built the reflex for this deliberately. Reading the response with `.text()` gave **14.5 s of
 silence then a dump**; incremental reads gave first text at **1.5 s**. Both compiled, both

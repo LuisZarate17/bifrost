@@ -156,11 +156,25 @@ Two notes: the scaffold derives every identity field from the folder name, so `p
 `identifier`, both Cargo names, the window title and `index.html`'s `<title>` all needed resetting.
 And **Smart App Control did not fire** across 362 units — the A4 block was narrower than assumed.
 
-### B2 — Streaming into the UI
-**Do:** Move A4's Ollama call into Rust. Stream tokens up with `tauri::ipc::Channel`.
-**Done when:** Tokens appear word by word **in a built `.exe`**, not just in dev.
-**Watch for:** The most important trap in this project. Do **not** route this through
-`proxy_localhost_stream` — it buffers, works in dev, breaks silently when packaged.
+### B2 — Streaming into the UI — DONE 2026-09-12
+An async command streams Ollama tokens to React through `tauri::ipc::Channel`. Verified in both
+dev and the packaged `.exe`. Full write-up: **[docs/B2-results.md](docs/B2-results.md)**.
+
+**Streams identically in dev and release** — Rust-side and UI-side time-to-first-token match to
+the hundredth of a second (0.21 s dev, 0.17 s packaged), so nothing batches between Rust and the
+webview. `prompt_eval_count` 2,077 again, agreeing with `bench.mjs` and `capture/`.
+**Watch for:** **Never return the answer as the command's `Result`.** Tauri delivers exactly one
+IPC reply per `invoke()`, so a command whose return value carries the payload buffers the whole
+thing by construction. Send tokens through a `Channel` instead and let `Result<(), String>` carry
+only success or failure.
+
+> **Corrected 2026-09-12 at B2.** This chunk previously warned against `proxy_localhost_stream`,
+> "works in dev, breaks silently when packaged." **`proxy_localhost_stream` is not a Tauri symbol**
+> — it is absent from the config schema (which has only `proxy` / `proxyUrl`, an unrelated WebView
+> network proxy). The warning appears to have been absorbed from an unrelated third-party project
+> during planning and mis-attributed. The dev-versus-packaged framing was wrong too: `Result`
+> buffering is architectural and behaves identically in both. The actionable advice above survives;
+> the mechanism did not.
 
 ### B3 — Button-triggered capture
 **Do:** Move A3's capture into the app behind a button.

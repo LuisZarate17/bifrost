@@ -29,8 +29,10 @@ Needs `ollama serve` running. The prompt lives in `capture/prompt.txt`, not in s
   See [docs/A4-results.md](docs/A4-results.md).
 - **B1 — the app shell.** Tauri 2 + React + TypeScript. A window titled Warden opens; `capture/`
   still works untouched. See [docs/B1-results.md](docs/B1-results.md).
+- **B2 — streaming into the UI.** Tokens reach React through a Tauri `Channel` as they arrive,
+  in dev and in the packaged 4.8 MB `.exe`. See [docs/B2-results.md](docs/B2-results.md).
 
-Next up: **B2 — stream the answer into the UI.** See [STAGE-B.md](STAGE-B.md).
+Next up: **B3 — capture behind a button.** See [STAGE-B.md](STAGE-B.md).
 
 ## How it works
 
