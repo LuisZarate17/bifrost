@@ -27,8 +27,10 @@ Needs `ollama serve` running. The prompt lives in `capture/prompt.txt`, not in s
 - **A4 — the whole loop.** PNG encoded in memory, base64, POSTed to Ollama, answer streamed
   token by token. Cross-validates A2 exactly: 2,077 tokens in, 1.19 s to first token.
   See [docs/A4-results.md](docs/A4-results.md).
+- **B1 — the app shell.** Tauri 2 + React + TypeScript. A window titled Warden opens; `capture/`
+  still works untouched. See [docs/B1-results.md](docs/B1-results.md).
 
-Next up: **B1 — scaffold Tauri**, and Stage B builds the GUI around this.
+Next up: **B2 — stream the answer into the UI.** See [STAGE-B.md](STAGE-B.md).
 
 ## How it works
 
@@ -45,7 +47,8 @@ Rust, Tauri 2, React + TypeScript, Ollama, Windows Graphics Capture.
 
 - [PLAN.md](PLAN.md) — scope, environment, decisions closed, hard rules
 - [BUILD.md](BUILD.md) — the full build plan, stages A–F
-- [STAGE-A.md](STAGE-A.md) — the next execution packet (foundations, no GUI yet)
+- [STAGE-A.md](STAGE-A.md) — Stage A execution packet (foundations, no GUI) — complete
+- [STAGE-B.md](STAGE-B.md) — Stage B execution packet (the app shell) — in progress
 
 ## Hard rules
 

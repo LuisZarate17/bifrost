@@ -1,6 +1,6 @@
 # Warden — Build Plan
 
-Companion to [PLAN.md](PLAN.md). Nineteen chunks in six stages. **Each chunk is one sitting
+Companion to [PLAN.md](PLAN.md). Twenty chunks in six stages. **Each chunk is one sitting
 and one execution chat.** Every one ends in something observable, so you can always stop.
 
 Author has read about Rust but never written it. Chunks are sized for that.
@@ -143,9 +143,18 @@ screen and corrected a misdiagnosis of the proc-macro failure. The thesis works.
 
 ## Stage B — The app shell
 
-### B1 — Tauri opens a window
-**Do:** Scaffold Tauri 2 + React + TypeScript. Nothing custom.
-**Done when:** `cargo tauri dev` opens a window with your own text in it.
+### B1 — Tauri opens a window — DONE 2026-09-12
+Tauri 2.11.5 + React + TypeScript at the repo root, window titled **Warden**, identifier
+`com.warden.app`. First build 55 s, 362 units. Full write-up: **[docs/B1-results.md](docs/B1-results.md)**.
+
+> **Never run `create-tauri-app` at the repo root.** Passing `.` and accepting the overwrite
+> prompt **recursively deletes everything except `.git`** — verified in its source. `evals/shots/`
+> is gitignored and would not survive. Scaffold into a sibling temp directory and move files in by
+> hand. Push first.
+
+Two notes: the scaffold derives every identity field from the folder name, so `productName`,
+`identifier`, both Cargo names, the window title and `index.html`'s `<title>` all needed resetting.
+And **Smart App Control did not fire** across 362 units — the A4 block was narrower than assumed.
 
 ### B2 — Streaming into the UI
 **Do:** Move A4's Ollama call into Rust. Stream tokens up with `tauri::ipc::Channel`.
@@ -174,6 +183,37 @@ callback returns.
 **Done when:** You hotkey from your editor and your cursor is still in the editor.
 **Watch for:** Position against the *work area*, not the raw screen bounds, so it sits above the
 taskbar. Windows toasts share that corner and will sometimes overlap — accepted, not a bug.
+
+### C1b — Make the answer readable
+**Added 2026-09-12.** Lettered rather than renumbered so existing references to C2–C5 in PLAN.md
+and the results docs stay valid.
+
+**Why this exists:** nothing else in this plan owns what the popup *looks* like. C1 specifies only
+behaviour — position, topmost, no focus steal. Two measured facts make that a gap rather than
+polish:
+
+- **A2 measured every candidate producing 3,600–7,950 characters.** None of them fit a
+  bottom-right corner popup. The problem was recorded and assigned to nobody.
+- **The model emits Markdown** — headers, `**bold**`, code fences, emoji. Rendered raw, that's a
+  wall of asterisks and hashes.
+
+Under this project's own rule — a feature earns its keep only if it actually gets used — an answer
+you can't read means you don't reach for it, and **E1 fails**.
+
+**Do:**
+- Render Markdown, **code blocks first** — the screen is mostly code and terminals.
+- Decide what happens when an answer overflows: scroll, clamp with an expand affordance, or cap
+  the response.
+- Set type size, line length and contrast for something read at a glance, in a corner, over
+  whatever is behind it.
+- Make streaming not reflow the layout as tokens land.
+
+**Done when:** you can read a real answer about a real stack trace at a glance, without leaning in.
+
+**Watch for:** the obvious fix for verbosity is a terser prompt — **don't.** A2 tested exactly that
+and both finalist models started inventing errors that didn't exist. If the prompt changes to
+control length, it gets re-run against the eval set first (F1). Also: whatever renders the Markdown
+must not autofocus anything, or C1's no-focus-steal guarantee breaks.
 
 `windows` crate.
 
