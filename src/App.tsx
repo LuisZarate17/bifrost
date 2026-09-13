@@ -2,15 +2,13 @@ import { useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import "./App.css";
 
-// The image B2 sends. A2 recorded exactly what this model says about it, so a
-// wrong answer means the plumbing is wrong rather than the model.
-const TEST_IMAGE =
-  "C:/Users/you/source/repos/warden/evals/shots/terminal-rust-error.png";
-
+// Lives here for now. PLAN.md section 2 wants it in a config file — capture/prompt.txt
+// already does that for the CLI. E1 owns making it tunable without a rebuild.
 const PROMPT =
   "What am I looking at? If there's an error or something broken, explain it and the fix. Otherwise explain what matters here.";
 
 type StreamEvent =
+  | { event: "captured"; data: { width: number; height: number; pngBytes: number } }
   | { event: "token"; data: { text: string } }
   | {
       event: "done";
@@ -24,6 +22,7 @@ type StreamEvent =
 
 function App() {
   const [answer, setAnswer] = useState("");
+  const [status, setStatus] = useState("");
   const [stats, setStats] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -32,6 +31,7 @@ function App() {
     setAnswer("");
     setStats("");
     setError("");
+    setStatus("Capturing…");
     setBusy(true);
 
     // Measured in the UI, not in Rust — this is what the user actually perceives.
@@ -40,8 +40,16 @@ function App() {
 
     const onEvent = new Channel<StreamEvent>();
     onEvent.onmessage = (message) => {
-      if (message.event === "token") {
-        if (firstPaintAt === null) firstPaintAt = performance.now() - t0;
+      if (message.event === "captured") {
+        const d = message.data;
+        setStatus(
+          `Captured ${d.width}×${d.height} (${Math.round(d.pngBytes / 1024)} KB) — asking…`
+        );
+      } else if (message.event === "token") {
+        if (firstPaintAt === null) {
+          firstPaintAt = performance.now() - t0;
+          setStatus("");
+        }
         // Functional update: several tokens can land in one React tick, and this
         // way none of them is lost when that happens.
         setAnswer((prev) => prev + message.data.text);
@@ -57,14 +65,10 @@ function App() {
     };
 
     try {
-      await invoke("ask_about_image", {
-        imagePath: TEST_IMAGE,
-        prompt: PROMPT,
-        model: null,
-        onEvent,
-      });
+      await invoke("ask_about_screen", { prompt: PROMPT, model: null, onEvent });
     } catch (e) {
       setError(String(e));
+      setStatus("");
     } finally {
       setBusy(false);
     }
@@ -73,12 +77,13 @@ function App() {
   return (
     <main className="container">
       <h1>Warden</h1>
-      <p className="subtitle">B2 — streaming a real answer from a local model</p>
+      <p className="subtitle">B3 — capture the screen, ask about it</p>
 
       <button onClick={ask} disabled={busy}>
-        {busy ? "Asking…" : "Ask about the test screenshot"}
+        {busy ? "Working…" : "What's on my screen?"}
       </button>
 
+      {status && <p className="stats">{status}</p>}
       {error && <pre className="error">{error}</pre>}
       {answer && <pre className="answer">{answer}</pre>}
       {stats && <p className="stats">{stats}</p>}
