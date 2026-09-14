@@ -176,11 +176,22 @@ only success or failure.
 > buffering is architectural and behaves identically in both. The actionable advice above survives;
 > the mechanism did not.
 
-### B3 — Button-triggered capture
-**Do:** Move A3's capture into the app behind a button.
-**Done when:** Click → screenshot → answer streams in.
-**Watch for:** First borrow-checker fight — copy the bytes out of the capture frame before the
-callback returns.
+### B3 — Button-triggered capture — DONE 2026-09-13
+Click → live screenshot → streamed answer. `ask_about_screen` captures the primary monitor inside
+`spawn_blocking`, encodes a PNG in memory, and streams through B2's `Channel`. Full write-up:
+**[docs/B3-results.md](docs/B3-results.md)**.
+
+**C2's invisibility call landed early here**, and was verified rather than assumed:
+say so explicitly, so it was measured. Window visible, not minimised, foreground, affinity reading
+back `17`, and absent from a capture taken at that moment. **D1 still owns the cross-app testing.**
+
+Three findings that change later chunks:
+- **COM apartment conflict.** WebView2 puts the main thread in STA; `windows-capture` needs MTA.
+  Capture must run on a fresh thread via `spawn_blocking` or it fails with `FailedToInitWinRT`.
+- **The affinity flag resets after `hide()`/`show()`** ([tauri#14189](https://github.com/tauri-apps/tauri/issues/14189),
+  open). **B4** creates exactly that shape — reapply after every show, and verify it sticks.
+- **The flag fails on `WS_EX_LAYERED` windows**, but PLAN.md §4 specifies the popup as layered.
+  **C1 must resolve that conflict** — the headline feature depends on it.
 
 ### B4 — Global hotkey
 **Do:** `Ctrl+Alt+W` via Tauri 2's global-shortcut plugin.

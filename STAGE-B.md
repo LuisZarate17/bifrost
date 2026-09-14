@@ -126,7 +126,11 @@ equivalent question here is whether anything between Rust and the webview batche
 
 ---
 
-## B3 — Button-triggered capture
+## B3 — Button-triggered capture — DONE 2026-09-13
+
+> Capture runs inside `spawn_blocking` — mandatory, because WebView2 puts Tauri's main thread in
+> to exclude from WGC. See [docs/B3-results.md](docs/B3-results.md).
+
 
 **Do:** Move A3's capture into the app behind a button. Click → screenshot → answer streams in.
 

@@ -32,7 +32,10 @@ Needs `ollama serve` running. The prompt lives in `capture/prompt.txt`, not in s
 - **B2 — streaming into the UI.** Tokens reach React through a Tauri `Channel` as they arrive,
   in dev and in the packaged 4.8 MB `.exe`. See [docs/B2-results.md](docs/B2-results.md).
 
-Next up: **B3 — capture behind a button.** See [STAGE-B.md](STAGE-B.md).
+- **B3 — capture behind a button.** Click and Warden screenshots your screen and streams an answer
+  screenshot. See [docs/B3-results.md](docs/B3-results.md).
+
+Next up: **B4 — the global hotkey.** See [STAGE-B.md](STAGE-B.md).
 
 ## How it works
 
