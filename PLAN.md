@@ -33,7 +33,7 @@ Fixed:
 3. A **default prompt** goes with it — no typing.
 4. The answer streams into a popup in a **fixed corner**.
 5. A follow-up box asks again against the same capture.
-6. `Esc` dismisses. Nothing is saved.
+6. The hotkey dismisses it. Nothing is saved. *(**Revised at B4:** this said `Esc`. A `focusable: false` window never receives key events, so Esc cannot reach it. C3 owns the focus transition once follow-up typing exists.)*
 
 **Not in v1:** chat window, terminal mode, region select, SQLite, history, voice, files,
 tool calling, installer.
@@ -286,7 +286,7 @@ Each is a place you can stop:
 4. Global hotkey triggers the above.
 5. Move the answer into a corner popup: topmost, no-activate, no focus steal.
 7. Follow-up box against the same capture.
-8. Tray icon, launch on login, keep-warm on start.
+8. Tray icon and power control. **No launch on login** — C5 was dissolved 2026-09-14; you open Warden when you want the hotkey live, which is what §0's "summoned, never ambient" actually asks for.
 
 
 **Expect the borrow checker to bite in two places:** the lifetime of the capture frame buffer,

@@ -80,7 +80,7 @@ The `stream` feature is what provides `bytes_stream()`. Going async drops `block
 did **not** recur across Tauri's 362-unit build at B1.
 
 **Ollama has no autostart entry.** It won't survive a reboot — start it with `ollama.exe serve`
-detached, never `ollama app.exe` (that opens a blocking first-run GUI). C5 owns the real fix.
+detached, never `ollama app.exe` (that opens a blocking first-run GUI). **C5 was dissolved** — this now belongs to the `capture warm`/`off`/`status` subcommands and C4's tray.
 
 ---
 

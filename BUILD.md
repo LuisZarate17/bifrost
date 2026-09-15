@@ -1,9 +1,34 @@
 # Warden — Build Plan
 
-Companion to [PLAN.md](PLAN.md). Twenty chunks in six stages. **Each chunk is one sitting
+Companion to [PLAN.md](PLAN.md). Nineteen chunks in six stages. **Each chunk is one sitting
 and one execution chat.** Every one ends in something observable, so you can always stop.
 
 Author has read about Rust but never written it. Chunks are sized for that.
+
+---
+
+## Where this stands — 2026-09-14
+
+**9 of 19 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4.
+
+> **Blocked: everything that runs the GUI.** Smart App Control refuses to run `warden.exe` —
+> content-based, retroactive, no per-app exception, and not automatable. See [PLAN.md §3](PLAN.md).
+> **`capture/` is unaffected and works today with Smart App Control enforced.**
+
+### The order of work from here
+
+**A decision gates most of it:** code-sign (~$10/month), open-source for a free certificate,
+disable Smart App Control, or stay on the CLI. Until that is settled, nothing GUI can start.
+
+**Not blocked — do these in this order:**
+
+| | | Why this order |
+|---|---|---|
+| **1** | **`capture warm` / `off` / `status`** | Pays three times: usable today, *is* C4's hard half, and P3 needs it. Also closes A1's oldest open gap — Ollama has no autostart and doesn't survive a reboot |
+| **2** | **F2 — grow the eval set** | BUILD.md's own "highest-value habit." The set is currently two screenshots of **one bug**, one language, one theme — thinner than the conclusions drawn from it |
+| **3** | **F1 — bench harness in Rust** | Ports `evals/bench.mjs` off Node. F3 depends on it, and so does P3 |
+
+**Blocked until the signing decision:** C1b · C2 · C3 · C4 · D1 · D2 · E1.
 
 ---
 
@@ -70,7 +95,7 @@ Two findings that change later chunks:
 - **Cold load is 17.9 s; warm is 0.002 s.** This first led to "keep the model resident forever,"
   but measuring the cost — 5.2 GB of a 16 GB card — reversed that. See **C4**, which replaces
   the always-resident idea with explicit on/off.
-- **Ollama has no autostart entry.** It won't survive a reboot. **C5** has to solve this.
+- **Ollama has no autostart entry.** It won't survive a reboot. **C5 was dissolved**, so this now belongs to the `capture warm`/`off`/`status` work and C4's tray.
 
 Gotchas if repeating: `ollama app.exe` opens a blocking first-run GUI (this killed two automated
 attempts) — use `ollama.exe serve` detached instead. A broken CUDA extraction fails **silently**
@@ -204,12 +229,12 @@ Three findings that change later chunks:
 - **DWM backdrops are a dead end for this popup.** Acrylic sees through but cannot go dark;
   MicaDark is dark but never see-through; `.color()` and `.state()` are inert on Windows 11.
   Translucency comes from `transparent: true` + CSS alpha instead. **C1b inherits this.**
-- **Esc cannot dismiss a `focusable: false` window** � it never receives key events. The hotkey
+- **Esc cannot dismiss a `focusable: false` window** � it never receives key events. The hotkey
   toggles instead. **C3 must design the focus transition** before follow-up typing works.
 - **An auto-hiding taskbar does not change the work area.** Position against `Shell_TrayWnd`'s
   live rect, not `work_area`, or the popup sits under the bar.
 
-> **BLOCKED AFTER THIS CHUNK.** Smart App Control now refuses to run `warden.exe` � content-based,
+> **BLOCKED AFTER THIS CHUNK.** Smart App Control now refuses to run `warden.exe` � content-based,
 > retroactive, no workaround. **This blocks the rest of C, all of D, and E1.** `capture/` is
 > unaffected. See [PLAN.md §3](PLAN.md) for the full analysis and the four options.
 
@@ -284,11 +309,26 @@ against `nvidia-smi`, not against Ollama's own claim.
 **Reference numbers measured 2026-09-08:** off 454 MiB · loaded 5,705 MiB · unloaded 454 MiB ·
 warm-up ~7 s in-session, ~18 s after a reboot (disk cache).
 
-### C5 — Stop launching it
-**Do:** Launch on login, `Esc` dismisses, tray menu tidy.
-**Done when:** You never open it on purpose.
-**Watch for:** Ollama itself has **no autostart entry** (found in A1) — it won't survive a
-reboot. Warden either starts it or tells you clearly that it's not running.
+### ~~C5 — Stop launching it~~ — DISSOLVED 2026-09-14
+
+**Cut.** Not deferred — every part of it is gone or lives somewhere else now. **Nineteen chunks.**
+
+The original was *"launch on login, `Esc` dismisses, tray menu tidy."* Taken apart:
+
+| Part | Where it went |
+|---|---|
+| **Launch on login** | **Cut deliberately.** You open Warden when you want the hotkey live. This is *more* faithful to PLAN.md §0's **"summoned, never ambient"** than autostart was — and it shrinks the window in which the app needs to run at all |
+| **`Esc` dismisses** | **Already impossible, resolved at B4.** A `focusable: false` window never receives key events, so Esc can't reach it. The hotkey toggles instead. C3 owns the focus transition when typing arrives |
+| **Tray menu tidy** | **C4.** That chunk already builds a tray showing Off / Warming / Ready |
+| **Ollama has no autostart** | **The `capture warm`/`off`/`status` work**, which runs today, plus C4's tray later. Still a real gap — it just never needed its own chunk |
+
+**What this changes downstream.** The app running all day was the thing that made Smart App Control
+a permanent problem rather than an occasional one. Opening it on purpose means it runs in bounded
+windows — which doesn't remove the blocker, but it does change its shape.
+
+It also moves E1's bar: *"you reach for it without deciding to"* is harder when there's a step
+before the step. **That's the real cost of this decision, and it was taken knowingly.** In practice
+the app gets opened once and left running, so the friction is per-session rather than per-use.
 
 ---
 
