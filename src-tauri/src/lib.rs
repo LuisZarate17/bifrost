@@ -7,7 +7,8 @@ use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use serde::Serialize;
 use tauri::ipc::Channel;
-use tauri::Manager;
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use tauri::{Emitter, Manager};
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
 use windows_capture::graphics_capture_api::InternalCaptureControl;
@@ -239,6 +240,14 @@ fn exclude_from_capture(window: &tauri::WebviewWindow) -> Result<(), String> {
         SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
     };
 
+    // Diagnostic escape hatch. The popup being invisible to screen capture also
+    // means it cannot be screenshotted for inspection — so debugging how it
+    // *looks* requires temporarily giving that up. `WARDEN_NO_EXCLUDE=1` does.
+    if std::env::var("WARDEN_NO_EXCLUDE").is_ok() {
+        eprintln!("[warden] WARDEN_NO_EXCLUDE set — capture exclusion SKIPPED");
+        return Ok(());
+    }
+
     let hwnd = window.hwnd().map_err(|e| format!("no HWND: {e}"))?;
 
     // SAFETY: `hwnd` is a valid top-level window owned by this process, handed to
@@ -249,11 +258,293 @@ fn exclude_from_capture(window: &tauri::WebviewWindow) -> Result<(), String> {
     }
 }
 
+/// Park the popup in the bottom-right of the **work area** — the screen minus the
+/// taskbar. Using raw screen bounds would tuck it behind the taskbar.
+fn position_bottom_right(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let monitor = window
+        .current_monitor()
+        .map_err(|e| format!("no monitor: {e}"))?
+        .ok_or_else(|| "no monitor detected".to_string())?;
+
+    let work = monitor.work_area();
+    let size = window.outer_size().map_err(|e| format!("no size: {e}"))?;
+
+    const MARGIN: i32 = 16;
+
+    // An auto-hiding taskbar reserves nothing, so `work_area` comes back as the
+    // full screen and the popup lands exactly where the taskbar slides over it.
+    // Detect that by comparing work area to the monitor, and leave room.
+    let auto_hidden_taskbar = work.size.height >= monitor.size().height;
+    let bottom_margin = if auto_hidden_taskbar { 64 } else { MARGIN };
+
+    let x = work.position.x + work.size.width as i32 - size.width as i32 - MARGIN;
+    let y = work.position.y + work.size.height as i32 - size.height as i32 - bottom_margin;
+
+    window
+        .set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(x, y)))
+        .map_err(|e| format!("set_position failed: {e}"))
+}
+
+/// Show the popup **without taking focus**, so the cursor stays in whatever you
+/// were typing in.
+///
+/// Tauri has no API for this — `show()` + `set_focus()` activates the window, and
+/// `show()` alone still activates on Windows. tauri#11814 tracks the gap and is
+/// open with no fix. `SW_SHOWNOACTIVATE` is the Win32 primitive that does it, and
+/// we already link the `windows` crate.
+#[cfg(windows)]
+fn show_without_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
+
+    let hwnd = window.hwnd().map_err(|e| format!("no HWND: {e}"))?;
+    // SAFETY: a valid top-level HWND owned by this process.
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+
+    // Deliberately NOT calling window.set_focus().
+
+    // tauri#14189: the capture-exclusion flag can revert after a hide/show cycle,
+    // silently degrading to a black rectangle in screen shares. Reapply on every
+    // show. One reporter says reapplying didn't fix it for them, so this is
+    // verified at the end of the chunk rather than assumed.
+    exclude_from_capture(window)?;
+
+    // Click-through: let the mouse reach whatever is behind the popup. This is
+    // the ONE Tauri feature that sets WS_EX_LAYERED, and SetWindowDisplayAffinity
+    // is reported to fail on layered windows. Whether order matters was flagged
+    // unverified by research — so set it, then read the affinity back from
+    // Windows and say plainly whether it survived.
+    // Opt-in, so click-through and the backdrop can be tested independently:
+    // WS_EX_LAYERED is the remaining suspect for the backdrop not rendering.
+    if std::env::var("WARDEN_CLICKTHROUGH").is_ok() {
+        window
+            .set_ignore_cursor_events(true)
+            .map_err(|e| format!("click-through failed: {e}"))?;
+        println!("[warden] click-through enabled (WS_EX_LAYERED set)");
+    }
+
+    // Reapply the backdrop after showing. The window is created with
+    // `visible: false`, and effects applied at build time to a window that was
+    // never shown do not reliably stick.
+    // Must run BEFORE set_effects. On Windows 11, `apply_acrylic` only calls
+    // DwmSetWindowAttribute(DWMWA_SYSTEMBACKDROP_TYPE, DWMSBT_TRANSIENTWINDOW)
+    // and — unlike apply_mica/apply_tabbed — never touches
+    // DWMWA_USE_IMMERSIVE_DARK_MODE. So acrylic cannot request dark on its own.
+    if let Err(e) = force_dark_mode(window) {
+        eprintln!("[warden] WARNING: dark mode attribute failed: {e}");
+    }
+
+    // No DWM system backdrop. Four attempts established that the backdrop path
+    // cannot do what this popup needs on Windows 11:
+    //
+    //   Acrylic  — samples what is behind the window (right behaviour), but
+    //              `apply_acrylic` has no `dark` parameter and never sets
+    //              DWMWA_USE_IMMERSIVE_DARK_MODE, so it only renders light.
+    //   MicaDark — genuinely dark, but Mica samples the desktop *wallpaper*, never
+    //              the window behind, so it is never see-through over an app.
+    //
+    // Translucency now comes from the webview itself: `transparent: true` makes
+    // WebView2 composite with alpha, and the CSS background supplies it. No blur,
+    // but real see-through, fully under our control, and immune to DWM's
+    // active/inactive rendering — which a never-focused window always loses.
+
+    report_affinity(window);
+    follow_taskbar(window.clone());
+    Ok(())
+}
+
+/// The taskbar's current top edge, in physical pixels.
+///
+/// An auto-hiding taskbar does **not** change the work area when it slides in and
+/// out — the work area stays full-screen either way, which is why a static margin
+/// can't track it. The taskbar window itself does move, so read that instead.
+#[cfg(windows)]
+fn taskbar_top() -> Option<i32> {
+    use windows::core::w;
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowRect};
+
+    // SAFETY: FindWindowW returns Err if absent; GetWindowRect only reads.
+    unsafe {
+        let hwnd = FindWindowW(w!("Shell_TrayWnd"), None).ok()?;
+        let mut rect = RECT::default();
+        GetWindowRect(hwnd, &mut rect).ok()?;
+        Some(rect.top)
+    }
+}
+
+/// Keep the popup sitting just above the taskbar while it's on screen, so it
+/// slides with it instead of being covered.
+///
+/// Polls rather than listening: tracking the shell's appbar notifications means
+/// registering as an appbar ourselves, which is a lot of machinery for a window
+/// that's visible for a few seconds. Repositioning only happens when the edge
+/// actually moves, so an idle popup does no work.
+#[cfg(windows)]
+fn follow_taskbar(window: tauri::WebviewWindow) {
+    tauri::async_runtime::spawn(async move {
+        let mut last_y: Option<i32> = None;
+
+        while is_really_visible(&window) {
+            if let (Some(tray_top), Ok(size)) = (taskbar_top(), window.outer_size()) {
+                const GAP: i32 = 12;
+                let y = tray_top - size.height as i32 - GAP;
+
+                if last_y != Some(y) {
+                    if let Ok(pos) = window.outer_position() {
+                        let _ = window.set_position(tauri::Position::Physical(
+                            tauri::PhysicalPosition::new(pos.x, y),
+                        ));
+                    }
+                    last_y = Some(y);
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+        }
+    });
+}
+
+/// Ask DWM to render this window's chrome and system backdrop in dark mode.
+///
+/// `apply_acrylic` never sets this — only `apply_mica`/`apply_tabbed` do — so an
+/// acrylic window has no way to request dark through Tauri's API at all.
+#[cfg(windows)]
+fn force_dark_mode(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+
+    let hwnd = window.hwnd().map_err(|e| format!("no HWND: {e}"))?;
+    let dark: u32 = 1;
+    // SAFETY: valid top-level HWND owned by this process; the attribute takes a
+    // 4-byte BOOL.
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            &dark as *const _ as *const std::ffi::c_void,
+            std::mem::size_of_val(&dark) as u32,
+        )
+        .map_err(|e| format!("{e}"))
+    }
+}
+
+/// Hide via the same Win32 path we show with, and report what Windows says
+/// afterwards rather than trusting the call.
+#[cfg(windows)]
+fn hide_now(window: &tauri::WebviewWindow) {
+    use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+
+    let Ok(hwnd) = window.hwnd() else {
+        eprintln!("[warden] hide: no HWND");
+        return;
+    };
+    // SAFETY: valid HWND owned by this process.
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+    }
+    println!("[warden] hidden (now visible={})", is_really_visible(window));
+}
+
+/// Ask **Windows** whether the popup is on screen, not Tauri.
+///
+/// We show it with raw `ShowWindow(SW_SHOWNOACTIVATE)` to avoid stealing focus,
+/// which bypasses Tauri's dispatcher — so Tauri's own `is_visible()` never learns
+/// the window came up and keeps reporting `false`. That made the toggle a one-way
+/// trip: every press took the "show" branch and nothing ever hid it.
+#[cfg(windows)]
+fn is_really_visible(window: &tauri::WebviewWindow) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+
+    let Ok(hwnd) = window.hwnd() else { return false };
+    // SAFETY: valid HWND owned by this process.
+    unsafe { IsWindowVisible(hwnd).as_bool() }
+}
+
+/// Read the display affinity back from Windows. `17` is `WDA_EXCLUDEFROMCAPTURE`;
+/// anything else means the exclusion is not actually in force, whatever we asked for.
+#[cfg(windows)]
+fn report_affinity(window: &tauri::WebviewWindow) {
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowDisplayAffinity;
+
+    let Ok(hwnd) = window.hwnd() else { return };
+    let mut affinity: u32 = 0;
+    // SAFETY: valid HWND owned by this process.
+    let ok = unsafe { GetWindowDisplayAffinity(hwnd, &mut affinity) };
+
+    match (ok.is_ok(), affinity) {
+        (true, 17) => println!("[warden] affinity verified: 17 (excluded) — click-through OK"),
+        (true, other) => eprintln!(
+            "[warden] WARNING: affinity is {other}, not 17 — the window is NOT excluded from capture"
+        ),
+        (false, _) => eprintln!("[warden] WARNING: could not read display affinity"),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
+
+    let primary = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyW);
+    let fallback = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, _shortcut, event| {
+                    // Fires on BOTH press and release — without this guard every
+                    // action would run twice per keypress.
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+
+                    // The handler runs on the main thread, synchronously, holding
+                    // the Win32 message pump. Touching windows inline here is a
+                    // confirmed Windows 11 freeze (plugins-workspace#1923), so
+                    // hand off immediately.
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let Some(window) = app.get_webview_window("main") else {
+                            return;
+                        };
+
+                        // Toggle. Esc can't dismiss a non-focusable window — it
+                        // never receives key events — so the hotkey does both jobs
+                        // until C3 sorts out the focus transition.
+                        #[cfg(windows)]
+                        let visible = is_really_visible(&window);
+                        #[cfg(not(windows))]
+                        let visible = window.is_visible().unwrap_or(false);
+
+                        println!("[warden] hotkey: visible={visible}");
+                        if visible {
+                            // Hide the same way we show: raw Win32. Showing via
+                            // ShowWindow and hiding via Tauri's dispatcher leaves
+                            // Windows and Tauri disagreeing about the window, and
+                            // the next IsWindowVisible still reported `true`.
+                            #[cfg(windows)]
+                            hide_now(&window);
+                            #[cfg(not(windows))]
+                            let _ = window.hide();
+                            return;
+                        }
+
+                        if let Err(e) = position_bottom_right(&window) {
+                            eprintln!("[warden] WARNING: positioning failed: {e}");
+                        }
+
+                        #[cfg(windows)]
+                        if let Err(e) = show_without_focus(&window) {
+                            eprintln!("[warden] WARNING: show failed: {e}");
+                        }
+
+                        // The frontend owns the Channel, so it starts the capture.
+                        let _ = app.emit("warden://summoned", ());
+                    });
+                })
+                .build(),
+        )
+        .setup(move |app| {
             #[cfg(windows)]
             {
                 let window = app
@@ -264,10 +555,50 @@ pub fn run() {
                     // Loudly, not silently: this is the headline feature.
                     Err(e) => eprintln!("[warden] WARNING: capture exclusion failed: {e}"),
                 }
+                if let Err(e) = position_bottom_right(&window) {
+                    eprintln!("[warden] WARNING: positioning failed: {e}");
+                }
             }
+
+            // Registered by hand rather than through the plugin builder's
+            // `.with_shortcut()`: a failed bind there propagates out of plugin
+            // setup and aborts the whole app, instead of falling back.
+            let shortcut = match app.global_shortcut().register(primary) {
+                Ok(()) => {
+                    println!("[warden] hotkey registered: Ctrl+Alt+W");
+                    Some("Ctrl+Alt+W".to_string())
+                }
+                Err(e) => {
+                    eprintln!("[warden] Ctrl+Alt+W unavailable ({e}) — trying fallback");
+                    match app.global_shortcut().register(fallback) {
+                        Ok(()) => {
+                            println!("[warden] hotkey registered: Ctrl+Alt+Space");
+                            Some("Ctrl+Alt+Space".to_string())
+                        }
+                        Err(e2) => {
+                            eprintln!("[warden] ERROR: no hotkey could be registered: {e2}");
+                            None
+                        }
+                    }
+                }
+            };
+
+            // Note: a successful bind is not proof the hotkey works. Apps that grab
+            // keys with a low-level keyboard hook swallow it with no error at all
+            // (plugins-workspace#2646). Only a real keypress proves it.
+            app.manage(HotkeyLabel(shortcut));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![ask_about_screen])
+        .invoke_handler(tauri::generate_handler![ask_about_screen, hotkey_label])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Which hotkey actually bound, if any — so the UI can say so rather than leaving
+/// you to guess why nothing happens.
+struct HotkeyLabel(Option<String>);
+
+#[tauri::command]
+fn hotkey_label(state: tauri::State<'_, HotkeyLabel>) -> Option<String> {
+    state.0.clone()
 }

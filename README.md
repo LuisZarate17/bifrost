@@ -35,7 +35,13 @@ Needs `ollama serve` running. The prompt lives in `capture/prompt.txt`, not in s
 - **B3 — capture behind a button.** Click and Warden screenshots your screen and streams an answer
   screenshot. See [docs/B3-results.md](docs/B3-results.md).
 
-Next up: **B4 — the global hotkey.** See [STAGE-B.md](STAGE-B.md).
+- **B4 + C1 — hotkey and corner popup.** `Ctrl+Alt+W` summons a translucent panel bottom-right
+  that streams an answer and never steals focus. See [docs/B4-results.md](docs/B4-results.md).
+
+> **Blocked here.** Smart App Control now refuses to run `warden.exe` - content-based, retroactive,
+> and with no per-app exception. This stops the rest of Stage C, all of Stage D, and E1.
+> **`capture/` is unaffected and still works.** See [PLAN.md §3](PLAN.md) for the analysis and the
+> options � code signing is the only route that keeps Smart App Control on.
 
 ## How it works
 

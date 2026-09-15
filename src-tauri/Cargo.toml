@@ -27,6 +27,8 @@ futures-util = "0.3"
 base64 = "0.22"
 windows-capture = "2.0.1"
 image = "0.25.10"
+tauri-plugin-global-shortcut = "2.3.2"
+tokio = { version = "1.53.1", features = ["time"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -38,4 +40,4 @@ panic = "abort"
 strip = true
 
 [target."cfg(windows)".dependencies]
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_UI_WindowsAndMessaging"] }

@@ -143,7 +143,13 @@ shape rather than rediscovering it.
 
 ---
 
-## B4 — Global hotkey
+## B4 — Global hotkey — DONE 2026-09-14 (with C1)
+
+> Hotkey, corner popup, translucency and taskbar-following all work. Translucency is CSS alpha,
+> **not** a DWM backdrop � acrylic cannot go dark, mica cannot see through.
+> **Then Smart App Control blocked `warden.exe`** � see PLAN.md §3.
+> Full write-up: [docs/B4-results.md](docs/B4-results.md).
+
 
 **Do:** `Ctrl+Alt+W` via Tauri 2's global-shortcut plugin. Fallback `Ctrl+Alt+Space`. **Never**
 `Alt+Space` — that's the Windows system menu.

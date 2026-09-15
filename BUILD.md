@@ -193,10 +193,25 @@ Three findings that change later chunks:
 - **The flag fails on `WS_EX_LAYERED` windows**, but PLAN.md §4 specifies the popup as layered.
   **C1 must resolve that conflict** — the headline feature depends on it.
 
-### B4 — Global hotkey
-**Do:** `Ctrl+Alt+W` via Tauri 2's global-shortcut plugin.
-**Done when:** It fires while a completely different app is focused.
-**Watch for:** Registration fails silently if another app owns the combo. Log it, surface it.
+### B4 — Global hotkey — DONE 2026-09-14 · with **C1** and C1b's translucency
+`Ctrl+Alt+W` summons a translucent panel bottom-right that streams an answer and never steals
+focus. Full write-up: **[docs/B4-results.md](docs/B4-results.md)**.
+
+**The C1 layered-window contradiction is resolved.** Click-through does **not** break
+capture taken while visible. The documented failures were WPF windows calling `UpdateLayeredWindow`.
+
+Three findings that change later chunks:
+- **DWM backdrops are a dead end for this popup.** Acrylic sees through but cannot go dark;
+  MicaDark is dark but never see-through; `.color()` and `.state()` are inert on Windows 11.
+  Translucency comes from `transparent: true` + CSS alpha instead. **C1b inherits this.**
+- **Esc cannot dismiss a `focusable: false` window** � it never receives key events. The hotkey
+  toggles instead. **C3 must design the focus transition** before follow-up typing works.
+- **An auto-hiding taskbar does not change the work area.** Position against `Shell_TrayWnd`'s
+  live rect, not `work_area`, or the popup sits under the bar.
+
+> **BLOCKED AFTER THIS CHUNK.** Smart App Control now refuses to run `warden.exe` � content-based,
+> retroactive, no workaround. **This blocks the rest of C, all of D, and E1.** `capture/` is
+> unaffected. See [PLAN.md §3](PLAN.md) for the full analysis and the four options.
 
 ---
 

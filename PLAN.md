@@ -105,8 +105,62 @@ DLL is present and correctly sized. Not stale cargo state — a load block.
 SAC has not evaluated, so it loads. **This recurs** on new crates, fresh clones, and after any
 `cargo clean`.
 
-**Not fixed by choice.** Smart App Control can be disabled, but **cannot be re-enabled without
-resetting Windows.** That is irreversible, so it stays the user's call. Rebuilding costs seconds.
+**Not fixed by choice.** Rebuilding costs seconds, so the proc-macro case stays a nuisance rather
+than a blocker.
+
+### It escalated at B4 — SAC now blocks `warden.exe` itself (2026-09-14)
+
+**This is a project-level blocker, not a build nuisance. Pinned, not solved.**
+
+Smart App Control now refuses to run the built application:
+
+```
+Event 3077: … attempted to load …\target\debug\warden.exe that did not meet
+the Enterprise signing level requirements   (Policy {0283ac0f-…})
+```
+
+**What was established by testing, not assumed:**
+
+- The block follows the file's **content**, not its name or path — copying the exe to `%TEMP%`
+  under a random name is blocked identically.
+- It is **retroactive**: the release build from 2026-09-12 ran fine at the time and is blocked now.
+  SAC's cloud verdict is per-hash and re-evaluated on Microsoft's schedule, not ours.
+- **`capture.exe` still runs.** Same toolchain, same machine. Only the GUI binary is blocked —
+  plausibly because it captures the screen, hides itself from capture, registers a global hotkey
+  and makes network calls. That reasoning is *unconfirmed*; only the outcome is measured.
+- **The A4 workaround does not apply.** Rebuilding for a fresh hash fixed the proc-macro case and
+  does nothing here.
+
+**Ruled out, with sources:** per-app exclusions (do not exist — confirmed by a Microsoft
+moderator), self-signed certificates (SAC needs the Microsoft Trusted Root Program, not the local
+store), different folder or filename, running as Administrator, and Windows Sandbox (SAC runs
+inside it too, and GPU inference plus Windows Graphics Capture are unlikely to survive there).
+RustDesk — the same category of app — hit this and found no fix but disabling SAC.
+
+**Toggling SAC is not automatable.** Microsoft's documented procedure boots into Windows Recovery
+and edits the *offline* registry hive, setting both `VerifiedAndReputablePolicyState` and the
+anti-rollback guard `VerifiedAndReputablePolicyStateMinValueSeen`. No running program can do it,
+and that is clearly deliberate. **An "LLM controller app with a SAC toggle" is therefore not
+possible** — worth recording, since it was considered.
+
+> **Correction:** this project briefly recorded that an April 2026 update made the SAC toggle
+> reversible from Settings. Microsoft's own documentation says *"Configuring Smart App Control to
+> Off or On (enforcement) is a one-way operation"* unless the current state is Evaluation. The two
+> could not be reconciled. **Do not rely on the Settings toggle being reversible.** Recovery-boot
+> registry editing can restore any state, so it is recoverable — just not by clicking.
+
+**The four options, unchanged:**
+
+| | |
+|---|---|
+| **Code-sign** | ~$10/month (Azure Artifact Signing, US/Canada individuals). The only path where SAC stays enforced *and* the GUI runs |
+| **Open-source it** | SignPath Foundation signs qualifying open-source projects free |
+| **Disable SAC** | Free; costs a real protection layer. Defender and SmartScreen are unaffected |
+| **Stay on the CLI** | Free, SAC stays on, works today — `capture/` is not blocked |
+
+**Which chunks this blocks:** everything that runs the GUI — the rest of **C**, all of **D**'s
+verification, and **E1**'s two weeks of daily use. **Stage A is unaffected.** BUILD.md's own hedge
+holds: *"A4 is already a useful tool. If everything after this stalls, you still have something."*
 
 **Also missing until A3: the MSVC build tools.** A1 recorded the toolchain as verified but only
 exercised Ollama, and nothing ever reached the link step. Installed at A3; **B1 needs them too.**
