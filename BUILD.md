@@ -9,29 +9,35 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ## Where this stands — 2026-09-15
 
-**10 of 19 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
-C1b done 2026-09-15.
+**11 of 19 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
+C1b and C2 done 2026-09-15.
 
-> **Blocked: everything that runs the GUI.** Smart App Control refuses to run `warden.exe` —
-> content-based, retroactive, no per-app exception, and not automatable. See [PLAN.md §3](PLAN.md).
-> **`capture/` is unaffected and works today with Smart App Control enforced.**
+> **Correction, 2026-09-15: nothing is blocked.** The **debug build runs** with Smart App Control
+> enforced — `target/debug/warden.exe` launches, and C2 was verified against Discord, Zoom and
+> Teams using it. Only `target/release/warden.exe` is refused: *"An Application Control policy has
+> blocked this file."*
+>
+> Six chunks were listed as blocked on code signing and were not. **Signing is a shipping problem,
+> not a building problem** — it buys a binary that runs on a machine other than this one. That also
+> settles the open SignPath caveat: local development never depended on it.
 
 ### The order of work from here
 
-**A decision gates most of it:** code-sign (~$10/month), open-source for a free certificate,
-disable Smart App Control, or stay on the CLI. Until that is settled, nothing GUI can start.
-
-**Not blocked — do these in this order:**
+Everything below runs against the debug build. Nothing waits on signing.
 
 | | | Why this order |
 |---|---|---|
 | **1** | **`capture warm` / `off` / `status`** | Pays three times: usable today, *is* C4's hard half, and P3 needs it. Also closes A1's oldest open gap — Ollama has no autostart and doesn't survive a reboot |
-| **2** | **F2 — grow the eval set** | BUILD.md's own "highest-value habit." The set is currently two screenshots of **one bug**, one language, one theme — thinner than the conclusions drawn from it |
-| **3** | **F1 — bench harness in Rust** | Ports `evals/bench.mjs` off Node. F3 depends on it, and so does P3 |
+| **2** | **C4 — the same states in the tray** | Off / Warming / Ready, read from the card via NVML rather than `ollama ps`. Mostly assembly once 1 exists |
+| **3** | **C3 — follow-ups** | Ask again against the capture already in memory. The hard part is the focus transition: the window is `focusable: false`, so typing means taking focus and giving it back |
+| **4** | **D1 / D2 — the rest of the sweep** | C2 closed three of D1's ten rows. The remaining ones are genuinely different capture paths — OBS display vs window capture, `getDisplayMedia`, Snipping Tool, Game Bar, Steam |
+| **5** | **F2 — grow the eval set** | The "highest-value habit." Still two screenshots of **one bug**, one language, one theme — thinner than the conclusions drawn from it |
+| **6** | **F1 — bench harness in Rust** | Ports `evals/bench.mjs` off Node. F3 depends on it, and so does P3 |
 
-**Blocked until the signing decision:** C2 · C3 · C4 · D1 · D2 · E1.
+**Signing, whenever it suits:** a LICENSE, CI that builds the release artifact, and a privacy sweep
+of the local paths in the docs before the repo goes public. It gates distribution only.
 
-> **C1b was not blocked after all.** The frontend serves standalone on `localhost:1420` with no
+> **C1b was not blocked either.** The frontend serves standalone on `localhost:1420` with no
 > `warden.exe` involved, and the renderer is verified by assertion rather than by eye —
 > `npm run check:inert`. Listing it as blocked was wrong.
 
@@ -291,7 +297,15 @@ and both finalist models started inventing errors that didn't exist. If the prom
 control length, it gets re-run against the eval set first (F1). Also: whatever renders the Markdown
 must not autofocus anything, or C1's no-focus-steal guarantee breaks.
 
-`windows` crate.
+`windows` crate — landed with B4; C2 owed only the test.
+**Verified:** **Discord, Zoom and Teams all show nothing.** Affinity reads back `17`.
+Results: [docs/C2-results.md](docs/C2-results.md).
+
+**One finding worth carrying into D1.** The exclusion hides a window's *contents*, not its
+*existence* — **Zoom's share picker lists "Warden" by name** with a black thumbnail, and will let
+you share it (the recipient sees an empty rectangle). Nothing it says leaks; that it exists does.
+So D1 should record two answers per app, not one: can it **see** the window, and does it **list**
+it.
 
 ### C3 — Follow-ups
 **Do:** A text box that asks again against the capture already in memory.
@@ -352,9 +366,9 @@ every one.** Assume nothing; test each.
 
 | App | Capture path | Result |
 |---|---|---|
-| Zoom — screen share | native | ☐ |
-| Microsoft Teams — screen share | native | ☐ |
-| Discord — Go Live | native | ☐ |
+| Zoom — screen share | native | **NO** — verified C2, but *listed by name* in the picker |
+| Microsoft Teams — screen share | native | **NO** — verified C2 |
+| Discord — Go Live | native | **NO** — verified C2 |
 | Slack — huddle share | native | ☐ |
 | Google Meet in Chrome | browser `getDisplayMedia` | ☐ |
 | OBS — **Display Capture** | desktop duplication | ☐ |
