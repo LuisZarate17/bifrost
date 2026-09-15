@@ -301,6 +301,42 @@ Tune the default prompt. Fix only what actually annoyed you.
 history & persistence · region select · chat window · terminal mode (TUI,
 [OpenClaw](https://github.com/openclaw/openclaw)-shaped) · files & notes · voice · acting via MCP
 
+### P3 — the model hub (scoped 2026-09-14, deliberately not started)
+
+One place to pull, run, power-cycle and **test** local models, which Warden and any future LLM app
+uses as its backend. This is the "platform eventually" in §0 becoming concrete, and it grows into
+the terminal and desktop modes already listed above.
+
+**Most of the hard part already exists** — this is assembly, not invention:
+
+| Piece | Where it already lives |
+|---|---|
+| Model testing | `evals/bench.mjs` — model × screenshot, TTFT, decode rate, resident VRAM, verbatim answers, blind labels |
+| Grading rubric | `evals/cases.md`, with `evals/fixtures/` so cases regenerate from tracked source |
+| Power control | `keep_alive: -1` / `0`, measured against NVML rather than Ollama's own claim (§6b, C4) |
+| Downloading | `ollama pull` — the hub wraps it, never reimplements it |
+| Shared backend | **Already true.** Ollama is the server; anything on the machine can reach `127.0.0.1:11434`. Warden is a client, not a bundler |
+
+**What the hub actually adds** beyond what's listed above:
+
+1. A front end over pull / list / remove
+2. Power control with **visible** VRAM — Ollama surfaces this poorly
+3. The eval harness with a UI, so comparing models is a click rather than a command
+4. **A shared "current model" config that every app reads** — switch once, switches everywhere.
+   Nearly free, and the piece that makes it a hub rather than a launcher
+
+**Build it CLI-first, and not for style reasons.** Smart App Control blocks `warden.exe` but
+permits `capture.exe` — a GUI hub would inherit the same block, a console one very likely wouldn't.
+**A desktop hub therefore depends on the code-signing decision** (§3), exactly as the rest of
+Stage C does.
+
+**The stepping stone that pays three times:** `capture warm` / `off` / `status` as subcommands on
+the existing binary. Runs today under SAC, closes A1's unresolved "Ollama has no autostart" gap,
+and the logic is precisely what **C4** needs and what the hub needs after that.
+
+**Not before v1.** Warden is unfinished, and §0's rule stands: a feature earns its keep by being
+used, not by sounding good.
+
 ---
 
 ## 8. Known traps
