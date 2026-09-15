@@ -102,8 +102,101 @@ Two fixes, because either alone would have left the trap set:
 - the preview renders the answer and the probe as **two separate `<Answer>` instances**, so no
   amount of malformed Markdown in one can absorb the other.
 
+## The prompt experiment — rejected on the evidence
+
+**Result: the brief prompt does not ship. The current prompt stands.**
+
+A2 warned against editing the prompt, but its failing variant — *"What's wrong on this screen? Be
+specific about the file, the line number, and the fix"* — changed **two** things at once: it was
+both terser *and* fault-presupposing. A2 hypothesised that the presupposition manufactured the
+faults, and never isolated the two. So brevity alone was untested, not known bad.
+
+This variant changes one thing. The current prompt is kept **verbatim as a prefix**, preserving the
+exact *"otherwise explain what matters here"* phrasing A2 credited with suppressing confabulation,
+and appends only:
+
+> Lead with the answer in one sentence, then the detail. Give one explanation and one fix, not a
+> list of alternatives. Stop once you've answered; don't restate the same point in different words.
+
+### The control has to reproduce before the comparison means anything
+
+The first run was invalid, and the failure is worth recording. The control was built with
+`cp capture/prompt.txt`, which carries a **trailing newline**; A2's baseline came from a string
+constant in `bench.mjs` with none. Everything else matched — same Ollama 0.33.3, same model, same
+image, `temperature: 0`, `seed: 42`.
+
+**That one byte changed the answer, and changed the verdict.** A2 recorded 8B-Q4 passing case-02 by
+concluding the code *will not compile*. With the trailing newline, the same model on the same image
+said it **"will compile successfully"** and would segfault at runtime — the exact PARTIAL-grade
+failure A2 recorded for 8B-Q8, which case-01 disproves on the adjacent screen.
+
+Rewritten byte-exactly, the control reproduces A2's answer hash `9f84dcc7d8c5` at 3,732 chars. Only
+then is the comparison worth reading. **Any future prompt work must pin the control to a known
+answer hash before drawing a conclusion.** The CLI is unaffected: `capture/src/main.rs` calls
+`.trim()`.
+
+### Measured
+
+| | control | brief |
+|---|---|---|
+| case-01 chars | 3,715 | **699** |
+| case-02 chars | 3,732 | **754** |
+| case-01 verdict | pass | **pass** — mechanism right; omits `E0502`, which cases.md wants only "ideally" |
+| case-02 verdict | pass | **FAIL** |
+
+Case-02 is the whole decision. The brief answer locates the real conflict and then says:
+
+> This causes undefined behavior, **even though the code compiles**.
+
+cases.md fails an answer that "describes the file as fine," and case-01 on the adjacent screen
+disproves it outright. That is a regression, and PLAN.md §2 says a prompt change ships only if it
+doesn't regress the set. **Rejected.**
+
+### The refinement to A2's hypothesis
+
+A2's confounded variant produced *invented* errors. This one invented nothing — it read the code
+correctly and identified the real borrow conflict — but drew the wrong conclusion about whether it
+compiles. The two changes fail in **different ways**, so A2's hypothesis was incomplete rather than
+wrong:
+
+- **presupposing a fault** → fabricates faults that aren't there
+- **demanding brevity** → correct mechanism, wrong conclusion
+
+Hypothesis, stated as one: the model reasons its way to the verdict *by writing*. The control's
+"will not compile" arrives only after ~3,000 characters of working through the mechanism.
+Compressing the answer removes the deliberation that produces the conclusion.
+
+If that holds, **length here is not padding — it is the reasoning**, and length has to be solved in
+the UI rather than the prompt. Which is what the rest of C1b does, and what the plan named as the
+fallback.
+
+## Grading the fix, not just the diagnosis — `npm run check:fixes`
+
+Reading the answers turned up something cases.md never graded: whether the proposed **fix** works.
+`evals/fixcheck.mjs` borrow-checks each one with `rustc --emit=metadata`, which needs no linker.
+
+```
+ok   baseline (the bug itself)               REJECTED E0502
+ok   A2 PASS answer, "Option 1"              REJECTED E0502
+ok   Vec::reserve before borrowing           REJECTED E0502
+ok   clone the buffer                        COMPILES
+ok   read before the push (end the borrow)   COMPILES
+```
+
+**The answer A2 graded as a PASS proposes a fix that fails with the identical E0502 it had just
+correctly explained.** Its "Option 1" binds `&frames[0]`, pushes, then reads — the same static
+borrow conflict. The `Vec::reserve` and `Vec::with_capacity` fixes seen in other runs fail the same
+way, because capacity is irrelevant to a *static* borrow conflict. That is an easy thing to nod
+along to on a screen.
+
+And the rejected brief prompt is the one whose fix actually compiles. **Each is right exactly where
+the other is wrong** — which is why "which prompt is better" was the wrong question, and the
+criterion had to be the stated one: does it regress the set.
+
+A2's case-02 PASS stands, since the conclusion was what was graded, but it should be read with this
+caveat. cases.md now carries a fix-must-compile criterion so the next model is held to it.
+
 ## Still open
 
-The prompt experiment (plan step 6). The saved answers show the model looping — one runs
-"Option 7", "Option 8", "Option 9" with identical content until it hits the token cap. Much of
-the 8 KB is repetition, which is a prompt problem rather than a rendering one.
+Nothing in C1b. F2 should grow the eval set; the fix-must-compile criterion gives it a sharper
+grading tool than it had.

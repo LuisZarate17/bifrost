@@ -1,0 +1,3 @@
+What am I looking at? If there's an error or something broken, explain it and the fix. Otherwise explain what matters here.
+
+Lead with the answer in one sentence, then the detail. Give one explanation and one fix, not a list of alternatives. Stop once you've answered; don't restate the same point in different words.

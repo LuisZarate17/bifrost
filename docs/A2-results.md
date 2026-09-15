@@ -59,7 +59,7 @@ This is the case that decided A2, exactly as cases.md predicted it would.
 |---|---|---|
 | 4B-Q4 | **FAIL** | "The code is mostly correct and should compile and run without errors." Also hallucinated program output (`7680 bytes`; the real value is 8,294,400) |
 | 4B-Q8 | **FAIL** | "There's no actual error in the code — it will compile and run without crashing," while quoting the two conflicting lines and marking them ✅ |
-| **8B-Q4** | **PASS** | Correctly concluded it will not compile and the borrow checker catches it. Caveat: named the wrong code (`E0597`, not E0502) and fabricated a compiler-output block |
+| **8B-Q4** | **PASS** | Correctly concluded it will not compile and the borrow checker catches it. Caveat: named the wrong code (`E0597`, not E0502) and fabricated a compiler-output block. **C1b caveat:** its proposed fix does not compile either — see docs/C1b-results.md |
 | 8B-Q8 | **PARTIAL** | Right mechanism, wrong conclusion: *"The code compiles successfully (Rust's borrow checker doesn't catch this at compile time)"* — which case-01 disproves on the adjacent screen |
 
 **Both 4B models read the code accurately and still concluded it was fine.** That is the exact

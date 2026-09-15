@@ -80,3 +80,21 @@ read the code.
 The two images are the same bug from both directions. A model that passes case-01 but fails
 case-02 is reading text well but not reasoning about code — worth knowing before committing to
 it, since Warden's whole job is looking at a screen and working out what's wrong.
+
+---
+
+## Grading the fix, not just the diagnosis
+
+Added at C1b. Every case above grades whether the model **identifies** the bug. None graded whether
+the **fix it proposes** actually works, and that gap hid a real defect: the case-02 answer A2
+recorded as a PASS explains E0502 correctly and then proposes a fix that fails with the identical
+E0502. Two other plausible-looking fixes (`Vec::reserve`, `Vec::with_capacity`) fail the same way,
+because capacity is irrelevant to a *static* borrow conflict — which is exactly the kind of thing
+that reads fine on a screen.
+
+**A proposed fix is graded by compiling it, never by reading it.** `npm run check:fixes` runs each
+candidate through `rustc --emit=metadata`, which borrow-checks without linking.
+
+**An answer counts as fully correct only if its primary suggested fix compiles.** An answer that
+diagnoses correctly and then proposes a fix that doesn't compile is a **PARTIAL**, and the run
+notes should say so. Add every new proposed fix to `evals/fixcheck.mjs` as a candidate.
