@@ -1,0 +1,7 @@
+# Prompt files are measured input, not prose. `bench.mjs` reads a --prompt-file
+# verbatim, and at temperature 0 a single changed byte changes the answer - at
+# C1b one trailing newline flipped a case-02 verdict from correct to wrong.
+# core.autocrlf would rewrite the blank line inside brief.txt on checkout, so
+# these must never be line-ending converted.
+evals/prompts/*.txt -text
+capture/prompt.txt  -text
