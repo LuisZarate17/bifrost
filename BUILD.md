@@ -9,8 +9,12 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ## Where this stands — 2026-09-15
 
-**11 of 19 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
-C1b and C2 done 2026-09-15.
+**12 of 20 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
+C1b, C2 and C4a done 2026-09-15.
+
+> **Twenty, not nineteen.** C4 split into **C4a** (the CLI, done) and **C4b** (the tray). Lettered
+> rather than renumbered, following C1b, so every existing reference to D1, E1 and the rest stays
+> valid.
 
 > **Correction, 2026-09-15: nothing is blocked.** The **debug build runs** with Smart App Control
 > enforced — `target/debug/warden.exe` launches, and C2 was verified against Discord, Zoom and
@@ -27,12 +31,12 @@ Everything below runs against the debug build. Nothing waits on signing.
 
 | | | Why this order |
 |---|---|---|
-| **1** | **`capture warm` / `off` / `status`** | Pays three times: usable today, *is* C4's hard half, and P3 needs it. Also closes A1's oldest open gap — Ollama has no autostart and doesn't survive a reboot |
-| **2** | **C4 — the same states in the tray** | Off / Warming / Ready, read from the card via NVML rather than `ollama ps`. Mostly assembly once 1 exists |
-| **3** | **C3 — follow-ups** | Ask again against the capture already in memory. The hard part is the focus transition: the window is `focusable: false`, so typing means taking focus and giving it back |
-| **4** | **D1 / D2 — the rest of the sweep** | C2 closed three of D1's ten rows. The remaining ones are genuinely different capture paths — OBS display vs window capture, `getDisplayMedia`, Snipping Tool, Game Bar, Steam |
-| **5** | **F2 — grow the eval set** | The "highest-value habit." Still two screenshots of **one bug**, one language, one theme — thinner than the conclusions drawn from it |
-| **6** | **F1 — bench harness in Rust** | Ports `evals/bench.mjs` off Node. F3 depends on it, and so does P3 |
+| ~~1~~ | ~~**`capture warm` / `off` / `status`**~~ | **Done 2026-09-15 as C4a.** Closed A1's oldest gap only halfway: `warm` detects Ollama is down and prints the command, but does not start it |
+| **1** | **C4b — the same states in the tray** | Off / Warming / Ready, read from the card via NVML rather than `ollama ps`. Mostly assembly on C4a — and the tray is where **Warming** can finally be shown, since a one-shot CLI cannot observe it |
+| **2** | **C3 — follow-ups** | Ask again against the capture already in memory. The hard part is the focus transition: the window is `focusable: false`, so typing means taking focus and giving it back |
+| **3** | **D1 / D2 — the rest of the sweep** | C2 closed three of D1's ten rows. The remaining ones are genuinely different capture paths — OBS display vs window capture, `getDisplayMedia`, Snipping Tool, Game Bar, Steam |
+| **4** | **F2 — grow the eval set** | The "highest-value habit." Still two screenshots of **one bug**, one language, one theme — thinner than the conclusions drawn from it |
+| **5** | **F1 — bench harness in Rust** | Ports `evals/bench.mjs` off Node. F3 depends on it, and so does P3 |
 
 **Signing, whenever it suits:** a LICENSE, CI that builds the release artifact, and a privacy sweep
 of the local paths in the docs before the repo goes public. It gates distribution only.
@@ -311,11 +315,26 @@ it.
 **Do:** A text box that asks again against the capture already in memory.
 **Done when:** Second question, no new screenshot taken.
 
-### C4 — Power control (explicit on/off, verified against the card)
-**Why this exists:** the model costs **5.2 GB of a 16 GB card** while loaded. Holding it there
-permanently is wrong when the popup has to work over games that want 8–12 GB. A timeout is also
-wrong — it decides for you and leaves you guessing whether the next press is instant or an
-18-second stall. So: explicit states you control and can see.
+### C4a — Power control in the CLI — DONE 2026-09-15
+**Did:** `capture warm` / `off` / `status`. Results: [docs/C4a-results.md](docs/C4a-results.md).
+
+Measured: **off −8,193 MiB · warm +7,873 MiB in 2.2 s · off −7,873 MiB.** The warm and off deltas
+match exactly in a tight cycle, which is the acceptance test — two measured figures compared to
+each other, never to a constant.
+
+**Carried into C4b:** a one-shot CLI cannot observe **Warming** — `/api/ps` has no "loading" entry,
+so a model appears only once resident. Warming is in-process knowledge, which is exactly why the
+tray can show it and `status` cannot.
+
+**And the trap:** Ollama keys a loaded runner by the model *and* by `num_ctx`, so warming at the
+wrong context silently reloads and buys nothing. The capture footer now prints `load 0.01s` as
+standing proof that a warm actually served the request.
+
+### C4b — Power control in the tray
+**Why this exists:** the model costs **~8 GB of a 16 GB card** while loaded (A2: +8,151 MiB over
+baseline). Holding it there permanently is wrong when the popup has to work over games that want
+8–12 GB. A timeout is also wrong — it decides for you and leaves you guessing whether the next
+press is instant or a stall. So: explicit states you control and can see.
 
 **Do:**
 - Three states, surfaced in the tray: **Off** (card free) · **Warming** · **Ready**.
@@ -328,11 +347,21 @@ wrong — it decides for you and leaves you guessing whether the next press is i
 - Decide what the capture hotkey does while Off: auto-warm then answer (showing a "warming"
   state so the delay is explained), rather than failing silently.
 
-**Done when:** you can turn it off and watch VRAM return to the 454 MiB baseline — confirmed
-against `nvidia-smi`, not against Ollama's own claim.
+**Done when:** the tray shows the three states and the figure in its tooltip is the card's, not
+Ollama's. C4a proved they disagree — 8,773 MiB on the card against a `size_vram` claim of 6,233.
 
-**Reference numbers measured 2026-09-08:** off 454 MiB · loaded 5,705 MiB · unloaded 454 MiB ·
-warm-up ~7 s in-session, ~18 s after a reboot (disk cache).
+**Reference numbers — re-measured at A2 and again at C4a, superseding A1's:**
+
+| | |
+|---|---|
+| Baseline, idle | **~900–985 MiB, and it drifts.** Seen at 667, 900, 945, 985 and 1033 MiB across sessions. **Sample it fresh; never hard-code it** |
+| Model resident | **+7,873 to +8,193 MiB** over baseline (A2 recorded +8,151) |
+| Cold load | **2.2–3.7 s** |
+
+> The numbers previously here — off 454 MiB, loaded 5,705 MiB, warm-up ~7 s / ~18 s — were A1's,
+> measured against `llama3.1:8b` before the vision model was chosen. They were wrong by roughly 8×
+> on the baseline, and the old acceptance test ("watch VRAM return to the 454 MiB baseline") could
+> never have passed. Corrected at C4a.
 
 ### ~~C5 — Stop launching it~~ — DISSOLVED 2026-09-14
 

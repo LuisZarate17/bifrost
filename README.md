@@ -11,9 +11,18 @@ cd capture
 cargo run                                       # answer about your screen, now
 cargo run -- 12                                 # wait 12s first
 cargo run -- --model qwen3-vl:4b-instruct-q8_0  # try a different model
+
+cargo run -- warm                               # load the model and pin it in VRAM
+cargo run -- off                                # release it, give the card its memory back
+cargo run -- status                             # what is loaded, per Ollama and per the card
 ```
 
 Needs `ollama serve` running. The prompt lives in `capture/prompt.txt`, not in source.
+
+The model holds **~8 GB** while resident, so `warm` and `off` are explicit rather than on a timer —
+a timeout decides for you and leaves you guessing whether the next press is instant or a stall.
+`status` reads the card through NVML, not `ollama ps`: the two disagree, and only one of them is
+the truth. After a `warm`, a capture reports `load 0.00s`, which is how you know the warm took.
 
 - **A1 — toolchain.** Rust 1.98.1 (MSVC), Ollama 0.33.3, GPU verified at 152 tok/s.
   See [docs/A1-results.md](docs/A1-results.md).
@@ -41,7 +50,7 @@ Needs `ollama serve` running. The prompt lives in `capture/prompt.txt`, not in s
 > **Blocked here.** Smart App Control now refuses to run `warden.exe` - content-based, retroactive,
 > and with no per-app exception. This stops the rest of Stage C, all of Stage D, and E1.
 > **`capture/` is unaffected and still works.** See [PLAN.md §3](PLAN.md) for the analysis and the
-> options � code signing is the only route that keeps Smart App Control on.
+> options � code signing is the only route that keeps Smart App Control on.
 
 ## How it works
 

@@ -15,7 +15,10 @@ use windows_capture::settings::{
     MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
 };
 
-const OLLAMA_URL: &str = "http://127.0.0.1:11434/api/generate";
+mod ollama;
+mod power;
+mod vram;
+
 const DEFAULT_MODEL: &str = "qwen3-vl:8b-instruct-q4_K_M";
 
 /// A 1080p screen costs ~2,042 image tokens (measured at A2). The Ollama default
@@ -41,6 +44,15 @@ struct Chunk {
     eval_count: Option<u32>,
     #[serde(default)]
     total_duration: Option<u64>,
+    /// Nanoseconds Ollama spent loading the model for *this* request.
+    ///
+    /// Worth printing because it is the only proof a `capture warm` actually
+    /// helped. Ollama keys a loaded runner by the model *and* the options that
+    /// change its memory layout — `num_ctx` among them — so a warm at the wrong
+    /// context silently reloads here and buys nothing. Warm, then capture: this
+    /// should read 0.00s.
+    #[serde(default)]
+    load_duration: Option<u64>,
 }
 
 /// The capture handler. It owns the sending half of a channel and posts one
@@ -112,28 +124,115 @@ fn capture_screen() -> Shot {
     receiver.recv().expect("capture produced no frame")
 }
 
-fn main() {
-    // Args: an optional delay in seconds, and an optional `--model <tag>`.
+const USAGE: &str = "\
+capture — ask a local vision model about your screen
+
+  capture [SECONDS] [--model TAG]   capture the screen and ask about it
+  capture warm      [--model TAG]   load the model and pin it in VRAM
+  capture off       [--model TAG]   release it and give the card its memory back
+  capture status    [--model TAG]   what is loaded, per Ollama and per the card
+  capture help                      this text
+";
+
+enum Command {
+    Capture { delay_secs: u64, model: String },
+    Warm { model: String },
+    Off { model: String },
+    Status { model: String },
+    Help,
+}
+
+/// Parse the flags shared by every subcommand.
+///
+/// The old loop silently ignored anything it did not recognise, so `capture warm`
+/// took a screenshot and a typo cost nine seconds of GPU. Unknown tokens are now
+/// an error — which is also what makes a mistyped subcommand fail loudly.
+fn parse_flags(args: &[String]) -> Result<(u64, String), String> {
     let mut delay_secs: u64 = 0;
     let mut model = DEFAULT_MODEL.to_string();
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--model" => {
                 i += 1;
-                model = args.get(i).expect("--model needs a value").clone();
+                model = args
+                    .get(i)
+                    .ok_or_else(|| "--model needs a value".to_string())?
+                    .clone();
             }
-            other => {
-                if let Ok(secs) = other.parse::<u64>() {
-                    delay_secs = secs;
-                }
-            }
+            other => match other.parse::<u64>() {
+                Ok(secs) => delay_secs = secs,
+                Err(_) => return Err(format!("unknown argument: {other}")),
+            },
         }
         i += 1;
     }
 
+    Ok((delay_secs, model))
+}
+
+fn parse_args(args: &[String]) -> Result<Command, String> {
+    // The subcommand, if any, is the first token — matched before the flag loop
+    // so it can never be mistaken for a delay or swallowed as an unknown.
+    let (word, rest) = match args.split_first() {
+        Some((first, rest)) => (first.as_str(), rest),
+        None => ("", &[] as &[String]),
+    };
+
+    match word {
+        "warm" | "off" | "status" => {
+            let (_, model) = parse_flags(rest)?;
+            Ok(match word {
+                "warm" => Command::Warm { model },
+                "off" => Command::Off { model },
+                _ => Command::Status { model },
+            })
+        }
+        "help" | "--help" | "-h" => Ok(Command::Help),
+        // No subcommand: the whole slice is capture's own arguments.
+        _ => {
+            let (delay_secs, model) = parse_flags(args)?;
+            Ok(Command::Capture { delay_secs, model })
+        }
+    }
+}
+
+fn main() -> std::process::ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    let command = match parse_args(&args) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}\n\n{USAGE}");
+            return std::process::ExitCode::from(2);
+        }
+    };
+
+    let result = match command {
+        Command::Help => {
+            print!("{USAGE}");
+            Ok(())
+        }
+        Command::Warm { model } => power::warm(&model, NUM_CTX),
+        Command::Off { model } => power::off(&model),
+        Command::Status { model } => power::status(&model),
+        Command::Capture { delay_secs, model } => {
+            capture_and_ask(delay_secs, &model);
+            Ok(())
+        }
+    };
+
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn capture_and_ask(delay_secs: u64, model: &str) {
     let prompt = std::fs::read_to_string("prompt.txt")
         .unwrap_or_else(|_| {
             eprintln!("warning: prompt.txt not found, using built-in default");
@@ -177,7 +276,7 @@ fn main() {
     let started = Instant::now();
     let client = reqwest::blocking::Client::new();
     let response = client
-        .post(OLLAMA_URL)
+        .post(ollama::url("/api/generate"))
         .json(&body)
         .send()
         .expect("request to Ollama failed — is `ollama serve` running?");
@@ -209,11 +308,12 @@ fn main() {
         if chunk.done {
             println!("\n");
             println!(
-                "[{} tokens in, {} out | first token {:.2}s | total {:.1}s]",
+                "[{} tokens in, {} out | first token {:.2}s | total {:.1}s | load {:.2}s]",
                 chunk.prompt_eval_count.unwrap_or(0),
                 chunk.eval_count.unwrap_or(0),
                 first_token_at.unwrap_or_default().as_secs_f64(),
                 chunk.total_duration.unwrap_or(0) as f64 / 1e9,
+                chunk.load_duration.unwrap_or(0) as f64 / 1e9,
             );
         }
     }
