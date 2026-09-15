@@ -589,9 +589,36 @@ pub fn run() {
             app.manage(HotkeyLabel(shortcut));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![ask_about_screen, hotkey_label])
+        .invoke_handler(tauri::generate_handler![ask_about_screen, hotkey_label, fit_window])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// Grow the popup to fit its answer, within bounds, and keep it anchored.
+///
+/// Answers run 3,600–7,950 characters (measured at A2), so a fixed height means
+/// either wasted space on short answers or heavy scrolling on long ones. The
+/// window is repositioned after every resize because it grows from the top edge
+/// — without that it would creep down over the taskbar.
+#[tauri::command]
+fn fit_window(window: tauri::WebviewWindow, content_height: f64) -> Result<(), String> {
+    const MIN_H: u32 = 220;
+    const MAX_H: u32 = 760;
+    const WIDTH: u32 = 480;
+
+    let target = (content_height.ceil() as u32).clamp(MIN_H, MAX_H);
+
+    let current = window.outer_size().map_err(|e| format!("no size: {e}"))?;
+    // Resizing on every token would thrash the compositor; ignore small deltas.
+    if current.height.abs_diff(target) < 8 {
+        return Ok(());
+    }
+
+    window
+        .set_size(tauri::Size::Physical(tauri::PhysicalSize::new(WIDTH, target)))
+        .map_err(|e| format!("resize failed: {e}"))?;
+
+    position_bottom_right(&window)
 }
 
 /// Which hotkey actually bound, if any — so the UI can say so rather than leaving
