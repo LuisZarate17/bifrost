@@ -7,9 +7,10 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ---
 
-## Where this stands — 2026-09-14
+## Where this stands — 2026-09-15
 
-**9 of 19 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4.
+**10 of 19 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
+C1b done 2026-09-15.
 
 > **Blocked: everything that runs the GUI.** Smart App Control refuses to run `warden.exe` —
 > content-based, retroactive, no per-app exception, and not automatable. See [PLAN.md §3](PLAN.md).
@@ -28,7 +29,11 @@ disable Smart App Control, or stay on the CLI. Until that is settled, nothing GU
 | **2** | **F2 — grow the eval set** | BUILD.md's own "highest-value habit." The set is currently two screenshots of **one bug**, one language, one theme — thinner than the conclusions drawn from it |
 | **3** | **F1 — bench harness in Rust** | Ports `evals/bench.mjs` off Node. F3 depends on it, and so does P3 |
 
-**Blocked until the signing decision:** C1b · C2 · C3 · C4 · D1 · D2 · E1.
+**Blocked until the signing decision:** C2 · C3 · C4 · D1 · D2 · E1.
+
+> **C1b was not blocked after all.** The frontend serves standalone on `localhost:1420` with no
+> `warden.exe` involved, and the renderer is verified by assertion rather than by eye —
+> `npm run check:inert`. Listing it as blocked was wrong.
 
 ---
 
@@ -249,8 +254,14 @@ Three findings that change later chunks:
 **Watch for:** Position against the *work area*, not the raw screen bounds, so it sits above the
 taskbar. Windows toasts share that corner and will sometimes overlap — accepted, not a bug.
 
-### C1b — Make the answer readable
-**Added 2026-09-12.** Lettered rather than renumbered so existing references to C2–C5 in PLAN.md
+### C1b — Make the answer readable — DONE 2026-09-15
+**Added 2026-09-12.** Results: [docs/C1b-results.md](docs/C1b-results.md).
+
+**Outcome:** Markdown rendering with the img/link lockdown, lazy Shiki for Rust, grow-to-fit
+window, and a CSP. The prompt experiment ran and was **rejected on the evidence** — brevity kept
+the mechanism but lost the conclusion on case-02, so length is solved in the UI instead. Two new
+checks came out of it: `npm run check:inert` and `npm run check:fixes`.
+ Lettered rather than renumbered so existing references to C2–C5 in PLAN.md
 and the results docs stay valid.
 
 **Why this exists:** nothing else in this plan owns what the popup *looks* like. C1 specifies only
