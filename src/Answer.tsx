@@ -42,7 +42,11 @@ export function Answer({ text }: { text: string }) {
           // Keep the words, refuse the navigation.
           a: ({ children }) => <span className="link-text">{children}</span>,
 
-          code: ({ className, children, ...rest }) => {
+          // `node` is react-markdown's internal mdast node. It is part of the props
+          // it hands every component, and spreading it onto a DOM element emits a
+          // junk `node="[object Object]"` attribute - 299 times in a real answer,
+          // since inline code is the commonest element the model emits.
+          code: ({ node: _node, className, children, ...rest }) => {
             const text = String(children ?? "").replace(/\n$/, "");
             const lang = /language-(\w+)/.exec(className ?? "")?.[1];
 

