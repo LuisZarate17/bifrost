@@ -53,7 +53,7 @@ const checks: [string, boolean][] = [
   // react-markdown hands every component its internal mdast `node`; spreading the
   // rest props straight onto a DOM element emits node="[object Object]", once per
   // inline code span - 299 times in a real answer.
-  ["no framework internals leak as attributes", !/snodes*=/i.test(inTags)],
+  ["no framework internals leak as attributes", !inTags.includes(' node=')],
   ["no URL in any attribute", !/(https?:|javascript:)/i.test(inTags)],
   ["link text survives as words", /click me/.test(html)],
   ["entity-smuggled tag stays escaped", /&lt;img src=x/.test(html)],
