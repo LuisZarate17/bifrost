@@ -1,5 +1,7 @@
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Sender};
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use base64::prelude::*;
 use futures_util::StreamExt;
@@ -7,7 +9,7 @@ use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use serde::Serialize;
 use tauri::ipc::Channel;
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri::{Emitter, Manager};
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
@@ -17,6 +19,10 @@ use windows_capture::settings::{
     ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
     MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
 };
+// In scope at module level, unlike the rest of the Win32 imports, because these
+// two appear in the geometry helpers' signatures rather than only inside them.
+#[cfg(windows)]
+use windows::Win32::Foundation::{HWND, RECT};
 
 const OLLAMA_URL: &str = "http://127.0.0.1:11434/api/generate";
 const DEFAULT_MODEL: &str = "qwen3-vl:8b-instruct-q4_K_M";
@@ -258,31 +264,169 @@ fn exclude_from_capture(window: &tauri::WebviewWindow) -> Result<(), String> {
     }
 }
 
-/// Park the popup in the bottom-right of the **work area** — the screen minus the
-/// taskbar. Using raw screen bounds would tuck it behind the taskbar.
-fn position_bottom_right(window: &tauri::WebviewWindow) -> Result<(), String> {
-    let monitor = window
-        .current_monitor()
-        .map_err(|e| format!("no monitor: {e}"))?
-        .ok_or_else(|| "no monitor detected".to_string())?;
+// ── Where the popup sits, and how it gets there ──────────────────────────────
+//
+// One anchor rule, one writer, one Win32 call per frame.
+//
+// Three mechanisms used to own this geometry and disagree about it. The old
+// `position_bottom_right` hung the window off the **work area**, 16px up;
+// `follow_taskbar` hung it off the **taskbar window**, 12px up; and `fit_window`
+// called `set_size` and *then* `set_position`. So a single growth step while an
+// answer streamed was visibly three: grow downwards over the taskbar, snap back
+// up to the work-area anchor, then — up to 120ms later, when the poller next
+// looked — twitch the 4px the two anchors differed by.
 
-    let work = monitor.work_area();
-    let size = window.outer_size().map_err(|e| format!("no size: {e}"))?;
+/// Popup width, logical px. Matches the `width` in `tauri.conf.json`.
+const POPUP_W: f64 = 480.0;
+/// Height bounds, logical px. Answers run 3,600–7,950 characters (measured at
+/// A2), so a fixed height means dead space on short ones or heavy scrolling on
+/// long ones.
+const MIN_H: f64 = 220.0;
+const MAX_H: f64 = 760.0;
+/// Gap left above the taskbar's top edge, logical px.
+const GAP: f64 = 12.0;
+/// Inset from the right edge of the work area, logical px.
+const SIDE: f64 = 16.0;
 
-    const MARGIN: i32 = 16;
+/// The geometry the popup is steering toward. `fit_window` writes the height the
+/// webview measured; the animator thread reads it at frame rate.
+#[derive(Default)]
+struct Anim {
+    /// Target outer height in **physical** px. Zero means "not measured yet",
+    /// which resolves to `MIN_H`.
+    target_h: AtomicI32,
+    /// Bumped on every show and every hide. An animator whose generation is
+    /// stale exits instead of steering: `follow_taskbar` spawned one poller per
+    /// show and never stopped the previous one, so a quick hide/show left two
+    /// threads setting the position from separate ideas of where it should be.
+    generation: AtomicU64,
+}
 
-    // An auto-hiding taskbar reserves nothing, so `work_area` comes back as the
-    // full screen and the popup lands exactly where the taskbar slides over it.
-    // Detect that by comparing work area to the monitor, and leave room.
-    let auto_hidden_taskbar = work.size.height >= monitor.size().height;
-    let bottom_margin = if auto_hidden_taskbar { 64 } else { MARGIN };
+impl Anim {
+    /// Open a new era. Any running animator sees the bump and exits; the
+    /// returned generation is the one the next animator runs under.
+    fn bump(&self) -> u64 {
+        self.generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
 
-    let x = work.position.x + work.size.width as i32 - size.width as i32 - MARGIN;
-    let y = work.position.y + work.size.height as i32 - size.height as i32 - bottom_margin;
+    /// Forget the last answer's height, so the popup reopens at its minimum and
+    /// grows into the new answer — rather than appearing at the last answer's
+    /// full height and immediately collapsing.
+    fn forget_height(&self) {
+        self.target_h.store(0, Ordering::Relaxed);
+    }
+}
 
-    window
-        .set_position(tauri::Position::Physical(tauri::PhysicalPosition::new(x, y)))
-        .map_err(|e| format!("set_position failed: {e}"))
+/// The work area and the full bounds of the monitor the popup is on, physical px.
+///
+/// Read straight from Win32 rather than through `window.current_monitor()`:
+/// Tauri's window getters round-trip to the event-loop thread, and this runs on
+/// every animation frame.
+#[cfg(windows)]
+fn monitor_rects(hwnd: HWND) -> Option<(RECT, RECT)> {
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+    };
+
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: a valid HWND owned by this process; `cbSize` is set as the API
+    // requires and `info` is only written by the call.
+    let ok = unsafe {
+        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        GetMonitorInfoW(monitor, &mut info).as_bool()
+    };
+
+    ok.then_some((info.rcWork, info.rcMonitor))
+}
+
+/// Where the popup belongs right now: `(x, y, height)` in physical px.
+///
+/// The single anchor rule — used by the initial placement and by every animation
+/// frame, so the two cannot disagree.
+///
+/// `tray_top` is passed in rather than read here so the animator can cache the
+/// taskbar's window handle instead of calling `FindWindowW` sixty times a
+/// second. The taskbar *window* is preferred over the work area because an
+/// auto-hiding taskbar never changes the work area: it stays full-screen whether
+/// the bar is in or out, which is why no fixed margin can track it.
+#[cfg(windows)]
+fn target_rect(hwnd: HWND, tray_top: Option<i32>, want_h: i32, scale: f64) -> Option<(i32, i32, i32)> {
+    let (work, monitor) = monitor_rects(hwnd)?;
+
+    let gap = (GAP * scale).round() as i32;
+    let side = (SIDE * scale).round() as i32;
+    let width = (POPUP_W * scale).round() as i32;
+    let floor = (MIN_H * scale).round() as i32;
+
+    // Only trust the taskbar's edge if the taskbar is on *this* monitor. Only
+    // the primary monitor has a `Shell_TrayWnd`; secondary ones carry their own
+    // `Shell_SecondaryTrayWnd`, which this deliberately does not read.
+    let bottom = match tray_top {
+        Some(top) if top > monitor.top && top <= monitor.bottom => top,
+        _ => work.bottom,
+    } - gap;
+
+    // Shrink rather than slide off the top: a tall answer on a short display
+    // should scroll, not sit with its header above the screen.
+    let height = want_h.max(floor).min((bottom - work.top).max(floor));
+
+    Some((work.right - width - side, bottom - height, height))
+}
+
+/// Move and resize in **one** Win32 call.
+///
+/// Position and size have to land in the same frame. Done as `set_size` and then
+/// `set_position`, the window grew downwards over the taskbar and snapped back
+/// up a frame later — most of what read as jitter while an answer streamed.
+///
+/// Synchronous on purpose: no `SWP_ASYNCWINDOWPOS`. This blocks until the
+/// window's own thread has processed the resize, which paces the animation to
+/// what WebView2 can actually relayout instead of queueing frames it will throw
+/// away. Nothing is lost by being paced, because the ease is computed from
+/// measured elapsed time — a slower frame simply moves further.
+#[cfg(windows)]
+fn set_bounds(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowPos, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
+    };
+
+    // SAFETY: a valid top-level HWND owned by this process.
+    //
+    // `SWP_NOACTIVATE` matters as much here as in `show_without_focus` —
+    // activating the popup would pull the caret out of whatever you were typing
+    // in. `SWP_NOZORDER` preserves `alwaysOnTop`, which is set at creation.
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            w,
+            h,
+            SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOOWNERZORDER,
+        );
+    }
+}
+
+/// Put the popup where it belongs immediately, with no animation.
+///
+/// Used before the window is shown: it should appear already in place, not glide
+/// in from wherever the last answer left it.
+#[cfg(windows)]
+fn place_now(window: &tauri::WebviewWindow, anim: &Anim) -> Result<(), String> {
+    let hwnd = window.hwnd().map_err(|e| format!("no HWND: {e}"))?;
+    let scale = window
+        .scale_factor()
+        .map_err(|e| format!("no scale factor: {e}"))?;
+
+    let (x, y, h) = target_rect(hwnd, taskbar_top(), anim.target_h.load(Ordering::Relaxed), scale)
+        .ok_or_else(|| "no monitor info".to_string())?;
+
+    set_bounds(hwnd, x, y, (POPUP_W * scale).round() as i32, h);
+    Ok(())
 }
 
 /// Show the popup **without taking focus**, so the cursor stays in whatever you
@@ -293,7 +437,11 @@ fn position_bottom_right(window: &tauri::WebviewWindow) -> Result<(), String> {
 /// open with no fix. `SW_SHOWNOACTIVATE` is the Win32 primitive that does it, and
 /// we already link the `windows` crate.
 #[cfg(windows)]
-fn show_without_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
+fn show_without_focus(
+    window: &tauri::WebviewWindow,
+    anim: &Arc<Anim>,
+    generation: u64,
+) -> Result<(), String> {
     use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
 
     let hwnd = window.hwnd().map_err(|e| format!("no HWND: {e}"))?;
@@ -310,18 +458,30 @@ fn show_without_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
     // verified at the end of the chunk rather than assumed.
     exclude_from_capture(window)?;
 
-    // Click-through: let the mouse reach whatever is behind the popup. This is
-    // the ONE Tauri feature that sets WS_EX_LAYERED, and SetWindowDisplayAffinity
-    // is reported to fail on layered windows. Whether order matters was flagged
-    // unverified by research — so set it, then read the affinity back from
-    // Windows and say plainly whether it survived.
-    // Opt-in, so click-through and the backdrop can be tested independently:
-    // WS_EX_LAYERED is the remaining suspect for the backdrop not rendering.
-    if std::env::var("WARDEN_CLICKTHROUGH").is_ok() {
+    // Click-through: the mouse reaches whatever is behind the popup instead of
+    // stopping on it. `WS_EX_TRANSPARENT` takes the window out of hit-testing
+    // entirely, so the pointer, clicks and the wheel all pass straight through.
+    //
+    // **On by default as of this change.** B4 measured it as working and left it
+    // off for one reason: it costs the mouse wheel, "and answers are long". That
+    // reason is now gone — Ctrl+Alt+Q and Ctrl+Alt+A scroll the answer without
+    // the mouse, so losing the wheel no longer costs the ability to read a long
+    // answer. `WARDEN_NO_CLICKTHROUGH` puts it back.
+    //
+    // This is also the ONE Tauri feature that sets WS_EX_LAYERED, and
+    // SetWindowDisplayAffinity is reported to fail on layered windows. B4
+    // measured that it doesn't — merely *carrying* the layered bit is not the
+    // same as painting with `UpdateLayeredWindow` — but the affinity is read
+    // back from Windows below on every show rather than assumed.
+    if std::env::var("WARDEN_NO_CLICKTHROUGH").is_err() {
         window
             .set_ignore_cursor_events(true)
             .map_err(|e| format!("click-through failed: {e}"))?;
-        println!("[warden] click-through enabled (WS_EX_LAYERED set)");
+        println!("[warden] click-through on — the mouse passes through (WS_EX_LAYERED set)");
+    } else {
+        // Explicit, so the log always says which mode the popup is in.
+        let _ = window.set_ignore_cursor_events(false);
+        println!("[warden] click-through OFF (WARDEN_NO_CLICKTHROUGH) — the mouse lands on the popup");
     }
 
     // Reapply the backdrop after showing. The window is created with
@@ -349,8 +509,32 @@ fn show_without_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
     // but real see-through, fully under our control, and immune to DWM's
     // active/inactive rendering — which a never-focused window always loses.
 
+    // Assert visibility one more time, *after* every style change above.
+    //
+    // `set_ignore_cursor_events` drops WS_VISIBLE. It re-applies the window state
+    // Tauri believes in, and Tauri believes the window is hidden — we showed it
+    // with raw `ShowWindow` to avoid stealing focus, which bypasses Tauri's
+    // dispatcher and leaves its bookkeeping stale (the same disagreement
+    // `is_really_visible` exists to work around).
+    //
+    // Measured: `visible=true` after ShowWindow, `visible=false` immediately
+    // after enabling click-through. The window does come back on its own a moment
+    // later, so the popup still appeared and the bug looked like nothing at all —
+    // but every thread started here samples visibility straight away and exited,
+    // taking the geometry animation and the wheel hook with it.
+    // SAFETY: a valid top-level HWND owned by this process.
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    }
+
     report_affinity(window);
-    follow_taskbar(window.clone());
+    animate(window.clone(), anim.clone(), generation);
+    watch_wheel(
+        window.clone(),
+        window.app_handle().clone(),
+        anim.clone(),
+        generation,
+    );
     Ok(())
 }
 
@@ -361,46 +545,127 @@ fn show_without_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
 /// can't track it. The taskbar window itself does move, so read that instead.
 #[cfg(windows)]
 fn taskbar_top() -> Option<i32> {
-    use windows::core::w;
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindowRect};
-
-    // SAFETY: FindWindowW returns Err if absent; GetWindowRect only reads.
-    unsafe {
-        let hwnd = FindWindowW(w!("Shell_TrayWnd"), None).ok()?;
-        let mut rect = RECT::default();
-        GetWindowRect(hwnd, &mut rect).ok()?;
-        Some(rect.top)
-    }
+    find_tray().and_then(window_top)
 }
 
-/// Keep the popup sitting just above the taskbar while it's on screen, so it
-/// slides with it instead of being covered.
+/// The shell's taskbar window, if it has one on the primary monitor.
+///
+/// Split out from `taskbar_top` because `FindWindowW` walks every top-level
+/// window in the session, which is not a thing to do at frame rate — the
+/// animator finds it once and re-reads its rect instead.
+#[cfg(windows)]
+fn find_tray() -> Option<HWND> {
+    use windows::core::w;
+    use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
+
+    // SAFETY: returns Err when there is no such window, which `.ok()` makes None.
+    unsafe { FindWindowW(w!("Shell_TrayWnd"), None).ok() }
+}
+
+/// The top edge of a window in physical px, or `None` if the handle is dead.
+#[cfg(windows)]
+fn window_top(hwnd: HWND) -> Option<i32> {
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    let mut rect = RECT::default();
+    // SAFETY: GetWindowRect only reads, and fails cleanly on a stale handle.
+    unsafe { GetWindowRect(hwnd, &mut rect).ok()? };
+    Some(rect.top)
+}
+
+/// Glide the popup toward wherever it currently belongs, for as long as it is on
+/// screen.
+///
+/// Two things move it: the answer growing (`fit_window` writes a new target
+/// height) and the taskbar sliding (an auto-hiding bar takes roughly 200ms to
+/// come in). Both used to be steps. Easing them costs one `SetWindowPos` per
+/// frame and turns both into motion the eye can follow.
 ///
 /// Polls rather than listening: tracking the shell's appbar notifications means
 /// registering as an appbar ourselves, which is a lot of machinery for a window
-/// that's visible for a few seconds. Repositioning only happens when the edge
-/// actually moves, so an idle popup does no work.
+/// that's visible for a few seconds. It runs only while the popup is up, and
+/// once settled it issues no Win32 call at all, so an idle popup does no work.
+///
+/// A plain OS thread, not a `tauri::async_runtime` task: every call in here is a
+/// blocking Win32 call, and `SetWindowPos` on a window owned by another thread
+/// blocks until that thread pumps it. Parking a tokio worker on that for the
+/// life of the popup is exactly what the runtime is not for.
 #[cfg(windows)]
-fn follow_taskbar(window: tauri::WebviewWindow) {
-    tauri::async_runtime::spawn(async move {
-        let mut last_y: Option<i32> = None;
+fn animate(window: tauri::WebviewWindow, anim: Arc<Anim>, generation: u64) {
+    /// Time constant of the ease, in seconds: how long to close ~63% of the
+    /// remaining distance. At 45ms a 300px jump is visually done in ~150ms —
+    /// fast enough not to read as lag, slow enough to read as motion.
+    const TAU: f64 = 0.045;
+    /// Requested frame interval. Windows' default timer granularity is ~15ms, so
+    /// this usually lands near 60Hz — and higher when WebView2 raises the
+    /// resolution to animate. Nothing depends on hitting it.
+    const FRAME: Duration = Duration::from_millis(8);
+    /// Distance at which the motion is over. Half a pixel cannot be drawn, and
+    /// stopping cleanly is what makes a settled popup free.
+    const DONE: f64 = 0.5;
 
-        while is_really_visible(&window) {
-            if let (Some(tray_top), Ok(size)) = (taskbar_top(), window.outer_size()) {
-                const GAP: i32 = 12;
-                let y = tray_top - size.height as i32 - GAP;
+    std::thread::spawn(move || {
+        let Ok(hwnd) = window.hwnd() else { return };
+        // Read once per show. A monitor change mid-answer would want this again,
+        // but the popup lives for seconds and appears on one monitor.
+        let Ok(scale) = window.scale_factor() else { return };
+        let width = (POPUP_W * scale).round() as i32;
 
-                if last_y != Some(y) {
-                    if let Ok(pos) = window.outer_position() {
-                        let _ = window.set_position(tauri::Position::Physical(
-                            tauri::PhysicalPosition::new(pos.x, y),
-                        ));
-                    }
-                    last_y = Some(y);
+        let mut tray = find_tray();
+        let want = || anim.target_h.load(Ordering::Relaxed);
+
+        // Seeded *at* the target, so the first frame is a snap rather than a
+        // glide: `place_now` has already put the window here, and re-animating
+        // to the same place would only add a flinch on every show.
+        let Some((x0, y0, h0)) = target_rect(hwnd, taskbar_top(), want(), scale) else {
+            return;
+        };
+        let (mut x, mut y, mut h) = (x0 as f64, y0 as f64, h0 as f64);
+        let mut sent: Option<(i32, i32, i32)> = None;
+        let mut prev = Instant::now();
+
+        loop {
+            // A newer show, or a hide, has taken over. Stop touching the window.
+            if anim.generation.load(Ordering::Relaxed) != generation {
+                return;
+            }
+            if !is_really_visible(&window) {
+                return;
+            }
+
+            let mut tray_top = tray.and_then(window_top);
+            if tray_top.is_none() {
+                // The taskbar window is replaced when Explorer restarts.
+                tray = find_tray();
+                tray_top = tray.and_then(window_top);
+            }
+
+            let Some((tx, ty, th)) = target_rect(hwnd, tray_top, want(), scale) else {
+                return;
+            };
+
+            let now = Instant::now();
+            // Frame-rate independent: `k` is the fraction of the remaining
+            // distance to close over however long this frame *actually* took, so
+            // a late frame moves proportionally further instead of stuttering.
+            let k = 1.0 - (-(now - prev).as_secs_f64() / TAU).exp();
+            prev = now;
+
+            for (current, target) in [(&mut x, tx as f64), (&mut y, ty as f64), (&mut h, th as f64)]
+            {
+                *current += (target - *current) * k;
+                if (target - *current).abs() < DONE {
+                    *current = target;
                 }
             }
-            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+
+            let frame = (x.round() as i32, y.round() as i32, h.round() as i32);
+            if sent != Some(frame) {
+                set_bounds(hwnd, frame.0, frame.1, width, frame.2);
+                sent = Some(frame);
+            }
+
+            std::thread::sleep(FRAME);
         }
     });
 }
@@ -480,21 +745,289 @@ fn report_affinity(window: &tauri::WebviewWindow) {
     }
 }
 
+// ── Reading an answer without the mouse ──────────────────────────────────────
+//
+// These are what make click-through affordable. With the popup out of
+// hit-testing there is no wheel, no text selection and no pointer — the overlay
+// is something you look at, not something you touch — so the keyboard has to be
+// able to do the one thing reading a long answer requires.
+//
+// The order mattered: these were built first, deliberately, because turning on
+// click-through before there was another way to scroll would have made long
+// answers unreadable.
+
+fn chord() -> Option<Modifiers> {
+    Some(Modifiers::CONTROL | Modifiers::ALT)
+}
+
+/// Pick a block of the answer, then copy it.
+///
+/// The same key does both halves: the first press enters pick mode, the second
+/// copies what is picked. While picking, the scroll keys move the pick instead
+/// of scrolling — they already mean up and down, so there is nothing new to
+/// learn and no third pair of keys to claim.
+///
+/// The lesson that shaped this: **a global hotkey outranks anything an
+/// application binds internally.** Claiming `Ctrl+Alt+<letter>` takes that chord
+/// away from every app for as long as the popup is up, and nothing detects it
+/// beforehand — `RegisterHotKey` reports all of these as free, because it only
+/// knows about other *global* registrations.
+///
+/// `Ctrl+Alt+C` went that way first. `Ctrl+Alt+Q`/`A` followed: A is the one the
+/// hand reaches for when it means select-all. Scrolling moved to Ctrl+Alt+wheel
+/// instead, which claims no key at all. One letter remains, and it is the only
+/// one, so it is worth knowing it carries the same risk.
+fn key_copy() -> Shortcut {
+    Shortcut::new(chord(), Code::KeyZ)
+}
+
+/// Every key that only means something while an answer is on screen, with the
+/// label to print if it can't be claimed.
+fn popup_keys() -> [(Shortcut, &'static str); 1] {
+    [(key_copy(), "Ctrl+Alt+Z")]
+}
+
+/// Claim the scroll keys, and say whether both were actually claimed.
+///
+/// Bound on show and dropped on hide rather than held for the life of the
+/// process: Warden sits in the background all day, and a popup with nothing on
+/// screen has no business owning Ctrl+Alt+Q system-wide.
+///
+/// A failure is survivable and is reported rather than fatal — the wheel still
+/// scrolls, so the answer is still readable. The return value is what the UI
+/// uses to decide whether to *offer* the keys, so it never advertises a shortcut
+/// that isn't listening.
+fn bind_popup_keys(app: &tauri::AppHandle) -> bool {
+    let mut all = true;
+
+    for (key, label) in popup_keys() {
+        if app.global_shortcut().is_registered(key) {
+            continue;
+        }
+        if let Err(e) = app.global_shortcut().register(key) {
+            eprintln!("[warden] WARNING: {label} unavailable ({e})");
+            all = false;
+        }
+    }
+    all
+}
+
+/// Give the popup's keys back to the rest of the system.
+fn release_popup_keys(app: &tauri::AppHandle) {
+    for (key, _) in popup_keys() {
+        if app.global_shortcut().is_registered(key) {
+            let _ = app.global_shortcut().unregister(key);
+        }
+    }
+}
+
+// ── Ctrl+Alt+wheel ───────────────────────────────────────────────────────────
+//
+// The popup is click-through, so it receives no mouse input at all — not even
+// the wheel. The only way to hear a wheel aimed at it is to watch the whole
+// session's mouse input and pick out the events carrying Ctrl+Alt.
+//
+// Requiring the modifiers is what keeps click-through intact: a bare wheel still
+// passes straight through to whatever is behind the popup, exactly as before.
+// Only Ctrl+Alt+wheel is taken, and only while an answer is on screen.
+//
+// This also claims no *key*, which is the point. Every key tried for scrolling
+// had to be taken from the applications underneath — see `key_copy`.
+
+/// Wheel delta seen by the hook and not yet handed to the webview. 120 per
+/// notch, in the sign Windows reports: positive is a forward roll.
+///
+/// The hook does nothing but add to this. It runs in front of every mouse event
+/// in the session, and Windows silently unhooks a low-level hook whose callback
+/// overruns `LowLevelHooksTimeout` (300ms by default) — so the callback stays a
+/// handful of instructions and the thread that owns it does the talking.
+static WHEEL_DELTA: AtomicI32 = AtomicI32::new(0);
+
+/// Whether the hook should be taking Ctrl+Alt+wheel at all. Read on every mouse
+/// event, so it is the cheapest possible gate.
+static WHEEL_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The installed hook as a raw handle, so the main thread can take it back down
+/// later. Zero when nothing is hooked.
+static WHEEL_HOOK: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+#[cfg(windows)]
+unsafe extern "system" fn wheel_hook(
+    code: i32,
+    wparam: windows::Win32::Foundation::WPARAM,
+    lparam: windows::Win32::Foundation::LPARAM,
+) -> windows::Win32::Foundation::LRESULT {
+    use windows::Win32::Foundation::LRESULT;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CallNextHookEx, HC_ACTION, MSLLHOOKSTRUCT, WM_MOUSEWHEEL,
+    };
+
+    if code == HC_ACTION as i32
+        && wparam.0 as u32 == WM_MOUSEWHEEL
+        && WHEEL_ACTIVE.load(Ordering::Relaxed)
+    {
+        // SAFETY: reads only. The high bit of GetAsyncKeyState is "currently down".
+        let held = |vk: u16| unsafe { GetAsyncKeyState(vk as i32) < 0 };
+
+        if held(VK_CONTROL.0) && held(VK_MENU.0) {
+            // SAFETY: for HC_ACTION the system guarantees lparam points at a
+            // MSLLHOOKSTRUCT valid for the duration of this call.
+            let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+            // The signed wheel delta is the high word of mouseData.
+            let delta = (info.mouseData >> 16) as i16;
+            WHEEL_DELTA.fetch_add(delta as i32, Ordering::Relaxed);
+
+            // Swallow it, so the window underneath does not scroll as well.
+            return LRESULT(1);
+        }
+    }
+
+    // SAFETY: passing the event on unchanged is the documented default path.
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// Take Ctrl+Alt+wheel for as long as the popup is on screen.
+///
+/// Its own thread, and one that never blocks: a low-level hook is only called
+/// while its installing thread is retrieving messages, so anything that parked
+/// this loop would stall the callback — and a stalled callback is how Windows
+/// decides to remove the hook. That is also why this cannot live on the animator
+/// thread, which blocks on `SetWindowPos` by design.
+#[cfg(windows)]
+fn watch_wheel(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    anim: Arc<Anim>,
+    generation: u64,
+) {
+    // Install on Tauri's **main** thread, not on one of ours.
+    //
+    // A low-level hook is called on the thread that installed it, and only while
+    // that thread is inside a message-retrieval call. Two hand-rolled loops were
+    // measured failing at exactly that: a `PeekMessageW` poll never delivered the
+    // callback once, and a `GetMessageW` loop woken by a thread timer took one
+    // WM_TIMER and then blocked forever. Tauri's event loop already pumps
+    // correctly and continuously, so the hook goes there and the callback — an
+    // atomic add and two key-state reads — rides along.
+    let installed = app.run_on_main_thread(|| {
+        use windows::Win32::Foundation::HINSTANCE;
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_MOUSE_LL};
+
+        // The module handle matters, even though the documentation says a
+        // low-level hook may pass NULL because its procedure is not injected into
+        // other processes. Measured: with NULL the call **succeeds and returns a
+        // valid handle**, and the callback is then never invoked — not once, for
+        // any mouse event at all. A standalone control hook passing
+        // `GetModuleHandle(NULL)` saw 34 wheel events over the same three seconds.
+        // So it fails silently in the worst way: nothing to check, nothing logged.
+        let module = unsafe { GetModuleHandleW(None) }
+            .ok()
+            .map(|m| HINSTANCE(m.0));
+
+        // SAFETY: WH_MOUSE_LL is one of the two hooks that needs no DLL — it is
+        // called on this thread rather than injected into other processes.
+        match unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(wheel_hook), module, 0) } {
+            Ok(hook) => {
+                WHEEL_DELTA.store(0, Ordering::Relaxed);
+                WHEEL_HOOK.store(hook.0 as isize, Ordering::Relaxed);
+                WHEEL_ACTIVE.store(true, Ordering::Relaxed);
+            }
+            Err(e) => eprintln!(
+                "[warden] WARNING: Ctrl+Alt+wheel unavailable ({e}) — Ctrl+Alt+Z still copies"
+            ),
+        }
+    });
+
+    if let Err(e) = installed {
+        eprintln!("[warden] WARNING: could not reach the main thread to hook the wheel ({e})");
+        return;
+    }
+
+    // The hook only counts. This hands what it counted to the webview, and takes
+    // the hook back down when the popup goes away. It needs no message loop of
+    // its own precisely because the hook does not live here.
+    std::thread::spawn(move || {
+        while anim.generation.load(Ordering::Relaxed) == generation && is_really_visible(&window) {
+            // Whole notches go to the webview; the remainder stays banked, so a
+            // high-resolution wheel reporting in fractions of a notch is not
+            // quietly rounded away to nothing.
+            let delta = WHEEL_DELTA.swap(0, Ordering::Relaxed);
+            let notches = delta / 120;
+            if notches == 0 {
+                WHEEL_DELTA.fetch_add(delta, Ordering::Relaxed);
+            } else {
+                WHEEL_DELTA.fetch_add(delta % 120, Ordering::Relaxed);
+                // Negated: Windows reports a forward roll as positive, and rolling
+                // forward should move the answer *up*, which is a negative step.
+                let _ = app.emit("warden://scroll", -notches);
+            }
+
+            std::thread::sleep(Duration::from_millis(8));
+        }
+
+        WHEEL_ACTIVE.store(false, Ordering::Relaxed);
+
+        // Removed from the same thread that installed it, as Windows requires.
+        let _ = app.run_on_main_thread(|| {
+            use windows::Win32::UI::WindowsAndMessaging::{UnhookWindowsHookEx, HHOOK};
+
+            let raw = WHEEL_HOOK.swap(0, Ordering::Relaxed);
+            if raw != 0 {
+                // SAFETY: our own handle, taken exactly once by the swap above.
+                unsafe {
+                    let _ = UnhookWindowsHookEx(HHOOK(raw as *mut std::ffi::c_void));
+                }
+            }
+        });
+    });
+}
+
+/// Put one block of the answer on the clipboard.
+///
+/// Written from Rust rather than with `navigator.clipboard` in the webview. The
+/// popup is `focusable: false` and is never activated, and the web clipboard API
+/// wants a focused, user-activated document — so from the page it would fail
+/// exactly when it is needed. The clipboard has no such requirement natively.
+#[tauri::command]
+fn copy_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    use tauri_plugin_clipboard_manager::ClipboardExt;
+
+    app.clipboard()
+        .write_text(text)
+        .map_err(|e| format!("clipboard write failed: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
-
     let primary = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyW);
     let fallback = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(move |app, _shortcut, event| {
+                .with_handler(move |app, shortcut, event| {
                     // Fires on BOTH press and release — without this guard every
                     // action would run twice per keypress.
                     if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+
+                    // The copy key first: it is live only while an answer is on
+                    // screen, so reaching here means there is something to copy.
+                    // It is a plain message to the frontend, which owns what it
+                    // means — enter the pick, or take what is picked.
+                    //
+                    // Scrolling is not here any more. It arrives as Ctrl+Alt+wheel
+                    // through `watch_wheel`, which claims no key from anyone.
+                    if *shortcut == key_copy() {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = app.emit("warden://copy", 0);
+                        });
                         return;
                     }
 
@@ -516,8 +1049,17 @@ pub fn run() {
                         #[cfg(not(windows))]
                         let visible = window.is_visible().unwrap_or(false);
 
+                        let anim = app.state::<Arc<Anim>>().inner().clone();
+
                         println!("[warden] hotkey: visible={visible}");
                         if visible {
+                            // Bump before hiding, so the animator stops on its
+                            // next frame rather than steering a window that is
+                            // on its way out.
+                            anim.bump();
+                            anim.forget_height();
+                            release_popup_keys(&app);
+
                             // Hide the same way we show: raw Win32. Showing via
                             // ShowWindow and hiding via Tauri's dispatcher leaves
                             // Windows and Tauri disagreeing about the window, and
@@ -529,22 +1071,41 @@ pub fn run() {
                             return;
                         }
 
-                        if let Err(e) = position_bottom_right(&window) {
-                            eprintln!("[warden] WARNING: positioning failed: {e}");
-                        }
+                        // One generation per show: a fast hide/show cannot leave
+                        // the previous animator running alongside the new one.
+                        let generation = anim.bump();
 
                         #[cfg(windows)]
-                        if let Err(e) = show_without_focus(&window) {
-                            eprintln!("[warden] WARNING: show failed: {e}");
+                        {
+                            // Place first, then show — the popup appears already
+                            // in position, and only animates from there.
+                            if let Err(e) = place_now(&window, &anim) {
+                                eprintln!("[warden] WARNING: positioning failed: {e}");
+                            }
+                            if let Err(e) = show_without_focus(&window, &anim, generation) {
+                                eprintln!("[warden] WARNING: show failed: {e}");
+                            }
                         }
 
+                        // Claim the scroll keys for as long as this answer is up.
+                        let keys_bound = bind_popup_keys(&app);
+
                         // The frontend owns the Channel, so it starts the capture.
-                        let _ = app.emit("warden://summoned", ());
+                        // The payload says whether the scroll keys are listening,
+                        // so the UI can offer them without ever advertising a
+                        // shortcut that failed to bind.
+                        let _ = app.emit("warden://summoned", keys_bound);
                     });
                 })
                 .build(),
         )
         .setup(move |app| {
+            // The one place the popup's geometry is written from. Managed before
+            // anything can ask for it: `fit_window` resolves it as state, and the
+            // hotkey handler reads it on every press.
+            let anim = Arc::new(Anim::default());
+            app.manage(anim.clone());
+
             #[cfg(windows)]
             {
                 let window = app
@@ -555,7 +1116,7 @@ pub fn run() {
                     // Loudly, not silently: this is the headline feature.
                     Err(e) => eprintln!("[warden] WARNING: capture exclusion failed: {e}"),
                 }
-                if let Err(e) = position_bottom_right(&window) {
+                if let Err(e) = place_now(&window, &anim) {
                     eprintln!("[warden] WARNING: positioning failed: {e}");
                 }
             }
@@ -589,36 +1150,41 @@ pub fn run() {
             app.manage(HotkeyLabel(shortcut));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![ask_about_screen, hotkey_label, fit_window])
+        .invoke_handler(tauri::generate_handler![ask_about_screen, hotkey_label, fit_window, copy_text])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
-/// Grow the popup to fit its answer, within bounds, and keep it anchored.
+/// Record how tall the popup wants to be. `animate` does the moving.
 ///
-/// Answers run 3,600–7,950 characters (measured at A2), so a fixed height means
-/// either wasted space on short answers or heavy scrolling on long ones. The
-/// window is repositioned after every resize because it grows from the top edge
-/// — without that it would creep down over the taskbar.
+/// Nothing is resized here, and there is no deadband. The animator is already
+/// the one writer, it already skips a frame whose rectangle is unchanged, and it
+/// already eases — so a target that shifts by two pixels costs two pixels of
+/// glide rather than a resize the compositor has to service.
+///
+/// `content_height` is in **CSS** pixels, because that is the only unit the
+/// webview can measure in. The bounds are therefore applied in logical px and
+/// the result scaled once. Treating it as device px — which this did — left the
+/// window a third too short and 320 logical px wide on a 150% display, sizing
+/// itself to text it could then never fit.
 #[tauri::command]
-fn fit_window(window: tauri::WebviewWindow, content_height: f64) -> Result<(), String> {
-    const MIN_H: u32 = 220;
-    const MAX_H: u32 = 760;
-    const WIDTH: u32 = 480;
-
-    let target = (content_height.ceil() as u32).clamp(MIN_H, MAX_H);
-
-    let current = window.outer_size().map_err(|e| format!("no size: {e}"))?;
-    // Resizing on every token would thrash the compositor; ignore small deltas.
-    if current.height.abs_diff(target) < 8 {
-        return Ok(());
+fn fit_window(
+    window: tauri::WebviewWindow,
+    anim: tauri::State<'_, Arc<Anim>>,
+    content_height: f64,
+) -> Result<(), String> {
+    if !content_height.is_finite() {
+        return Err(format!("content height is not a number: {content_height}"));
     }
 
-    window
-        .set_size(tauri::Size::Physical(tauri::PhysicalSize::new(WIDTH, target)))
-        .map_err(|e| format!("resize failed: {e}"))?;
+    let scale = window
+        .scale_factor()
+        .map_err(|e| format!("no scale factor: {e}"))?;
 
-    position_bottom_right(&window)
+    let logical = content_height.clamp(MIN_H, MAX_H);
+    anim.target_h
+        .store((logical * scale).round() as i32, Ordering::Relaxed);
+    Ok(())
 }
 
 /// Which hotkey actually bound, if any — so the UI can say so rather than leaving

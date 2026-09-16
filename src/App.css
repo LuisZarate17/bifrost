@@ -51,6 +51,20 @@ header {
   color: #ff9b9b;
   opacity: 0.9;
 }
+.hint.ok {
+  color: #9fd0ff;
+  opacity: 0.95;
+}
+
+/* The block Ctrl+Alt+C would take. Marked with a background and an inset rail
+   rather than a border or outline: a border would add height and shove the rest
+   of the answer around every time the pick moves, which is the one thing a
+   selection marker must not do. */
+.answer > .copy-pick {
+  background: rgba(120, 170, 255, 0.13);
+  box-shadow: inset 2px 0 0 rgba(140, 185, 255, 0.85);
+  border-radius: 3px;
+}
 
 .status,
 .idle {
@@ -73,6 +87,14 @@ header {
   user-select: text;
   padding-right: 3px;
 }
+/* `flow-root` establishes a block formatting context, so the last paragraph's
+   bottom margin is measured as part of this element instead of collapsing out
+   through it — otherwise the window is asked for 8px less than it needs and the
+   answer sits one margin short of fitting. */
+.content {
+  display: flow-root;
+}
+
 .scroll::-webkit-scrollbar {
   width: 6px;
 }
