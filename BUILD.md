@@ -9,8 +9,8 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ## Where this stands — 2026-09-15
 
-**15 of 21 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
-C1b, C1c, C2 and C4a done 2026-09-15; C4b and C3 done 2026-09-16.
+**16 of 21 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
+C1b, C1c, C2 and C4a done 2026-09-15; C4b, C3 and F1 done 2026-09-16.
 
 > **Twenty-one, not nineteen.** C4 split into **C4a** (the CLI, done) and **C4b** (the tray), and
 > the keyboard/wheel work landed as **C1c**. Lettered rather than renumbered, following C1b, so
@@ -486,7 +486,21 @@ syntax-highlighted code on a dark theme. Nobody benchmarks your actual use case 
 
 So make swapping models a ten-minute job instead of a vibes decision.
 
-### F1 — Build a personal bench harness
+### F1 — Build a personal bench harness — DONE 2026-09-16
+**Did:** `bench/`, reusing `warden-core`. Results: [docs/F1-results.md](docs/F1-results.md).
+
+**Validated against the reference, not just "it runs":** prefill 1,214 ms against A2's 1,165, decode
+131 t/s against 133, resident 8,187 MiB against 8,151.
+
+**The port found a real ambiguity in "time to first token."** The first run read 5,537 ms against
+A2's 1,165 — because `bench.mjs` paid the cold load *outside* its measurement by warming up on a
+synthetic image, and this port timed from request start. Both are worth knowing, so the table now
+reports **TTFT** (what the press feels like, load included) and **PREFILL** (load removed, the only
+column comparable with A2).
+
+**Still Node-only:** saving answers to disk for grading. That belongs with F2.
+
+#### The original spec
 **Do:** Extend A4's code to loop over **screenshots × model tags × prompt variants**, and print
 a table: model · prompt · did it get it right · time to first token · time to full answer ·
 resident VRAM.

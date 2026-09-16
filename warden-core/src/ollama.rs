@@ -166,3 +166,134 @@ pub fn unload(tag: &str) -> Result<bool, String> {
     }
     Ok(false)
 }
+
+/// Everything one generate call is worth knowing about.
+///
+/// Time to first token is measured **here**, not taken from Ollama, because it
+/// is the number the product lives or dies by: how long the screen sits blank
+/// after you press the hotkey. Ollama's own `total_duration` does not answer
+/// that.
+#[derive(Debug, Clone)]
+pub struct Measured {
+    pub answer: String,
+    pub ttft: Duration,
+    pub total: Duration,
+    pub prompt_eval_count: u32,
+    pub eval_count: u32,
+    /// Nanoseconds Ollama spent loading the model for this request. Nonzero here
+    /// means the run paid a cold load, which makes its timings incomparable with
+    /// a warm one — the benchmark's job is to notice that, not to hide it.
+    pub load_ns: u64,
+    pub done_reason: String,
+}
+
+impl Measured {
+    /// Tokens per second of decode, which is what "how fast does it write"
+    /// actually means. Prefill is excluded — that is what `ttft` covers.
+    pub fn decode_tps(&self) -> f64 {
+        let secs = self.total.as_secs_f64() - self.ttft.as_secs_f64();
+        if secs > 0.0 { self.eval_count as f64 / secs } else { 0.0 }
+    }
+}
+
+#[derive(Deserialize)]
+struct StreamChunk {
+    #[serde(default)]
+    response: String,
+    #[serde(default)]
+    done: bool,
+    #[serde(default)]
+    prompt_eval_count: Option<u32>,
+    #[serde(default)]
+    eval_count: Option<u32>,
+    #[serde(default)]
+    load_duration: Option<u64>,
+    #[serde(default)]
+    done_reason: Option<String>,
+}
+
+/// Run one generate and measure it, optionally against an image.
+///
+/// Streams rather than waiting for the whole answer, because time-to-first-token
+/// cannot be measured any other way — a non-streaming call only tells you when
+/// it finished.
+pub fn generate_measured(
+    tag: &str,
+    prompt: &str,
+    image_png_base64: Option<&str>,
+    num_ctx: u32,
+    timeout: Duration,
+) -> Result<Measured, String> {
+    use std::io::{BufRead, BufReader};
+
+    let mut body = serde_json::json!({
+        "model": tag,
+        "prompt": prompt,
+        "stream": true,
+        "options": { "num_ctx": num_ctx },
+    });
+    // `images` sits at the top level while `num_ctx` goes inside `options`.
+    // Either in the wrong place fails silently — the model simply never sees the
+    // picture and answers about nothing.
+    if let Some(b64) = image_png_base64 {
+        body["images"] = serde_json::json!([b64]);
+    }
+
+    let started = Instant::now();
+    let response = client(timeout)?
+        .post(url("/api/generate"))
+        .json(&body)
+        .send()
+        .map_err(unreachable)?;
+
+    if !response.status().is_success() {
+        return Err(format!("Ollama returned HTTP {}", response.status()));
+    }
+
+    let mut answer = String::new();
+    let mut ttft: Option<Duration> = None;
+    let mut m = Measured {
+        answer: String::new(),
+        ttft: Duration::ZERO,
+        total: Duration::ZERO,
+        prompt_eval_count: 0,
+        eval_count: 0,
+        load_ns: 0,
+        done_reason: String::new(),
+    };
+
+    for line in BufReader::new(response).lines() {
+        let line = line.map_err(|e| format!("read failed: {e}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let chunk: StreamChunk =
+            serde_json::from_str(&line).map_err(|e| format!("bad JSON from Ollama: {e}"))?;
+
+        if !chunk.response.is_empty() && ttft.is_none() {
+            ttft = Some(started.elapsed());
+        }
+        answer.push_str(&chunk.response);
+
+        if chunk.done {
+            m.prompt_eval_count = chunk.prompt_eval_count.unwrap_or(0);
+            m.eval_count = chunk.eval_count.unwrap_or(0);
+            m.load_ns = chunk.load_duration.unwrap_or(0);
+            m.done_reason = chunk.done_reason.unwrap_or_default();
+        }
+    }
+
+    m.answer = answer;
+    m.ttft = ttft.unwrap_or_default();
+    m.total = started.elapsed();
+    Ok(m)
+}
+
+/// The prompt the app ships with.
+///
+/// Lives here so the benchmark measures the same words the product uses. A2 found
+/// the prompt moved answer quality more than the choice between a 4B and an 8B
+/// model did, so treating it as a constant would be measuring the wrong thing.
+pub const DEFAULT_PROMPT: &str =
+    "What am I looking at? If there's an error or something broken, explain it \
+     and the fix. Otherwise explain what matters here.";
