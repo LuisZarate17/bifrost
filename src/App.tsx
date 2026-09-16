@@ -30,6 +30,7 @@ const INJECTION_CASES = [
 
 type StreamEvent =
   | { event: "captured"; data: { width: number; height: number; pngBytes: number } }
+  | { event: "warming" }
   | { event: "token"; data: { text: string } }
   | {
       event: "done";
@@ -122,6 +123,10 @@ function App() {
     onEvent.onmessage = (message) => {
       if (message.event === "captured") {
         setStatus("Reading your screen…");
+      } else if (message.event === "warming") {
+        // The model wasn't loaded, so this press pays ~4s to load it. Naming the
+        // wait is the difference between "slow" and "broken".
+        setStatus("Warming the model…");
       } else if (message.event === "token") {
         setStatus("");
         // Functional update: several tokens can land in one React tick.

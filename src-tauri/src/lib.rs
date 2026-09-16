@@ -48,6 +48,12 @@ struct Shot {
 enum StreamEvent {
     /// The screenshot is taken; the model hasn't answered yet.
     Captured { width: u32, height: u32, png_bytes: usize },
+    /// The model wasn't resident, so this request is paying to load it.
+    ///
+    /// Ollama loads on demand, so a cold press never *fails* — it just sits
+    /// there for an extra few seconds with no explanation. Saying so is the
+    /// whole point: an unexplained stall reads as broken.
+    Warming,
     /// One token of the answer.
     Token { text: String },
     /// The final object, carrying Ollama's own metrics.
@@ -139,6 +145,8 @@ fn rgba_to_png(pixels: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String
 }
 
 /// Capture the screen, send it to Ollama, and stream the answer back token by token.
+mod tray;
+
 #[tauri::command]
 async fn ask_about_screen(
     prompt: String,
@@ -161,6 +169,16 @@ async fn ask_about_screen(
             png_bytes: png.len(),
         })
         .map_err(|e| format!("channel send failed: {e}"))?;
+
+    // Cold? Say so before the wait, not after. Checked rather than assumed: the
+    // model may have been warmed from the tray, from the CLI, or by Ollama's own
+    // timeout not having expired yet.
+    let resident = warden_core::ollama::ps()
+        .map(|m| warden_core::ollama::find(&m, &model).is_some())
+        .unwrap_or(false);
+    if !resident {
+        let _ = on_event.send(StreamEvent::Warming);
+    }
 
     // `images` is top-level; `num_ctx` lives inside `options`. Either wrong fails silently.
     let body = serde_json::json!({
@@ -1148,6 +1166,18 @@ pub fn run() {
             // keys with a low-level keyboard hook swallow it with no error at all
             // (plugins-workspace#2646). Only a real keypress proves it.
             app.manage(HotkeyLabel(shortcut));
+
+            // Power control. The CLI proved the mechanism at C4a; this is the
+            // half you can reach without a terminal, and the only place Warming
+            // can be shown — see tray.rs.
+            let power = std::sync::Arc::new(tray::Power::new(
+                DEFAULT_MODEL.to_string(),
+                NUM_CTX,
+            ));
+            app.manage(power.clone());
+            if let Err(e) = tray::install(app.handle(), power) {
+                eprintln!("[warden] WARNING: tray unavailable: {e}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![ask_about_screen, hotkey_label, fit_window, copy_text])
