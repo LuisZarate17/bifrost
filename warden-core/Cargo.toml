@@ -1,0 +1,17 @@
+[package]
+name = "warden-core"
+version = "0.1.0"
+edition = "2024"
+
+# Shared by `capture/` (the CLI) and `src-tauri/` (the app). Extracted at C4b,
+# when the second caller appeared and the seam was finally known — extracting
+# against one caller would have been guessing at the signature.
+#
+# Deliberately blocking: both callers drive it from a thread of their own, and
+# the app already runs its animator and mouse hook that way.
+
+[dependencies]
+nvml-wrapper = "0.13.0"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "native-tls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"

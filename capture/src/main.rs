@@ -15,9 +15,9 @@ use windows_capture::settings::{
     MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
 };
 
-mod ollama;
 mod power;
-mod vram;
+
+use warden_core::ollama;
 
 const DEFAULT_MODEL: &str = "qwen3-vl:8b-instruct-q4_K_M";
 
