@@ -19,6 +19,9 @@ cargo run -- status                             # what is loaded, per Ollama and
 
 Needs `ollama serve` running. The prompt lives in `capture/prompt.txt`, not in source.
 
+Every control the app has is in **[docs/shortcuts.md](docs/shortcuts.md)** — there is no menu, tray
+item or window chrome, so that file is the interface.
+
 The model holds **~8 GB** while resident, so `warm` and `off` are explicit rather than on a timer —
 a timeout decides for you and leaves you guessing whether the next press is instant or a stall.
 `status` reads the card through NVML, not `ollama ps`: the two disagree, and only one of them is

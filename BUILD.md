@@ -9,12 +9,12 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ## Where this stands — 2026-09-15
 
-**12 of 20 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
-C1b, C2 and C4a done 2026-09-15.
+**13 of 21 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
+C1b, C1c, C2 and C4a done 2026-09-15.
 
-> **Twenty, not nineteen.** C4 split into **C4a** (the CLI, done) and **C4b** (the tray). Lettered
-> rather than renumbered, following C1b, so every existing reference to D1, E1 and the rest stays
-> valid.
+> **Twenty-one, not nineteen.** C4 split into **C4a** (the CLI, done) and **C4b** (the tray), and
+> the keyboard/wheel work landed as **C1c**. Lettered rather than renumbered, following C1b, so
+> every existing reference to D1, E1 and the rest stays valid.
 
 > **Correction, 2026-09-15: nothing is blocked.** The **debug build runs** with Smart App Control
 > enforced — `target/debug/warden.exe` launches, and C2 was verified against Discord, Zoom and
@@ -295,6 +295,29 @@ you can't read means you don't reach for it, and **E1 fails**.
 - Make streaming not reflow the layout as tokens land.
 
 **Done when:** you can read a real answer about a real stack trace at a glance, without leaning in.
+
+### C1c — Reach the answer without a pointer — DONE 2026-09-15
+**Did:** `Ctrl+Alt`+wheel scrolls the answer; `Ctrl+Alt+Z` picks a top-level block and copies it.
+Every control is written down in [docs/shortcuts.md](docs/shortcuts.md) — there is no menu, tray
+item or window chrome, so that file *is* the interface.
+
+**This answers C1b's open overflow question above:** a long answer scrolls, and the window grows to
+a cap rather than clamping or truncating the response.
+
+**Why the wheel and not letters.** `Ctrl+Alt+C` went first, then `Ctrl+Alt+Q`/`A`. A global hotkey
+outranks anything an application binds internally, so claiming `Ctrl+Alt+<letter>` takes that chord
+away from every app while the popup is up — and **`RegisterHotKey` reports every one of them as
+free**, because it only knows about other *global* registrations, never what an application binds
+for itself. There is no way to test for the clash in advance. The wheel claims no key at all.
+
+**Both the hook and `Ctrl+Alt+Z` are released on dismiss**, not held for the life of the process.
+The hook's callback only increments a counter — Windows silently removes a low-level hook whose
+callback overruns `LowLevelHooksTimeout` (300 ms), and this one sits in front of every mouse event
+in the session. A separate thread drains it, separate because the window animator blocks on
+`SetWindowPos` by design.
+
+**Escape hatches:** `WARDEN_NO_CLICKTHROUGH=1` puts the mouse back on the popup, and
+inspecting how it *looks* means temporarily giving that up.
 
 **Watch for:** the obvious fix for verbosity is a terser prompt — **don't.** A2 tested exactly that
 and both finalist models started inventing errors that didn't exist. If the prompt changes to
