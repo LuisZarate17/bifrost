@@ -69,6 +69,12 @@ function App() {
   const [pickTick, setPickTick] = useState(0);
   const [copied, setCopied] = useState(false);
 
+  // The follow-up box. Open means the popup is holding the caret — the one time
+  // it ever does — so it must always be closed again, including on error.
+  const [asking, setAsking] = useState(false);
+  const [draft, setDraft] = useState("");
+  const askBoxRef = useRef<HTMLInputElement>(null);
+
   const setPick = useCallback((index: number | null) => {
     pickRef.current = index;
     setPickTick((t) => t + 1);
@@ -105,6 +111,64 @@ function App() {
   // Follow the bottom while streaming, but stop the moment the reader scrolls
   // up to re-read something — and resume on the next answer.
   const pinned = useRef(true);
+
+  // Both questions stream the same way; only the command differs. Kept in one
+  // place so the two can't drift apart in how they report progress.
+  const stream = useCallback(() => {
+    const onEvent = new Channel<StreamEvent>();
+    onEvent.onmessage = (message) => {
+      if (message.event === "captured") {
+        setStatus("Reading your screen…");
+      } else if (message.event === "warming") {
+        setStatus("Warming the model…");
+      } else if (message.event === "token") {
+        setStatus("");
+        setAnswer((prev) => prev + message.data.text);
+      } else {
+        const d = message.data;
+        setStats(
+          `${d.promptEvalCount} in · ${d.evalCount} out · ${(d.ttftMs / 1000).toFixed(2)}s to first · ${(d.totalMs / 1000).toFixed(1)}s total`
+        );
+      }
+    };
+    return onEvent;
+  }, []);
+
+  /// Ask again about the screenshot already taken. No new capture — by now the
+  /// screen has moved on, and the popup is sitting over what you asked about.
+  const followUp = useCallback(
+    async (question: string) => {
+      if (busy.current || !question.trim()) return;
+      busy.current = true;
+
+      setAnswer("");
+      setStats("");
+      setError("");
+      setStatus("Asking again…");
+      pinned.current = true;
+      setPick(null);
+      setCopied(false);
+
+      try {
+        await invoke("ask_followup", { prompt: question, model: null, onEvent: stream() });
+      } catch (e) {
+        setError(String(e));
+        setStatus("");
+      } finally {
+        busy.current = false;
+      }
+    },
+    [stream, setPick]
+  );
+
+  // Closing always goes through here: the caret has to go back to whatever had
+  // it before, and leaving the window activatable would mean the next summon
+  // steals focus from whatever you were typing in.
+  const closeAsk = useCallback(() => {
+    setAsking(false);
+    setDraft("");
+    invoke("end_followup").catch(() => {});
+  }, []);
 
   const ask = useCallback(async () => {
     if (busy.current) return;
@@ -245,6 +309,21 @@ function App() {
   }, [nudge, blocks, setPick]);
 
   // One key, two halves: enter the pick, then take it.
+  useEffect(() => {
+    const unlisten = listen("warden://followup", () => {
+      // Take the caret first, then show the box — focusing an input in a window
+      // that cannot be activated does nothing at all.
+      invoke("begin_followup")
+        .then(() => {
+          setAsking(true);
+          // After paint, or the input isn't there to focus yet.
+          requestAnimationFrame(() => askBoxRef.current?.focus());
+        })
+        .catch((e) => setError(String(e)));
+    });
+    return () => void unlisten.then((f) => f());
+  }, []);
+
   useEffect(() => {
     const unlisten = listen("warden://copy", () => {
       const list = blocks();
@@ -424,6 +503,37 @@ function App() {
             {probe && <Answer text={probe} />}
           </div>
         </div>
+      )}
+
+      {asking && (
+        <form
+          className="ask"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const question = draft;
+            closeAsk();
+            void followUp(question);
+          }}
+        >
+          <input
+            ref={askBoxRef}
+            id="followup"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // Esc works here and nowhere else in the app: the window is holding
+              // focus for exactly as long as this box is open, so it is the one
+              // moment a key event can reach the page at all.
+              if (e.key === "Escape") {
+                e.preventDefault();
+                closeAsk();
+              }
+            }}
+            placeholder="Ask about the same screenshot…"
+            autoComplete="off"
+            spellCheck={false}
+          />
+        </form>
       )}
 
       {stats && <p className="stats">{stats}</p>}

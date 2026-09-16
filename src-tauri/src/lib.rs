@@ -144,6 +144,20 @@ fn rgba_to_png(pixels: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String
     Ok(png)
 }
 
+/// The last screenshot, kept so a follow-up can ask about it again.
+///
+/// The whole point of a follow-up is that it does **not** take a new screenshot:
+/// by the time you have read an answer and thought of a second question, the
+/// screen has usually moved on — you scrolled, or the popup itself is sitting
+/// over what you were asking about. Re-capturing would answer a question about a
+/// different screen than the one you meant.
+///
+/// A `Mutex` rather than a channel because there is exactly one slot and both
+/// commands are short-lived. Holds PNG bytes, already encoded, so a follow-up
+/// costs no image work at all.
+#[derive(Default)]
+struct LastCapture(std::sync::Mutex<Option<Vec<u8>>>);
+
 /// Capture the screen, send it to Ollama, and stream the answer back token by token.
 mod tray;
 
@@ -152,6 +166,7 @@ async fn ask_about_screen(
     prompt: String,
     model: Option<String>,
     on_event: Channel<StreamEvent>,
+    last: tauri::State<'_, LastCapture>,
 ) -> Result<(), String> {
     let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
@@ -170,6 +185,72 @@ async fn ask_about_screen(
         })
         .map_err(|e| format!("channel send failed: {e}"))?;
 
+    // Keep it for the follow-ups. Replaces whatever the previous question used —
+    // a follow-up always refers to the answer currently on screen.
+    *last.0.lock().map_err(|_| "capture store poisoned")? = Some(png.clone());
+
+    ask_with_png(png, prompt, model, on_event).await
+}
+
+/// Let the popup hold a caret so a follow-up can be typed.
+///
+/// Summoning Warden never steals focus — that is the point of `focusable: false`,
+/// and B4 established that a window which never takes focus never receives key
+/// events either. Typing is the one thing that cannot work under that rule, so
+/// the rule bends for exactly as long as the box is open.
+#[tauri::command]
+fn begin_followup(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        take_focus(&window)?;
+    }
+    Ok(())
+}
+
+/// Close the box and give the caret back to wherever it came from.
+#[tauri::command]
+fn end_followup(window: tauri::WebviewWindow) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        return_focus(&window)?;
+    }
+    Ok(())
+}
+
+/// Ask a second question about the screenshot already taken.
+///
+/// **Takes no new screenshot** — that is the entire feature. Fails rather than
+/// silently capturing if there is nothing stored, because quietly answering about
+/// a freshly-grabbed screen would be the wrong answer to the right question.
+#[tauri::command]
+async fn ask_followup(
+    prompt: String,
+    model: Option<String>,
+    on_event: Channel<StreamEvent>,
+    last: tauri::State<'_, LastCapture>,
+) -> Result<(), String> {
+    let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+
+    let png = last
+        .0
+        .lock()
+        .map_err(|_| "capture store poisoned")?
+        .clone()
+        .ok_or("no capture to follow up on — summon Warden first")?;
+
+    ask_with_png(png, prompt, model, on_event).await
+}
+
+/// Ask about a PNG that is already in hand.
+///
+/// Shared by the first question and every follow-up, so the two can never drift
+/// apart in how they talk to Ollama — same body, same `num_ctx`, same streaming.
+async fn ask_with_png(
+    png: Vec<u8>,
+    prompt: String,
+    model: String,
+    on_event: Channel<StreamEvent>,
+) -> Result<(), String> {
     // Cold? Say so before the wait, not after. Checked rather than assumed: the
     // model may have been warmed from the tray, from the CLI, or by Ollama's own
     // timeout not having expired yet.
@@ -743,6 +824,79 @@ fn is_really_visible(window: &tauri::WebviewWindow) -> bool {
     unsafe { IsWindowVisible(hwnd).as_bool() }
 }
 
+/// Where the caret was before the follow-up box took it.
+///
+/// Remembered so it can be handed back. Summoning Warden deliberately never
+/// steals focus (that is why the window is `focusable: false`), and typing a
+/// follow-up is the one moment that rule has to bend — so it bends for exactly
+/// as long as the box is open, and puts things back afterwards.
+static PREVIOUS_FOREGROUND: std::sync::Mutex<Option<isize>> = std::sync::Mutex::new(None);
+
+/// Let the popup receive keystrokes, remembering who had focus.
+///
+/// `WS_EX_NOACTIVATE` is what keeps the window from ever taking focus. It has to
+/// come off before the window can hold a caret, and go back on the moment the box
+/// closes — leaving it off would mean the next summon steals focus from whatever
+/// you were typing in, which is the behaviour the whole design avoids.
+///
+/// `SetForegroundWindow` refuses when the calling process does not already own
+/// the foreground, so this attaches to the foreground thread's input queue first.
+/// Without that it silently does nothing and the box looks broken.
+#[cfg(windows)]
+fn take_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, SetForegroundWindow,
+        SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+    };
+
+    let hwnd = window.hwnd().map_err(|e| format!("no hwnd: {e}"))?;
+
+    unsafe {
+        let previous = GetForegroundWindow();
+        *PREVIOUS_FOREGROUND.lock().map_err(|_| "focus store poisoned")? =
+            (!previous.is_invalid()).then(|| previous.0 as isize);
+
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style & !(WS_EX_NOACTIVATE.0 as isize));
+
+        // Attach to whoever owns the foreground so the call is permitted.
+        let ours = GetCurrentThreadId();
+        let theirs = GetWindowThreadProcessId(previous, None);
+        let attached = theirs != 0 && theirs != ours && AttachThreadInput(theirs, ours, true).as_bool();
+
+        let _ = SetForegroundWindow(hwnd);
+        let _ = SetFocus(Some(hwnd));
+
+        if attached {
+            let _ = AttachThreadInput(theirs, ours, false);
+        }
+    }
+    Ok(())
+}
+
+/// Put `WS_EX_NOACTIVATE` back and return the caret to where it was.
+#[cfg(windows)]
+fn return_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetForegroundWindow, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+    };
+
+    let hwnd = window.hwnd().map_err(|e| format!("no hwnd: {e}"))?;
+
+    unsafe {
+        let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | (WS_EX_NOACTIVATE.0 as isize));
+
+        if let Some(previous) = PREVIOUS_FOREGROUND.lock().map_err(|_| "focus store poisoned")?.take() {
+            let _ = SetForegroundWindow(HWND(previous as *mut _));
+        }
+    }
+    Ok(())
+}
+
 /// Read the display affinity back from Windows. `17` is `WDA_EXCLUDEFROMCAPTURE`;
 /// anything else means the exclusion is not actually in force, whatever we asked for.
 #[cfg(windows)]
@@ -799,10 +953,23 @@ fn key_copy() -> Shortcut {
     Shortcut::new(chord(), Code::KeyZ)
 }
 
+/// Ask a second question about the screenshot already taken.
+///
+/// This is the second letter claimed while the popup is up, and it carries
+/// exactly the risk `key_copy` describes — for as long as an answer is on
+/// screen, no other application can see `Ctrl+Alt+F`. It is released on dismiss,
+/// like the rest.
+///
+/// A letter and not the wheel, because this one has to *start* something rather
+/// than nudge it, and there is no wheel gesture that means "ask".
+fn key_followup() -> Shortcut {
+    Shortcut::new(chord(), Code::KeyF)
+}
+
 /// Every key that only means something while an answer is on screen, with the
 /// label to print if it can't be claimed.
-fn popup_keys() -> [(Shortcut, &'static str); 1] {
-    [(key_copy(), "Ctrl+Alt+Z")]
+fn popup_keys() -> [(Shortcut, &'static str); 2] {
+    [(key_copy(), "Ctrl+Alt+Z"), (key_followup(), "Ctrl+Alt+F")]
 }
 
 /// Claim the scroll keys, and say whether both were actually claimed.
@@ -1049,6 +1216,18 @@ pub fn run() {
                         return;
                     }
 
+                    // Same shape for the follow-up box. The frontend opens it and
+                    // calls back to `begin_followup` for the caret, rather than
+                    // taking focus from here — this handler holds the message pump,
+                    // and `SetForegroundWindow` on it is the freeze described below.
+                    if *shortcut == key_followup() {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = app.emit("warden://followup", 0);
+                        });
+                        return;
+                    }
+
                     // The handler runs on the main thread, synchronously, holding
                     // the Win32 message pump. Touching windows inline here is a
                     // confirmed Windows 11 freeze (plugins-workspace#1923), so
@@ -1123,6 +1302,7 @@ pub fn run() {
             // hotkey handler reads it on every press.
             let anim = Arc::new(Anim::default());
             app.manage(anim.clone());
+            app.manage(LastCapture::default());
 
             #[cfg(windows)]
             {
@@ -1180,7 +1360,15 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![ask_about_screen, hotkey_label, fit_window, copy_text])
+        .invoke_handler(tauri::generate_handler![
+            ask_about_screen,
+            ask_followup,
+            begin_followup,
+            end_followup,
+            hotkey_label,
+            fit_window,
+            copy_text
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

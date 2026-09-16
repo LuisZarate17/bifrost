@@ -264,3 +264,31 @@ header {
   white-space: pre-wrap;
   user-select: text;
 }
+
+/* The follow-up box. Only on screen while the popup is holding the caret —
+   every other moment this window is untouchable and unfocusable, so this is the
+   one control in the whole app that behaves like an ordinary input. */
+.ask {
+  flex: none;
+  display: flex;
+}
+.ask input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text, #e9e9ee);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  padding: 6px 9px;
+  outline: none;
+}
+.ask input::placeholder {
+  color: rgba(233, 233, 238, 0.38);
+}
+/* Focus is the whole point here — it is the only time the window has it. */
+.ask input:focus {
+  border-color: rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.09);
+}

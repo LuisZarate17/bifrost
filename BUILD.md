@@ -9,8 +9,8 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ## Where this stands — 2026-09-15
 
-**13 of 21 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
-C1b, C1c, C2 and C4a done 2026-09-15.
+**15 of 21 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
+C1b, C1c, C2 and C4a done 2026-09-15; C4b and C3 done 2026-09-16.
 
 > **Twenty-one, not nineteen.** C4 split into **C4a** (the CLI, done) and **C4b** (the tray), and
 > the keyboard/wheel work landed as **C1c**. Lettered rather than renumbered, following C1b, so
@@ -334,9 +334,23 @@ you share it (the recipient sees an empty rectangle). Nothing it says leaks; tha
 So D1 should record two answers per app, not one: can it **see** the window, and does it **list**
 it.
 
-### C3 — Follow-ups
-**Do:** A text box that asks again against the capture already in memory.
-**Done when:** Second question, no new screenshot taken.
+### C3 — Follow-ups — DONE 2026-09-16 · pending your check
+**Did:** `Ctrl+Alt+F` opens a box that asks again about the screenshot already taken. The PNG is
+kept in a managed `LastCapture` and reused; a follow-up with nothing stored **errors rather than
+quietly capturing**, because answering about a freshly-grabbed screen would be the wrong answer to
+the right question.
+
+**The focus transition C5 handed here.** Typing needs a caret and the window is built never to take
+one. `WS_EX_NOACTIVATE` comes off while the box is open and goes back on when it closes, with the
+previous foreground window remembered and restored. `SetForegroundWindow` is refused unless the
+calling process already owns the foreground, so it attaches to the foreground thread's input queue
+first — without that it silently does nothing.
+
+**A side effect worth knowing:** `Esc` works inside the box and nowhere else in the app, because
+those few seconds are the only time the window can receive a key event at all.
+
+**Cost:** a second letter claimed while the popup is up. `Ctrl+Alt+F` is unavailable to every other
+app for as long as an answer is on screen, and as C1c established, nothing detects that in advance.
 
 ### C4a — Power control in the CLI — DONE 2026-09-15
 **Did:** `capture warm` / `off` / `status`. Results: [docs/C4a-results.md](docs/C4a-results.md).

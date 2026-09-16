@@ -13,6 +13,8 @@ whole interface.
 | `Ctrl+Alt+Space` | The same thing — **only** used if `Ctrl+Alt+W` could not be claimed at startup | Always, as a fallback |
 | **`Ctrl+Alt`+wheel** | Scroll the answer — or, while picking, move the pick | Only while the popup is on screen |
 | **`Ctrl+Alt+Z`** | Pick a block of the answer; press again to **copy** it | Only while the popup is on screen |
+| **`Ctrl+Alt+F`** | Ask a **follow-up** about the same screenshot | Only while the popup is on screen |
+| `Esc` | Close the follow-up box without asking | **Only** while the follow-up box is open |
 
 Each notch travels 96px — about five lines — and the notches ease into each other, so a fast roll
 reads as one continuous run rather than a stack of jumps. Both ends clamp. It works wherever the
@@ -37,6 +39,21 @@ Using it is the only way to find out.
 The wheel closes that off: it claims **no key at all**, so there is nothing for an application to
 lose. One letter remains — `Ctrl+Alt+Z` — and it carries the same risk as the ones that were
 removed.
+
+## Follow-ups, and the one moment `Esc` works
+
+`Ctrl+Alt+F` opens a box and asks again about **the screenshot already taken** — deliberately not a
+new one. By the time you have read an answer and thought of a second question the screen has moved
+on: you scrolled, or the popup itself is sitting over the thing you were asking about. Re-capturing
+would answer a question about a different screen than the one you meant.
+
+Typing needs a caret, and this window is built never to take one — `focusable: false` is what stops
+a summon from yanking the cursor out of whatever you were writing. So the rule bends for exactly as
+long as the box is open: `WS_EX_NOACTIVATE` comes off, the window takes focus, and on submit or
+`Esc` it goes straight back on and the caret returns to wherever it came from.
+
+**That is why `Esc` works in the box and nowhere else.** For those few seconds the window really
+does have focus, so a key event can reach the page. Every other moment it cannot.
 
 **`Esc` does not dismiss the popup.** It can't: the window is created `focusable: false` so that
 summoning it never pulls the caret out of whatever you were typing in, and a window that never takes
