@@ -22,6 +22,21 @@ Needs `ollama serve` running. The prompt lives in `capture/prompt.txt`, not in s
 Every control the app has is in **[docs/shortcuts.md](docs/shortcuts.md)** — there is no menu, tray
 item or window chrome, so that file is the interface.
 
+## The app
+
+```
+npm run app                 # build it
+src-tauri/target/debug/warden.exe
+```
+
+**Use `npm run app`, not `cargo build`.** A plain `cargo build` bakes `devUrl` into the binary, so the
+window loads from `localhost:1420` and shows WebView2's "can't reach this" page unless a Vite dev
+server happens to be running. `npm run app` is `tauri build --debug --no-bundle`: same debug profile,
+but the frontend is embedded, so the app opens and works on its own.
+
+Release builds are refused by Smart App Control on this machine; debug builds usually run, and when
+one is blocked, rebuilding for a fresh hash clears it. See [PLAN.md](PLAN.md) §3.
+
 The model holds **~8 GB** while resident, so `warm` and `off` are explicit rather than on a timer —
 a timeout decides for you and leaves you guessing whether the next press is instant or a stall.
 `status` reads the card through NVML, not `ollama ps`: the two disagree, and only one of them is

@@ -1196,7 +1196,48 @@ fn copy_text(app: tauri::AppHandle, text: String) -> Result<(), String> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Send stdout and stderr to a file, since there is no console to print to.
+///
+/// `main.rs` suppresses the console so the app survives the terminal that
+/// launched it. That would otherwise throw away every diagnostic - and those
+/// diagnostics are what found the panic that hung the popup, and proved the tray
+/// menu was firing when it looked dead. So the handles get pointed at a file
+/// instead of a window.
+///
+/// Done at the Win32 level rather than by changing every `println!`: setting the
+/// process standard handles catches everything, including anything a dependency
+/// prints.
+#[cfg(windows)]
+fn redirect_log_to_file() -> Option<std::path::PathBuf> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+
+    let path = std::env::temp_dir().join("warden.log");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()?;
+
+    let handle = HANDLE(file.as_raw_handle());
+    // SAFETY: a valid handle to a file this process just opened.
+    unsafe {
+        let _ = SetStdHandle(STD_OUTPUT_HANDLE, handle);
+        let _ = SetStdHandle(STD_ERROR_HANDLE, handle);
+    }
+    // Deliberately leaked: the handles outlive this scope and are used for the
+    // life of the process.
+    std::mem::forget(file);
+    Some(path)
+}
+
 pub fn run() {
+    #[cfg(windows)]
+    if let Some(log) = redirect_log_to_file() {
+        println!("[warden] log: {}", log.display());
+    }
+
     let primary = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyW);
     let fallback = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
 
