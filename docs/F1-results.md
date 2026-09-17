@@ -59,9 +59,58 @@ run you thought you configured is not the run that happened.
 Ollama through the same code. The VRAM sampling is the same median-of-three `warden-core::vram`
 that `capture status` uses. The port added one shared function rather than a second client.
 
-## Not done here
+## F1b — the answers, saved and graded blind
 
-**Answers are not saved to disk yet**, so grading still means reading the terminal. `bench.mjs`
-writes `runs/*.json` and an `answers.md`; that belongs with F2, which is where grading gets a home.
-Until then the Node harness remains the one to use for a full graded bake-off, and this one is for
-timing, VRAM and quick comparisons.
+Added 2026-09-17. A run now writes `evals/out/F1-<stamp>/`:
+
+| File | What it is |
+|---|---|
+| `answers.md` | The grading surface. Model identity **blinded and shuffled per image** |
+| `blind-key.json` | The mapping, separate so unblinding is a deliberate second step |
+| `runs/*.json` | Every rep: all metrics, VRAM either side, the answer and its sha256 |
+| `manifest.json` | Models, images and prompts with **content hashes**, plus num_ctx and card |
+| `summary.md` | The timing table, not blinded |
+
+**Why blind at all.** The eval set exists to catch a model being wrong in a way you did not
+expect, and a grader who knows which answer came from the bigger model reads it more generously —
+especially the grader who picked that model last week. Ported from `evals/bench.mjs:770-808`.
+
+**No accuracy column, anywhere.** Whether an answer is *true* is a judgement about the screen it
+describes. A column would imply the harness measured something it did not.
+
+**Prompt hashes are not decoration.** At C1b a single trailing newline flipped a case-02 verdict at
+`temperature: 0`. A manifest recording a prompt's filename but not its bytes cannot tell you which
+of two such runs you are reading.
+
+### Two bugs the verification caught
+
+**The blind shuffle did not shuffle.** Three consecutive real runs produced the identical
+assignment. The cause was seeding xorshift straight from `SystemTime` and taking bits off the high
+end of a multiply: Windows' clock is coarse, so the low bits barely move between runs while the
+high bits barely move within a session. **A shuffle that quietly returns input order is worse than
+no shuffle**, because the file still says it is blind.
+
+Now the randomness comes from a hash of the clock, where every output bit depends on every input
+bit. `bench --selftest-shuffle` keeps it honest — 2,000 samples, expects roughly half, and checks
+the clock-seeded path varies too. Proven in both directions: breaking the swap makes it report
+100% and exit 1.
+
+**A failed run was recorded as a measurement.** One 4B run degenerated into a repetition loop and
+the stream ended without Ollama's final metrics object. Every metric stayed at its initialised
+zero, and the table printed a model at **0 tok/s** as though that had been measured.
+
+`generate_measured` now refuses a stream that never sends `done`, and the harness skips that cell,
+keeps going, and lists what it dropped at the end. A benchmark that hides its failures is one you
+will quote without knowing what is missing from it.
+
+### One deliberate divergence from `bench.mjs`
+
+Prompts are **trimmed** before hashing and sending; `bench.mjs` reads them verbatim. Trimming
+prevents the C1b failure rather than merely recording it, but it does mean a prompt file with
+trailing whitespace hashes the same as one without. That is the intended trade, stated so the two
+harnesses' hashes are not assumed interchangeable.
+
+## Still not done here
+
+Grading itself is still by eye, and `evals/cases.md` holds the criteria. F2 is where a real failure
+becomes a tracked case.

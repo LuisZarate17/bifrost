@@ -498,7 +498,11 @@ synthetic image, and this port timed from request start. Both are worth knowing,
 reports **TTFT** (what the press feels like, load included) and **PREFILL** (load removed, the only
 column comparable with A2).
 
-**Still Node-only:** saving answers to disk for grading. That belongs with F2.
+**F1b, 2026-09-17:** answers now save to disk, blinded and shuffled per image, with a
+`blind-key.json` to unblind after grading. Verification caught two real bugs: the blind shuffle
+**was not shuffling** (three runs, identical assignment), and a run whose stream ended without
+Ollama's metrics was **recorded as 0 tok/s** rather than refused. `bench --selftest-shuffle` guards
+the first.
 
 #### The original spec
 **Do:** Extend A4's code to loop over **screenshots × model tags × prompt variants**, and print

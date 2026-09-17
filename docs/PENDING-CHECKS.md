@@ -40,6 +40,28 @@ CLI moved the tray `Off -> Ready` within 5 s, and releasing moved it back.
 already owns the foreground, and it fails *silently*. If the box appears but will not accept
 typing, that is what happened — the input-queue attach did not take.
 
+## C3 — does `Ctrl+Alt+F` collide with anything you use?
+
+This cannot be tested from here, and it cannot be tested in advance by the app either.
+
+C1c established the rule: **a global hotkey outranks anything an application binds internally**,
+and `RegisterHotKey` reports every `Ctrl+Alt+<letter>` as free because it only knows about other
+*global* registrations. So the only way to find out is to summon the popup and then try the chord
+in the apps you actually use.
+
+- [ ] With an answer on screen, `Ctrl+Alt+F` in VS Code — does anything you rely on stop working?
+- [ ] Same in the browser, and in whatever else is usually open
+- [ ] Dismissing the popup releases it immediately — the chord works again straight after
+
+`Ctrl+Alt+C` and `Ctrl+Alt+Q`/`A` were all withdrawn for exactly this. `F` is the second letter
+still claimed, after `Z`.
+
+## Not waiting on anything — F1b
+
+The bench harness needs nothing from you. It is verified end to end from here: the blind shuffle
+has a self-test (`bench --selftest-shuffle`), and its output was checked against `bench.mjs`.
+Noted so this list stays short and everything left on it is genuinely blocked on a person.
+
 ## C2 — the picker disclosure
 
 Not a bug, but worth a decision:

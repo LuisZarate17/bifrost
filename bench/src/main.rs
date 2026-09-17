@@ -28,13 +28,16 @@ use std::time::Duration;
 use base64::prelude::*;
 use warden_core::{ollama, vram};
 
+mod report;
+
 const NUM_CTX: u32 = 8192;
 const GENERATE_TIMEOUT: Duration = Duration::from_secs(300);
 
 const USAGE: &str = "\
 bench — measure a model against real screenshots
 
-  bench --models TAG[,TAG...] --images PATH[,PATH...] [--prompts FILE[,FILE...]] [--reps N]
+  bench --models TAG[,TAG...] --images PATH[,PATH...] [--prompts FILE[,FILE...]]
+        [--reps N] [--out DIR]
 
 Every measured run unloads the model first. Ollama caches prefill per image, and
 an unload is the only thing that reliably clears it — without this, a second run
@@ -46,6 +49,7 @@ struct Args {
     images: Vec<String>,
     prompt_files: Vec<String>,
     reps: usize,
+    out: String,
 }
 
 fn split_list(v: &str) -> Vec<String> {
@@ -61,6 +65,9 @@ fn parse(args: &[String]) -> Result<Args, String> {
         images: vec![],
         prompt_files: vec![],
         reps: 1,
+        // Already gitignored: these hold answers about real desktop
+        // screenshots and stay on this machine.
+        out: "evals/out".to_string(),
     };
 
     let mut i = 0;
@@ -83,12 +90,17 @@ fn parse(args: &[String]) -> Result<Args, String> {
                 a.prompt_files = split_list(&value(i, "--prompts")?);
                 i += 1;
             }
+            "--out" => {
+                a.out = value(i, "--out")?;
+                i += 1;
+            }
             "--reps" => {
                 a.reps = value(i, "--reps")?
                     .parse()
                     .map_err(|_| "--reps must be a number".to_string())?;
                 i += 1;
             }
+            "--selftest-shuffle" => return Err("selftest".into()),
             "-h" | "--help" | "help" => return Err("help".into()),
             // Unknown tokens error rather than being ignored. C4a learned this
             // the expensive way: a silently-swallowed argument means the run you
@@ -147,6 +159,7 @@ fn main() -> std::process::ExitCode {
             print!("{USAGE}");
             return std::process::ExitCode::SUCCESS;
         }
+        Err(e) if e == "selftest" => return selftest_shuffle(),
         Err(e) => {
             eprintln!("error: {e}\n\n{USAGE}");
             return std::process::ExitCode::from(2);
@@ -165,10 +178,12 @@ fn main() -> std::process::ExitCode {
 fn run(args: &Args) -> Result<(), String> {
     // Prompts are a dimension. With none given the run still has exactly one —
     // whatever the app ships — so the shape of the matrix never changes.
-    let prompts: Vec<(String, String)> = if args.prompt_files.is_empty() {
+    // name, text, sha256
+    let prompts: Vec<(String, String, String)> = if args.prompt_files.is_empty() {
         vec![(
             "(built-in)".to_string(),
             ollama::DEFAULT_PROMPT.to_string(),
+            report::sha256_hex(ollama::DEFAULT_PROMPT.as_bytes()),
         )]
     } else {
         args.prompt_files
@@ -182,12 +197,15 @@ fn run(args: &Args) -> Result<(), String> {
                     .file_stem()
                     .map(|s| s.to_string_lossy().to_string())
                     .unwrap_or_else(|| p.clone());
-                Ok((name, text.trim().to_string()))
+                let trimmed = text.trim().to_string();
+                let sha = report::sha256_hex(trimmed.as_bytes());
+                Ok((name, trimmed, sha))
             })
-            .collect::<Result<_, String>>()?
+            .collect::<Result<Vec<_>, String>>()?
     };
 
-    let images: Vec<(String, String)> = args
+    // name, base64, path, bytes, sha256
+    let images: Vec<(String, String, String, usize, String)> = args
         .images
         .iter()
         .map(|p| {
@@ -196,9 +214,10 @@ fn run(args: &Args) -> Result<(), String> {
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| p.clone());
-            Ok((name, BASE64_STANDARD.encode(&bytes)))
+            let sha = report::sha256_hex(&bytes);
+            Ok((name, BASE64_STANDARD.encode(&bytes), p.clone(), bytes.len(), sha))
         })
-        .collect::<Result<_, String>>()?;
+        .collect::<Result<Vec<_>, String>>()?;
 
     let card = vram::Card::open();
     match &card {
@@ -213,11 +232,15 @@ fn run(args: &Args) -> Result<(), String> {
         args.reps
     );
 
+    let dir = report::stamp_dir(&args.out);
     let mut rows: Vec<Row> = vec![];
+    // Every rep, kept whole. The terminal only ever sees the medians.
+    let mut runs: Vec<report::Run> = vec![];
+    let mut failures: Vec<String> = vec![];
 
     for model in &args.models {
-        for (image_name, image_b64) in &images {
-            for (prompt_name, prompt_text) in &prompts {
+        for (image_name, image_b64, _, _, _) in &images {
+            for (prompt_name, prompt_text, _) in &prompts {
                 let mut ttfts = vec![];
                 let mut prefills = vec![];
                 let mut totals = vec![];
@@ -238,18 +261,40 @@ fn run(args: &Args) -> Result<(), String> {
                     );
                     let _ = std::io::stdout().flush();
 
-                    let m = ollama::generate_measured(
+                    let attempt = ollama::generate_measured(
                         model,
                         prompt_text,
                         Some(image_b64),
                         NUM_CTX,
                         GENERATE_TIMEOUT,
-                    )?;
+                    );
+
+                    // One bad cell must not destroy a matrix that has been
+                    // running for an hour, and must not be written down as if
+                    // it were a measurement either.
+                    let m = match attempt {
+                        Ok(m) => m,
+                        Err(e) => {
+                            println!("FAILED — {e}");
+                            failures.push(format!("{model} · {image_name} · {prompt_name} · rep {rep}: {e}"));
+                            continue;
+                        }
+                    };
 
                     let loaded = card.as_ref().ok().and_then(|c| c.sample().ok());
                     if let (Some(b), Some(l)) = (baseline, loaded) {
                         resident = Some(l.used_mib.saturating_sub(b.used_mib));
                     }
+
+                    runs.push(report::Run {
+                        model: model.clone(),
+                        image: image_name.clone(),
+                        prompt: prompt_name.clone(),
+                        rep,
+                        measured: m.clone(),
+                        baseline_mib: baseline.map(|s| s.used_mib),
+                        loaded_mib: loaded.map(|s| s.used_mib),
+                    });
 
                     println!(
                         "{:.0}ms to first, {:.1}s total, {} chars",
@@ -292,14 +337,18 @@ fn run(args: &Args) -> Result<(), String> {
     }
 
     let rule = "-".repeat(114);
-    println!("\n{rule}");
-    println!(
+    let mut table = String::new();
+    use std::fmt::Write as _;
+    let _ = writeln!(table, "{rule}");
+    let _ = writeln!(
+        table,
         "{:<30} {:<22} {:<12} {:>9} {:>9} {:>8} {:>9} {:>9} {:>8}",
         "MODEL", "IMAGE", "PROMPT", "TTFT", "PREFILL", "TOTAL", "DECODE", "VRAM", "CHARS"
     );
-    println!("{rule}");
+    let _ = writeln!(table, "{rule}");
     for r in &rows {
-        println!(
+        let _ = writeln!(
+            table,
             "{:<30} {:<22} {:<12} {:>7.0}ms {:>7.0}ms {:>7.1}s {:>6.0}t/s {:>6}MiB {:>8}",
             truncate(&r.model, 30),
             truncate(&r.image, 22),
@@ -314,7 +363,8 @@ fn run(args: &Args) -> Result<(), String> {
             r.chars,
         );
     }
-    println!("{rule}");
+    let _ = writeln!(table, "{rule}");
+    print!("\n{table}");
 
     // A cold load inside a measured run makes its timings incomparable with a
     // warm one. Say so, rather than letting the number quietly mislead.
@@ -329,6 +379,96 @@ fn run(args: &Args) -> Result<(), String> {
         }
     }
 
-    println!("\n{} row(s).", rows.len());
+    // Everything the terminal cannot hold: the answers themselves, every rep's
+    // numbers, and enough of the inputs to reproduce the run.
+    let manifest = report::Manifest {
+        started: format!("{:?}", std::time::SystemTime::now()),
+        card: card
+            .as_ref()
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|_| "unavailable".into()),
+        num_ctx: NUM_CTX,
+        reps: args.reps,
+        models: args.models.clone(),
+        images: images
+            .iter()
+            .map(|(n, _, path, bytes, sha)| (n.clone(), path.clone(), *bytes, sha.clone()))
+            .collect(),
+        prompts: prompts
+            .iter()
+            .map(|(n, text, sha)| (n.clone(), sha.clone(), text.clone()))
+            .collect(),
+    };
+    report::write_manifest(&dir, &manifest)?;
+    for r in &runs {
+        report::write_run(&dir, r)?;
+    }
+    let image_names: Vec<String> = images.iter().map(|(n, _, _, _, _)| n.clone()).collect();
+    let key = report::write_answers(&dir, &runs, &image_names)?;
+    report::write_summary(&dir, &table)?;
+
+    println!(
+        "\n{} row(s), {} run(s) saved to {}",
+        rows.len(),
+        runs.len(),
+        dir.display()
+    );
+    println!("  answers.md      blinded, {} image(s) to grade", key.len());
+    println!("  blind-key.json  open this after grading, not before");
+
+    // Said last and said plainly. A benchmark that hides its failures is a
+    // benchmark you will quote without knowing what is missing from it.
+    if !failures.is_empty() {
+        println!("\n{} run(s) produced no usable numbers and were NOT recorded:", failures.len());
+        for f in &failures {
+            println!("  {f}");
+        }
+    }
     Ok(())
+}
+
+/// Check the blind shuffle actually shuffles, without spending a minute of GPU
+/// per sample.
+///
+/// This exists because the first implementation **did not shuffle** — three
+/// consecutive real runs produced the identical permutation, and nothing about
+/// the output said so. A shuffle that quietly returns input order is worse than
+/// none, because `answers.md` still claims to be blind while the grader reads
+/// the models in the order they listed them.
+fn selftest_shuffle() -> std::process::ExitCode {
+    const N: usize = 2;
+    const SAMPLES: usize = 2000;
+
+    let mut first_is_zero = 0usize;
+    for i in 0..SAMPLES {
+        // Distinct seeds standing in for distinct clock readings.
+        let order = report::shuffled_seeded(N, &format!("seed-{i}"));
+        if order[0] == 0 {
+            first_is_zero += 1;
+        }
+    }
+
+    let share = first_is_zero as f64 / SAMPLES as f64;
+    println!("shuffle self-test: {SAMPLES} samples of n={N}");
+    println!("  first slot held index 0 in {first_is_zero} ({:.1}%)", share * 100.0);
+
+    // A fair shuffle of two lands near 50%. The failure this catches is a stuck
+    // permutation, which shows as 0% or 100% — so the band is wide on purpose.
+    // It is a smoke test for "is it moving at all", not a randomness test.
+    if !(0.35..=0.65).contains(&share) {
+        eprintln!("  FAIL: expected roughly half, so the shuffle looks stuck");
+        return std::process::ExitCode::FAILURE;
+    }
+
+    // And the clock-driven path must vary too, which is the bit that broke.
+    let live: std::collections::BTreeSet<Vec<usize>> =
+        (0..200).map(|_| report::shuffled(N)).collect();
+    println!("  clock-seeded distinct permutations over 200 calls: {}", live.len());
+    if live.len() < 2 {
+        eprintln!("  FAIL: every clock-seeded shuffle returned the same order");
+        return std::process::ExitCode::FAILURE;
+    }
+
+    println!("  PASS");
+    std::process::ExitCode::SUCCESS
 }

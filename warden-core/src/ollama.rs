@@ -252,6 +252,12 @@ pub fn generate_measured(
 
     let mut answer = String::new();
     let mut ttft: Option<Duration> = None;
+    // Ollama sends its metrics only in the final done object. If the stream ends
+    // without one - seen when a model degenerates into a repetition loop and the
+    // connection drops mid-answer - every metric stays at zero, and a benchmark
+    // that writes those zeros down reports a model at 0 tok/s as though it had
+    // measured that. Track it, and refuse.
+    let mut saw_done = false;
     let mut m = Measured {
         answer: String::new(),
         ttft: Duration::ZERO,
@@ -276,11 +282,19 @@ pub fn generate_measured(
         answer.push_str(&chunk.response);
 
         if chunk.done {
+            saw_done = true;
             m.prompt_eval_count = chunk.prompt_eval_count.unwrap_or(0);
             m.eval_count = chunk.eval_count.unwrap_or(0);
             m.load_ns = chunk.load_duration.unwrap_or(0);
             m.done_reason = chunk.done_reason.unwrap_or_default();
         }
+    }
+
+    if !saw_done {
+        return Err(format!(
+            "stream ended without the final metrics object after {} chars - the run produced no usable numbers",
+            answer.len()
+        ));
     }
 
     m.answer = answer;
