@@ -38,8 +38,12 @@ only as a panic on stderr, under a real keypress — which is exactly why this f
 
 ## C3 — follow-ups
 
-- [ ] `Ctrl+Alt+W`, wait for an answer, then **`Ctrl+Alt+F`** — a box appears **with a live caret**
-- [ ] Typing works. This is the only place in the app where a keystroke reaches the page
+- [x] `Ctrl+Alt+W`, wait for an answer, then **`Ctrl+Alt+F`** — a box appears **with a live caret** ✔ 2026-09-17
+- [x] Typing works, and the question sends ✔ 2026-09-17
+
+> The focus transition holds: `WS_EX_NOACTIVATE` comes off, `SetForegroundWindow` is accepted
+> after attaching to the foreground thread's input queue, and the caret lands in the box. This was
+> the most likely thing to fail silently, and it did not.
 - [ ] Enter asks again and the answer is about **the same screenshot** — check by scrolling the
       screen first, then asking about something only the *old* screen showed
 - [ ] **`Esc`** closes the box without asking
