@@ -72,6 +72,7 @@ function App() {
   // The follow-up box. Open means the popup is holding the caret — the one time
   // it ever does — so it must always be closed again, including on error.
   const [asking, setAsking] = useState(false);
+  const askingRef = useRef(false);
   const [draft, setDraft] = useState("");
   const askBoxRef = useRef<HTMLInputElement>(null);
 
@@ -165,6 +166,7 @@ function App() {
   // it before, and leaving the window activatable would mean the next summon
   // steals focus from whatever you were typing in.
   const closeAsk = useCallback(() => {
+    askingRef.current = false;
     setAsking(false);
     setDraft("");
     invoke("end_followup").catch(() => {});
@@ -311,10 +313,19 @@ function App() {
   // One key, two halves: enter the pick, then take it.
   useEffect(() => {
     const unlisten = listen("warden://followup", () => {
+      // A toggle, like Ctrl+Alt+W and Ctrl+Alt+Z. Escape turned out not to reach
+      // the page even while the box holds the caret, so the key that opens the
+      // box has to be able to close it — otherwise the only way out is to send a
+      // question you did not want to ask.
+      if (askingRef.current) {
+        closeAsk();
+        return;
+      }
       // Take the caret first, then show the box — focusing an input in a window
       // that cannot be activated does nothing at all.
       invoke("begin_followup")
         .then(() => {
+          askingRef.current = true;
           setAsking(true);
           // After paint, or the input isn't there to focus yet.
           requestAnimationFrame(() => askBoxRef.current?.focus());
@@ -323,6 +334,19 @@ function App() {
     });
     return () => void unlisten.then((f) => f());
   }, []);
+
+  // Escape, from wherever it lands. Tried at the input first; this is the net.
+  useEffect(() => {
+    if (!asking) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeAsk();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [asking, closeAsk]);
 
   useEffect(() => {
     const unlisten = listen("warden://copy", () => {

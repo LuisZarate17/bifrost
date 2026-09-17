@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::menu::{Menu, MenuItem};
+use tauri::Manager;
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Runtime};
 
@@ -63,6 +64,12 @@ impl State {
         }
     }
 }
+
+/// The menu's status line, kept so the poller can rewrite it.
+///
+/// Generic over the runtime the app was built with, which in practice is the one
+/// concrete runtime — but the type has to be named to be stored.
+pub struct StatusLine<R: Runtime>(pub std::sync::Mutex<Option<MenuItem<R>>>);
 
 /// Shared power state. `AtomicU8` because the poller thread, the menu handlers
 /// and the hotkey path all read it, and none of them should be able to block
@@ -128,6 +135,20 @@ pub fn warm<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) {
         // the model *and* the options that change its memory layout, so warming
         // at a different context silently reloads on the next capture and buys
         // nothing at all. C4a proved the match by watching `load_duration`.
+        // Already resident? Say so. The CLI prints "already resident - nothing to
+        // do"; the tray previously just called load, which returned in 0.0s and
+        // looked from the outside like the click had done nothing at all.
+        let already = ollama::ps()
+            .map(|m| ollama::find(&m, power.model()).is_some())
+            .unwrap_or(false);
+        if already {
+            power.end_warming();
+            power.set(State::Ready);
+            println!("[warden] already resident — nothing to warm");
+            refresh(&app, &power);
+            return;
+        }
+
         let result = ollama::load(power.model(), power.num_ctx);
         power.end_warming();
         match result {
@@ -204,14 +225,33 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>, power: &Power) {
     if let Some(tray) = app.tray_by_id("warden") {
         let _ = tray.set_tooltip(Some(&tip));
     }
+    // And the menu's own line, so opening it answers the question a click was
+    // about to ask.
+    if let Some(line) = app.try_state::<StatusLine<R>>() {
+        if let Ok(guard) = line.0.lock() {
+            if let Some(item) = guard.as_ref() {
+                let _ = item.set_text(state.label());
+            }
+        }
+    }
 }
 
 /// Build the tray and start the poller.
 pub fn install<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) -> tauri::Result<()> {
+    // A disabled first line carrying the current state.
+    //
+    // Without it the menu is three verbs and no feedback: clicking "Warm up" on a
+    // model that is already resident returns instantly and looks identical to
+    // nothing happening. The tooltip does say, but only if you think to hover,
+    // and you have just clicked rather than hovered. Tested and found wanting.
+    let status_item = MenuItem::with_id(app, "status", "Off", false, None::<&str>)?;
     let warm_item = MenuItem::with_id(app, "warm", "Warm up", true, None::<&str>)?;
     let off_item = MenuItem::with_id(app, "off", "Turn off", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Warden", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&warm_item, &off_item, &quit_item])?;
+    let menu = Menu::with_items(app, &[&status_item, &warm_item, &off_item, &quit_item])?;
+
+    // Kept so the poller can rewrite the line as the state moves.
+    app.manage(StatusLine(std::sync::Mutex::new(Some(status_item.clone()))));
 
     let handler_power = power.clone();
     TrayIconBuilder::with_id("warden")
