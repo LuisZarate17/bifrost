@@ -10,7 +10,8 @@ Author has read about Rust but never written it. Chunks are sized for that.
 ## Where this stands — 2026-09-15
 
 **16 of 21 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
-C1b, C1c, C2 and C4a done 2026-09-15; C4b, C3 and F1 done 2026-09-16.
+C1b, C1c, C2 and C4a done 2026-09-15; C4b, C3 and F1 done 2026-09-16; F1b and the
+verification round 2026-09-17. **Stage C is complete.**
 
 > **Twenty-one, not nineteen.** C4 split into **C4a** (the CLI, done) and **C4b** (the tray), and
 > the keyboard/wheel work landed as **C1c**. Lettered rather than renumbered, following C1b, so
@@ -257,7 +258,7 @@ Three findings that change later chunks:
 
 ## Stage C — Make it real
 
-### C1 — The corner popup
+### C1 — The corner popup — DONE 2026-09-14 · landed early, alongside B4
 **Do:** Second Tauri window — small, undecorated, **bottom-right**, always on top,
 `WS_EX_NOACTIVATE`.
 **Done when:** You hotkey from your editor and your cursor is still in the editor.
@@ -334,7 +335,7 @@ you share it (the recipient sees an empty rectangle). Nothing it says leaks; tha
 So D1 should record two answers per app, not one: can it **see** the window, and does it **list**
 it.
 
-### C3 — Follow-ups — DONE 2026-09-16 · pending your check
+### C3 — Follow-ups — DONE 2026-09-16 · verified 2026-09-17
 **Did:** `Ctrl+Alt+F` opens a box that asks again about the screenshot already taken. The PNG is
 kept in a managed `LastCapture` and reused; a follow-up with nothing stored **errors rather than
 quietly capturing**, because answering about a freshly-grabbed screen would be the wrong answer to
@@ -367,7 +368,7 @@ tray can show it and `status` cannot.
 wrong context silently reloads and buys nothing. The capture footer now prints `load 0.01s` as
 standing proof that a warm actually served the request.
 
-### C4b — Power control in the tray
+### C4b — Power control in the tray — DONE 2026-09-16 · verified 2026-09-17
 **Why this exists:** the model costs **~8 GB of a 16 GB card** while loaded (A2: +8,151 MiB over
 baseline). Holding it there permanently is wrong when the popup has to work over games that want
 8–12 GB. A timeout is also wrong — it decides for you and leaves you guessing whether the next
