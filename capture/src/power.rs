@@ -67,6 +67,15 @@ fn describe(model: &LoadedModel) -> String {
 }
 
 pub fn status(tag: &str) -> Result<(), String> {
+    // Status reports, it does not act. Starting a server because someone asked a
+    // question would be a surprising thing for a read-only command to do.
+    if !ollama::is_running() {
+        println!("model   {tag}");
+        println!("state   Off");
+        println!("ollama  not running — `capture warm` will start it");
+        return Ok(());
+    }
+
     let loaded = ollama::ps()?;
     let found = ollama::find(&loaded, tag);
     let card = card();
@@ -102,6 +111,14 @@ pub fn status(tag: &str) -> Result<(), String> {
 }
 
 pub fn warm(tag: &str, num_ctx: u32) -> Result<(), String> {
+    // "Get ready" is the one command that should not fail because the thing it
+    // talks to is not up yet. A1 recorded that Ollama has no autostart and does
+    // not survive a reboot; detecting that and printing the command was half a
+    // fix, and the half that still left you typing.
+    if let Some(took) = ollama::ensure_running()? {
+        println!("started Ollama in {:.1}s", took.as_secs_f64());
+    }
+
     if ollama::find(&ollama::ps()?, tag).is_some() {
         println!("already resident — nothing to do");
         return status(tag);

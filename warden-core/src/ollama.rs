@@ -311,3 +311,103 @@ pub fn generate_measured(
 pub const DEFAULT_PROMPT: &str =
     "What am I looking at? If there's an error or something broken, explain it \
      and the fix. Otherwise explain what matters here.";
+
+/// How long to wait for a freshly started Ollama to answer.
+///
+/// A1 measured a cold start well under this; the slack is for a machine that has
+/// just booted and is still busy.
+const START_TIMEOUT: Duration = Duration::from_secs(30);
+const START_POLL: Duration = Duration::from_millis(400);
+
+/// Is Ollama answering?
+pub fn is_running() -> bool {
+    client(Duration::from_secs(2))
+        .map(|c| c.get(url("/api/tags")).send().is_ok())
+        .unwrap_or(false)
+}
+
+/// Start Ollama if it is not already up, and wait until it answers.
+///
+/// Returns how long the start took, or `None` if it was already running.
+///
+/// **`ollama.exe serve`, never `ollama app.exe`** — the latter opens a blocking
+/// first-run GUI and the caller would wait forever on a window nobody asked for.
+/// Recorded in PLAN.md §8 after it cost real time.
+///
+/// Detached deliberately: Warden may be closed while Ollama keeps serving, and a
+/// server that dies with the thing that happened to start it is worse than one
+/// you started yourself.
+pub fn ensure_running() -> Result<Option<Duration>, String> {
+    if is_running() {
+        return Ok(None);
+    }
+
+    let started = Instant::now();
+    spawn_detached()?;
+
+    while started.elapsed() < START_TIMEOUT {
+        if is_running() {
+            return Ok(Some(started.elapsed()));
+        }
+        std::thread::sleep(START_POLL);
+    }
+
+    Err(format!(
+        "started `ollama serve` but it did not answer within {}s",
+        START_TIMEOUT.as_secs()
+    ))
+}
+
+#[cfg(windows)]
+fn spawn_detached() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+
+    // DETACHED_PROCESS so it does not die with us, CREATE_NO_WINDOW so no console
+    // flashes up on a machine where the whole point is not being noticed.
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+    // PATH first; the default install location is the fallback for a shell that
+    // was started before Ollama was installed.
+    // PATH first; the default install location is the fallback for a shell that
+    // was started before Ollama was installed. Built with `join` rather than a
+    // literal, so there are no path separators to escape.
+    let fallback = std::env::var("LOCALAPPDATA").ok().map(|p| {
+        std::path::Path::new(&p)
+            .join("Programs")
+            .join("Ollama")
+            .join("ollama.exe")
+            .to_string_lossy()
+            .to_string()
+    });
+    let mut candidates = vec!["ollama".to_string()];
+    candidates.extend(fallback);
+
+    let mut last = String::new();
+    for exe in candidates.iter().filter(|c| !c.is_empty()) {
+        match std::process::Command::new(exe)
+            .arg("serve")
+            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => return Ok(()),
+            Err(e) => last = format!("{exe}: {e}"),
+        }
+    }
+    Err(format!("could not start Ollama ({last}) — install it, or run `ollama serve` yourself"))
+}
+
+#[cfg(not(windows))]
+fn spawn_detached() -> Result<(), String> {
+    std::process::Command::new("ollama")
+        .arg("serve")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not start Ollama: {e}"))
+}

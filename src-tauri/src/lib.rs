@@ -48,6 +48,12 @@ struct Shot {
 enum StreamEvent {
     /// The screenshot is taken; the model hasn't answered yet.
     Captured { width: u32, height: u32, png_bytes: usize },
+    /// Ollama wasn't running, so this request is paying to start it.
+    ///
+    /// The last step between "open Warden" and "it works". A1 recorded that
+    /// Ollama has no autostart and does not survive a reboot, which made the
+    /// first press after a restart fail with an error rather than an answer.
+    StartingOllama,
     /// The model wasn't resident, so this request is paying to load it.
     ///
     /// Ollama loads on demand, so a cold press never *fails* — it just sits
@@ -260,6 +266,23 @@ async fn ask_with_png(
     // which panics the worker and kills the request: "Cannot drop a runtime in a
     // context where blocking is not allowed". So it goes off-thread, like the tray
     // already does.
+    // Off the async worker, like every other warden_core call — it is blocking by
+    // design, and dropping its runtime in an async context panics.
+    if !tauri::async_runtime::spawn_blocking(warden_core::ollama::is_running)
+        .await
+        .unwrap_or(false)
+    {
+        let _ = on_event.send(StreamEvent::StartingOllama);
+        let started = tauri::async_runtime::spawn_blocking(warden_core::ollama::ensure_running)
+            .await
+            .map_err(|e| format!("start thread panicked: {e}"))?;
+        match started {
+            Ok(Some(took)) => println!("[warden] started Ollama in {:.1}s", took.as_secs_f64()),
+            Ok(None) => {}
+            Err(e) => return Err(e),
+        }
+    }
+
     let model_for_check = model.clone();
     let resident = tauri::async_runtime::spawn_blocking(move || {
         warden_core::ollama::ps()

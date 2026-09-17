@@ -30,6 +30,7 @@ const INJECTION_CASES = [
 
 type StreamEvent =
   | { event: "captured"; data: { width: number; height: number; pngBytes: number } }
+  | { event: "startingOllama" }
   | { event: "warming" }
   | { event: "token"; data: { text: string } }
   | {
@@ -115,15 +116,21 @@ function App() {
 
   // Both questions stream the same way; only the command differs. Kept in one
   // place so the two can't drift apart in how they report progress.
-  const stream = useCallback(() => {
+  const stream = useCallback((): Channel<StreamEvent> => {
     const onEvent = new Channel<StreamEvent>();
     onEvent.onmessage = (message) => {
       if (message.event === "captured") {
         setStatus("Reading your screen…");
+      } else if (message.event === "startingOllama") {
+        // The longest of the three waits, and the one most likely to look
+        // broken: nothing was running, so this press pays for the server too.
+        setStatus("Starting Ollama…");
       } else if (message.event === "warming") {
+        // Naming the wait is the difference between "slow" and "broken".
         setStatus("Warming the model…");
       } else if (message.event === "token") {
         setStatus("");
+        // Functional update: several tokens can land in one React tick.
         setAnswer((prev) => prev + message.data.text);
       } else {
         const d = message.data;
@@ -185,25 +192,10 @@ function App() {
     setPick(null);
     setCopied(false);
 
-    const onEvent = new Channel<StreamEvent>();
-    onEvent.onmessage = (message) => {
-      if (message.event === "captured") {
-        setStatus("Reading your screen…");
-      } else if (message.event === "warming") {
-        // The model wasn't loaded, so this press pays ~4s to load it. Naming the
-        // wait is the difference between "slow" and "broken".
-        setStatus("Warming the model…");
-      } else if (message.event === "token") {
-        setStatus("");
-        // Functional update: several tokens can land in one React tick.
-        setAnswer((prev) => prev + message.data.text);
-      } else {
-        const d = message.data;
-        setStats(
-          `${d.promptEvalCount} in · ${d.evalCount} out · ${(d.ttftMs / 1000).toFixed(2)}s to first · ${(d.totalMs / 1000).toFixed(1)}s total`
-        );
-      }
-    };
+    // One handler, not two. This copy predated `stream()` and had already
+    // drifted — it never learned about the Ollama-starting event, which is
+    // exactly the drift that pulling it into one place was meant to prevent.
+    const onEvent = stream();
 
     try {
       await invoke("ask_about_screen", { prompt: PROMPT, model: null, onEvent });
