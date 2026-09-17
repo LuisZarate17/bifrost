@@ -254,9 +254,20 @@ async fn ask_with_png(
     // Cold? Say so before the wait, not after. Checked rather than assumed: the
     // model may have been warmed from the tray, from the CLI, or by Ollama's own
     // timeout not having expired yet.
-    let resident = warden_core::ollama::ps()
-        .map(|m| warden_core::ollama::find(&m, &model).is_some())
-        .unwrap_or(false);
+    // warden_core is blocking by design - both its other callers drive it from a
+    // thread of their own. Calling it straight from this async command spins up a
+    // second tokio runtime inside reqwest and then drops it in an async context,
+    // which panics the worker and kills the request: "Cannot drop a runtime in a
+    // context where blocking is not allowed". So it goes off-thread, like the tray
+    // already does.
+    let model_for_check = model.clone();
+    let resident = tauri::async_runtime::spawn_blocking(move || {
+        warden_core::ollama::ps()
+            .map(|m| warden_core::ollama::find(&m, &model_for_check).is_some())
+            .unwrap_or(false)
+    })
+    .await
+    .unwrap_or(false);
     if !resident {
         let _ = on_event.send(StreamEvent::Warming);
     }

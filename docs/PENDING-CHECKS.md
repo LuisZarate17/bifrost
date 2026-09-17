@@ -20,10 +20,21 @@ tray by default; drag it out to pin it.
 *Already verified without a human:* the poller catches state it did not cause — warming from the
 CLI moved the tray `Off -> Ready` within 5 s, and releasing moved it back.
 
-## C4b — the cold press
+## C4b — the cold press — **PASSED 2026-09-17**
 
-- [ ] With the model **off**, `Ctrl+Alt+W` shows **"Warming the model…"** before answering, rather
-      than sitting on "Reading your screen…" for an unexplained few seconds
+- [x] With the model **off**, `Ctrl+Alt+W` shows **"Warming the model…"** before answering
+- [x] A real answer follows
+
+**It failed the first time, and the failure is the interesting part.** `ask_about_screen` called
+`warden_core`'s blocking `ollama::ps()` straight from an async command. Blocking reqwest builds its
+own tokio runtime and dropping it in an async context panics the worker — *"Cannot drop a runtime in
+a context where blocking is not allowed"* — which killed the whole request. The popup hung on
+"Reading your screen…" forever while Ollama happily loaded the model nobody was waiting for.
+
+Now it runs through `spawn_blocking`, off the async worker, the way the tray already did.
+
+**Nothing automated caught this.** Clean build, three crates checked, both guards green. It existed
+only as a panic on stderr, under a real keypress — which is exactly why this file exists.
 
 ## C3 — follow-ups
 
