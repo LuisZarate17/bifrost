@@ -79,6 +79,52 @@ nothing — there is no way to keep the wheel while the pointer passes through �
 
 `WARDEN_NO_CLICKTHROUGH=1` puts the mouse back on the popup — wheel, selection and all.
 
+### It moves out of the pointer's way
+
+Bring the pointer near the popup and it glides to the **bottom-left** corner instead — and **stays
+there**. It comes back only when the pointer follows it into the bottom-left.
+
+The bottom-right is the preference, not a home it springs back to. Returning the moment the pointer
+left would mean it moved twice for every one time you got in its way, and the second move is the one
+you didn't ask for. Every fresh summon starts from the preference again.
+
+| Popup is | Pointer arrives at | Result |
+|---|---|---|
+| right | the right corner | → moves **left** |
+| left | the middle, or the right corner | stays **left** |
+| left | the left corner | → moves **right** |
+| right | the left corner | stays **right** |
+
+This exists because the arrow cannot be hidden. **Windows draws the mouse cursor above every
+window** — there is no z-order above the cursor layer — and the usual ways to blank it need the
+window to receive mouse messages, which is exactly what `WS_EX_TRANSPARENT` gives up. Swapping the
+system cursor for a blank one would work and was rejected: it changes the arrow for every
+application at once, and a crash mid-hover would leave the machine with no cursor at all. Moving the
+window is the only fix that costs nothing.
+
+**It goes around, not across.** The window leaves through the near edge, and comes back in from the
+far one. Sliding straight over would drag it through the middle of the screen — across whatever you
+were reading — which is the thing the dodge exists to avoid. The jump between the two off-screen
+positions is invisible because both ends of it are off screen.
+
+Four details that make it behave:
+
+- **The pointer is tested against the corner the popup is actually in**, and nothing else. That one
+  choice is what makes it stick: once it has moved left, the bottom-right is empty, so a pointer
+  there means nothing and it stays put. It is also what stops it oscillating — the rule is "swap if
+  I am being sat on", which is false the instant it has moved out from under you.
+- **Only a settled window is a target.** Mid-swap it is off screen, and testing it there would
+  retrigger against a rectangle nobody can see.
+- **It reads the pointer per frame with `GetCursorPos`**, not from the wheel hook. One cheap call,
+  and the dodge keeps working even on the sessions where the hook failed to install.
+- **The swap is timed, not eased exponentially** like everything else here. An exponential is the
+  right shape for chasing something still moving — the answer growing, the taskbar sliding. A corner
+  swap is a move between two fixed points, and as an exponential it spent its last 580ms crawling
+  the final 27 pixels. 150ms out, accelerating; 340ms back in, decelerating to a real stop.
+
+Measured: 31 positions over 482ms — accelerating away (gaps of 7, 21, 40, 53, 69, 89, 99px), off
+screen at 169ms, then decelerating in and finishing.
+
 ---
 
 ## Copying
