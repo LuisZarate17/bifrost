@@ -176,6 +176,25 @@ async fn ask_about_screen(
 ) -> Result<(), String> {
     let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
+    // Before the capture, not after. Ollama takes the longest of the three
+    // waits - 12.6s measured on a busy card - and reporting it second meant the
+    // popup said "Reading your screen..." while it was actually waiting on a
+    // server that had not started yet.
+    if !tauri::async_runtime::spawn_blocking(warden_core::ollama::is_running)
+        .await
+        .unwrap_or(false)
+    {
+        let _ = on_event.send(StreamEvent::StartingOllama);
+        let started = tauri::async_runtime::spawn_blocking(warden_core::ollama::ensure_running)
+            .await
+            .map_err(|e| format!("start thread panicked: {e}"))?;
+        match started {
+            Ok(Some(took)) => println!("[warden] started Ollama in {:.1}s", took.as_secs_f64()),
+            Ok(None) => {}
+            Err(e) => return Err(e),
+        }
+    }
+
     // See `capture_screen_blocking` — this must not run on an async worker.
     let shot = tauri::async_runtime::spawn_blocking(capture_screen_blocking)
         .await
@@ -268,21 +287,6 @@ async fn ask_with_png(
     // already does.
     // Off the async worker, like every other warden_core call — it is blocking by
     // design, and dropping its runtime in an async context panics.
-    if !tauri::async_runtime::spawn_blocking(warden_core::ollama::is_running)
-        .await
-        .unwrap_or(false)
-    {
-        let _ = on_event.send(StreamEvent::StartingOllama);
-        let started = tauri::async_runtime::spawn_blocking(warden_core::ollama::ensure_running)
-            .await
-            .map_err(|e| format!("start thread panicked: {e}"))?;
-        match started {
-            Ok(Some(took)) => println!("[warden] started Ollama in {:.1}s", took.as_secs_f64()),
-            Ok(None) => {}
-            Err(e) => return Err(e),
-        }
-    }
-
     let model_for_check = model.clone();
     let resident = tauri::async_runtime::spawn_blocking(move || {
         warden_core::ollama::ps()
@@ -420,6 +424,10 @@ const MAX_H: f64 = 760.0;
 const GAP: f64 = 12.0;
 /// Inset from the right edge of the work area, logical px.
 const SIDE: f64 = 16.0;
+/// How close the pointer has to get, in logical px, before the popup moves out
+/// of its way. A little slack either side of the window itself, so a pointer
+/// resting on the very edge doesn't sit half-over it.
+const DODGE_MARGIN: f64 = 8.0;
 
 /// The geometry the popup is steering toward. `fit_window` writes the height the
 /// webview measured; the animator thread reads it at frame rate.
@@ -433,6 +441,11 @@ struct Anim {
     /// show and never stopped the previous one, so a quick hide/show left two
     /// threads setting the position from separate ideas of where it should be.
     generation: AtomicU64,
+    /// Which corner the popup is using. The right is preferred, and it only ever
+    /// leaves because the pointer arrived — so this is sticky: once pushed to the
+    /// left it stays there until the pointer comes to the left too. Reset on
+    /// hide, so every summon starts from the preference again.
+    on_left: std::sync::atomic::AtomicBool,
 }
 
 impl Anim {
@@ -447,6 +460,28 @@ impl Anim {
     /// full height and immediately collapsing.
     fn forget_height(&self) {
         self.target_h.store(0, Ordering::Relaxed);
+    }
+
+    /// Go back to preferring the bottom-right. The stickiness is meant to last as
+    /// long as the answer on screen, not for the life of the process.
+    fn prefer_right(&self) {
+        self.on_left.store(false, Ordering::Relaxed);
+    }
+
+    /// Which corner to use now, given where the popup currently sits.
+    ///
+    /// The pointer is tested against the corner the popup is **actually in** —
+    /// not against the right-hand one. That is what makes it stick: once it has
+    /// moved left, the bottom-right is empty, so a pointer there means nothing
+    /// and it stays put. It only comes back when the pointer follows it left.
+    fn corner(&self, occupied_by_pointer: bool) -> bool {
+        if occupied_by_pointer {
+            let moved = !self.on_left.load(Ordering::Relaxed);
+            self.on_left.store(moved, Ordering::Relaxed);
+            moved
+        } else {
+            self.on_left.load(Ordering::Relaxed)
+        }
     }
 }
 
@@ -486,7 +521,22 @@ fn monitor_rects(hwnd: HWND) -> Option<(RECT, RECT)> {
 /// auto-hiding taskbar never changes the work area: it stays full-screen whether
 /// the bar is in or out, which is why no fixed margin can track it.
 #[cfg(windows)]
-fn target_rect(hwnd: HWND, tray_top: Option<i32>, want_h: i32, scale: f64) -> Option<(i32, i32, i32)> {
+/// Both corners the popup can occupy, plus the shared vertical geometry.
+struct Corners {
+    right_x: i32,
+    left_x: i32,
+    top: i32,
+    height: i32,
+    work: RECT,
+}
+
+#[cfg(windows)]
+fn target_rect(
+    hwnd: HWND,
+    tray_top: Option<i32>,
+    want_h: i32,
+    scale: f64,
+) -> Option<Corners> {
     let (work, monitor) = monitor_rects(hwnd)?;
 
     let gap = (GAP * scale).round() as i32;
@@ -505,8 +555,51 @@ fn target_rect(hwnd: HWND, tray_top: Option<i32>, want_h: i32, scale: f64) -> Op
     // Shrink rather than slide off the top: a tall answer on a short display
     // should scroll, not sit with its header above the screen.
     let height = want_h.max(floor).min((bottom - work.top).max(floor));
+    let top = bottom - height;
 
-    Some((work.right - width - side, bottom - height, height))
+    let right = work.right - width - side;
+
+    // Both corners are returned and the caller picks. Which one is in use is
+    // sticky state that outlives a single frame, so it cannot be decided here.
+    Some(Corners {
+        right_x: right,
+        left_x: work.left + side,
+        top,
+        height,
+        work,
+    })
+}
+
+/// Is the pointer inside this rectangle, with a little slack around it?
+///
+/// Windows draws the mouse cursor above every window — there is no z-order above
+/// the cursor layer, and blanking it needs mouse messages that a click-through
+/// window never receives. Moving the window is the only way it stops sitting
+/// under the pointer.
+#[cfg(windows)]
+fn pointer_in(x: i32, top: i32, width: i32, height: i32, scale: f64) -> bool {
+    let Some((cx, cy)) = cursor_pos() else {
+        return false;
+    };
+    let margin = (DODGE_MARGIN * scale).round() as i32;
+
+    cx >= x - margin && cx <= x + width + margin && cy >= top - margin && cy <= top + height + margin
+}
+
+/// The pointer, in physical screen px. `None` if Windows won't say.
+///
+/// Read per frame from the animator rather than tracked in the mouse hook: it is
+/// one cheap call, and it keeps the dodge working even when the hook failed to
+/// install.
+#[cfg(windows)]
+fn cursor_pos() -> Option<(i32, i32)> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+    let mut point = POINT::default();
+    // SAFETY: writes only into `point`, and reports failure rather than trapping.
+    unsafe { GetCursorPos(&mut point).ok()? };
+    Some((point.x, point.y))
 }
 
 /// Move and resize in **one** Win32 call.
@@ -555,10 +648,22 @@ fn place_now(window: &tauri::WebviewWindow, anim: &Anim) -> Result<(), String> {
         .scale_factor()
         .map_err(|e| format!("no scale factor: {e}"))?;
 
-    let (x, y, h) = target_rect(hwnd, taskbar_top(), anim.target_h.load(Ordering::Relaxed), scale)
+    let c = target_rect(hwnd, taskbar_top(), anim.target_h.load(Ordering::Relaxed), scale)
         .ok_or_else(|| "no monitor info".to_string())?;
 
-    set_bounds(hwnd, x, y, (POPUP_W * scale).round() as i32, h);
+    let width = (POPUP_W * scale).round() as i32;
+    // The preference applies at birth too: if the pointer is already parked in
+    // the bottom-right, the popup is born on the left rather than appearing
+    // under the arrow and then sliding out from under it.
+    let here = if anim.on_left.load(Ordering::Relaxed) {
+        c.left_x
+    } else {
+        c.right_x
+    };
+    let on_left = anim.corner(pointer_in(here, c.top, width, c.height, scale));
+
+    let x = if on_left { c.left_x } else { c.right_x };
+    set_bounds(hwnd, x, c.top, width, c.height);
     Ok(())
 }
 
@@ -729,6 +834,11 @@ fn animate(window: tauri::WebviewWindow, anim: Arc<Anim>, generation: u64) {
     /// remaining distance. At 45ms a 300px jump is visually done in ~150ms —
     /// fast enough not to read as lag, slow enough to read as motion.
     const TAU: f64 = 0.045;
+    /// Horizontal motion gets its own, slower constant. Growing and following the
+    /// taskbar want to keep up with what caused them; the dodge is the only move
+    /// the eye actually follows across the screen, and at the vertical speed it
+    /// reads as a flinch rather than as the window getting out of the way.
+    const TAU_X: f64 = 0.13;
     /// Requested frame interval. Windows' default timer granularity is ~15ms, so
     /// this usually lands near 60Hz — and higher when WebView2 raises the
     /// resolution to animate. Nothing depends on hitting it.
@@ -750,12 +860,35 @@ fn animate(window: tauri::WebviewWindow, anim: Arc<Anim>, generation: u64) {
         // Seeded *at* the target, so the first frame is a snap rather than a
         // glide: `place_now` has already put the window here, and re-animating
         // to the same place would only add a flinch on every show.
-        let Some((x0, y0, h0)) = target_rect(hwnd, taskbar_top(), want(), scale) else {
+        let Some(c0) = target_rect(hwnd, taskbar_top(), want(), scale) else {
             return;
         };
-        let (mut x, mut y, mut h) = (x0 as f64, y0 as f64, h0 as f64);
+        let left0 = anim.on_left.load(Ordering::Relaxed);
+        let x0 = if left0 { c0.left_x } else { c0.right_x };
+        let (mut x, mut y, mut h) = (x0 as f64, c0.top as f64, c0.height as f64);
         let mut sent: Option<(i32, i32, i32)> = None;
         let mut prev = Instant::now();
+
+        // How the horizontal position is being driven.
+        #[derive(Clone, Copy)]
+        enum Swap {
+            /// Following the anchor directly — a taskbar move, a work-area change.
+            Settled,
+            /// On the way out through the near edge.
+            Leaving { since: Instant, from: f64 },
+            /// On the way in from the far edge.
+            Arriving { since: Instant, from: f64 },
+        }
+
+        /// Out through the near edge, then in from the far one. The exit is short
+        /// — nothing is being read once the window has left — and the entry is
+        /// where the time goes, because that is the part actually watched.
+        const OUT: Duration = Duration::from_millis(150);
+        const IN: Duration = Duration::from_millis(340);
+
+        // Which corner the window is heading for, and where it is in a swap.
+        let mut on_left = left0;
+        let mut swap = Swap::Settled;
 
         loop {
             // A newer show, or a hide, has taken over. Stop touching the window.
@@ -773,22 +906,93 @@ fn animate(window: tauri::WebviewWindow, anim: Arc<Anim>, generation: u64) {
                 tray_top = tray.and_then(window_top);
             }
 
-            let Some((tx, ty, th)) = target_rect(hwnd, tray_top, want(), scale) else {
+            let Some(c) = target_rect(hwnd, tray_top, want(), scale) else {
                 return;
             };
+            let work = c.work;
+
+            // Only the settled window is a target: mid-swap it is off screen, and
+            // testing it there would retrigger against a rectangle nobody can see.
+            let here = if on_left { c.left_x } else { c.right_x };
+            let pushed = matches!(swap, Swap::Settled)
+                && pointer_in(here, c.top, width, c.height, scale);
+
+            let want_left = anim.corner(pushed);
+            let (tx, ty, th) = (
+                if want_left { c.left_x } else { c.right_x },
+                c.top,
+                c.height,
+            );
 
             let now = Instant::now();
             // Frame-rate independent: `k` is the fraction of the remaining
             // distance to close over however long this frame *actually* took, so
             // a late frame moves proportionally further instead of stuttering.
-            let k = 1.0 - (-(now - prev).as_secs_f64() / TAU).exp();
+            let dt = (now - prev).as_secs_f64();
+            let k = 1.0 - (-dt / TAU).exp();
+            let kx = 1.0 - (-dt / TAU_X).exp();
             prev = now;
 
-            for (current, target) in [(&mut x, tx as f64), (&mut y, ty as f64), (&mut h, th as f64)]
-            {
+            for (current, target) in [(&mut y, ty as f64), (&mut h, th as f64)] {
                 *current += (target - *current) * k;
                 if (target - *current).abs() < DONE {
                     *current = target;
+                }
+            }
+
+            // Swapping corners goes *around* rather than across: out through the
+            // near edge, then in from the far one. Sliding straight across would
+            // drag the window through the middle of the screen — over whatever
+            // you were reading — which is the thing the dodge exists to avoid.
+            //
+            // Timed, not the exponential chase the rest of this uses. An
+            // exponential is right for following something that is still moving;
+            // this is a move between two fixed points, and measured as an
+            // exponential it spent its last 580ms crawling the final 27 pixels.
+            if want_left != on_left {
+                if !matches!(swap, Swap::Leaving { .. }) {
+                    swap = Swap::Leaving { since: now, from: x };
+                }
+            } else if matches!(swap, Swap::Leaving { .. }) {
+                // The pointer moved away again mid-flight. Come back, rather than
+                // completing a lap to the corner already occupied.
+                swap = Swap::Settled;
+            }
+
+            // Just past the near edge, and just past the far one: the window is
+            // fully off screen at both, so the jump between them is invisible.
+            let past_left = (work.left - width) as f64;
+            let past_right = work.right as f64;
+
+            match swap {
+                Swap::Settled => {
+                    x += (tx as f64 - x) * kx;
+                    if (tx as f64 - x).abs() < DONE {
+                        x = tx as f64;
+                    }
+                }
+                Swap::Leaving { since, from } => {
+                    let edge = if on_left { past_left } else { past_right };
+                    let p = ((now - since).as_secs_f64() / OUT.as_secs_f64()).clamp(0.0, 1.0);
+                    // Accelerating away, so leaving reads as a departure.
+                    x = from + (edge - from) * (p * p);
+                    if p >= 1.0 {
+                        on_left = want_left;
+                        let entry = if on_left { past_left } else { past_right };
+                        x = entry;
+                        swap = Swap::Arriving { since: now, from: entry };
+                    }
+                }
+                Swap::Arriving { since, from } => {
+                    let p = ((now - since).as_secs_f64() / IN.as_secs_f64()).clamp(0.0, 1.0);
+                    // Decelerating in, and actually finishing rather than
+                    // asymptotically approaching.
+                    let eased = 1.0 - (1.0 - p).powi(3);
+                    x = from + (tx as f64 - from) * eased;
+                    if p >= 1.0 {
+                        x = tx as f64;
+                        swap = Swap::Settled;
+                    }
                 }
             }
 
@@ -1330,6 +1534,7 @@ pub fn run() {
                             // on its way out.
                             anim.bump();
                             anim.forget_height();
+                            anim.prefer_right();
                             release_popup_keys(&app);
 
                             // Hide the same way we show: raw Win32. Showing via

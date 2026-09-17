@@ -362,9 +362,15 @@ pub fn ensure_running() -> Result<Option<Duration>, String> {
 fn spawn_detached() -> Result<(), String> {
     use std::os::windows::process::CommandExt;
 
-    // DETACHED_PROCESS so it does not die with us, CREATE_NO_WINDOW so no console
-    // flashes up on a machine where the whole point is not being noticed.
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    // CREATE_NO_WINDOW alone. The first version also passed DETACHED_PROCESS,
+    // and MSDN is explicit that these two and CREATE_NEW_CONSOLE are **mutually
+    // exclusive** — passing more than one is undefined, and what it did in
+    // practice was put a console window on screen, which is the one thing this
+    // flag existed to prevent.
+    //
+    // Nothing is lost by dropping DETACHED_PROCESS: Warden is a windows-subsystem
+    // application with no console of its own, so there is none for the child to
+    // inherit or be tied to.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     // PATH first; the default install location is the fallback for a shell that
@@ -387,7 +393,7 @@ fn spawn_detached() -> Result<(), String> {
     for exe in candidates.iter().filter(|c| !c.is_empty()) {
         match std::process::Command::new(exe)
             .arg("serve")
-            .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
+            .creation_flags(CREATE_NO_WINDOW)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
