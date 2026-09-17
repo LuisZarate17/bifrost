@@ -9,13 +9,14 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ## Where this stands — 2026-09-15
 
-**16 of 21 chunks done.** Stage A complete, Stage B complete, C1 done early alongside B4,
+**16 of 20 chunks.** *(E1 dissolved; D1 and D2 deferred.)* Stage A complete, Stage B complete, C1 done early alongside B4,
 C1b, C1c, C2 and C4a done 2026-09-15; C4b, C3 and F1 done 2026-09-16; F1b and the
 verification round 2026-09-17. **Stage C is complete.**
 
-> **Twenty-one, not nineteen.** C4 split into **C4a** (the CLI, done) and **C4b** (the tray), and
-> the keyboard/wheel work landed as **C1c**. Lettered rather than renumbered, following C1b, so
-> every existing reference to D1, E1 and the rest stays valid.
+> **Twenty, after a lot of moving.** C4 split into **C4a** (CLI) and **C4b** (tray), the keyboard
+> and wheel work landed as **C1c**, and **C5** and **E1** were both dissolved once it was clear they
+> were not tasks anyone could sit down and do. Lettered rather than renumbered throughout, so every
+> existing reference stays valid.
 
 > **Correction, 2026-09-15: nothing is blocked.** The **debug build runs** with Smart App Control
 > enforced — `target/debug/warden.exe` launches, and C2 was verified against Discord, Zoom and
@@ -26,25 +27,18 @@ verification round 2026-09-17. **Stage C is complete.**
 > not a building problem** — it buys a binary that runs on a machine other than this one. That also
 > settles the open SignPath caveat: local development never depended on it.
 
-### The order of work from here
+### What is left
 
-Everything below runs against the debug build. Nothing waits on signing.
+**The build is essentially done.** What remains is one small gap, two habits, and a deferred
+verification round — not a queue of chunks.
 
-| | | Why this order |
+| | | |
 |---|---|---|
-| ~~1~~ | ~~**`capture warm` / `off` / `status`**~~ | **Done 2026-09-15 as C4a.** Closed A1's oldest gap only halfway: `warm` detects Ollama is down and prints the command, but does not start it |
-| **1** | **C4b — the same states in the tray** | Off / Warming / Ready, read from the card via NVML rather than `ollama ps`. Mostly assembly on C4a — and the tray is where **Warming** can finally be shown, since a one-shot CLI cannot observe it |
-| **2** | **C3 — follow-ups** | Ask again against the capture already in memory. The hard part is the focus transition: the window is `focusable: false`, so typing means taking focus and giving it back |
-| **3** | **D1 / D2 — the rest of the sweep** | C2 closed three of D1's ten rows. The remaining ones are genuinely different capture paths — OBS display vs window capture, `getDisplayMedia`, Snipping Tool, Game Bar, Steam |
-| **4** | **F2 — grow the eval set** | The "highest-value habit." Still two screenshots of **one bug**, one language, one theme — thinner than the conclusions drawn from it |
-| **5** | **F1 — bench harness in Rust** | Ports `evals/bench.mjs` off Node. F3 depends on it, and so does P3 |
-
-**Signing, whenever it suits:** a LICENSE, CI that builds the release artifact, and a privacy sweep
-of the local paths in the docs before the repo goes public. It gates distribution only.
-
-> **C1b was not blocked either.** The frontend serves standalone on `localhost:1420` with no
-> `warden.exe` involved, and the renderer is verified by assertion rather than by eye —
-> `npm run check:inert`. Listing it as blocked was wrong.
+| **Start Ollama when it is down** | *the only buildable thing left* | Warden needs Ollama and Ollama does not start itself. `warm` detects it and prints the command, which is half the job. A1 opened this gap and it is still open — it is the last step between "open Warden" and "it works" |
+| **F2 — grow the eval set** | *a habit, not a task* | Two screenshots of one bug, one language, one theme. Every misread during real use is a case worth keeping. This is where E1's annoyance list went |
+| **F3 — re-test when a model lands** | *a trigger, not a task* | Gemma 3 first. `bench` makes it a ten-minute job |
+| **D1 / D2 — the invisibility sweep** | *deferred* | Three of ten paths verified. The rest are assumption. Worth doing before anyone else runs it, or before it matters in an unplanned meeting |
+| **Signing** | *whenever it suits* | Buys a binary for machines other than this one. Needs a LICENSE and CI. No longer urgent now the debug build is a real app |
 
 ---
 
@@ -429,7 +423,16 @@ the app gets opened once and left running, so the friction is per-session rather
 Before two weeks of daily use, prove the invisibility actually holds. **Different apps capture
 every one.** Assume nothing; test each.
 
-### D1 — "Can they see it?" — every result must be NO
+### D1 — "Can they see it?" — every result must be NO — **DEFERRED 2026-09-17**
+
+> **Parked deliberately, not forgotten.** Three of ten rows are answered — Discord, Zoom and Teams
+> all show nothing — and the mechanism is verified: affinity reads back `17`, and B4 disproved the
+> warning that click-through would break it. What is left is breadth, not doubt.
+>
+> **The cost of deferring is knowing less about where *not* to trust it.** Seven capture paths are
+> currently assumption rather than evidence. That is a fine trade while the app is used by one
+> person who knows which three were tested; it stops being fine the moment anyone else runs it, or
+> the moment it matters in a meeting that was not planned.
 
 | App | Capture path | Result |
 |---|---|---|
@@ -450,7 +453,7 @@ is not in the new screenshot.
 **If any row fails:** that app is a known gap. Write it down in the README rather than pretending
 the feature is absolute — you'll be relying on it in a meeting one day.
 
-### D2 — "Can I see it?" — expected results vary
+### D2 — "Can I see it?" — expected results vary — **DEFERRED 2026-09-17**, with D1
 
 | Situation | Expect |
 |---|---|
@@ -469,7 +472,20 @@ your bug.
 
 ## Stage E — Live with it
 
-### E1 — Two weeks
+### ~~E1 — Two weeks~~ — DISSOLVED 2026-09-17
+
+**Not cut — recognised as the wrong shape.** "Use it for two weeks" was never a task anyone could
+sit down and do; it is what happens now that the app opens on its own. Tracking it as an open chunk
+implied someone had to schedule it.
+
+**What it was protecting still matters**, and moves to where it belongs:
+
+| Part | Where it went |
+|---|---|
+| *"Done when you reach for it without deciding to"* | The honest measure of whether this was worth building. Kept as the bar, not as a ticket |
+| *"Tune the default prompt, ~20 rewrites"* | Already has a home: the prompt is a dimension in `bench`, and C1b established that a variant ships only if the eval set holds |
+| *"Keep a scratch list of what annoyed you"* | **F2.** Every misread during real use becomes a case. That was always the valuable half |
+
 **Do:** Use it. Tune the default prompt — expect ~20 rewrites, but run each candidate against
 the eval set (F1) rather than judging it on the screenshot in front of you. Keep a scratch list of what
 actually annoyed you.
