@@ -9,7 +9,7 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ## Where this stands — 2026-09-15
 
-**16 of 20 chunks.** *(E1 dissolved; D1 and D2 deferred.)* Stage A complete, Stage B complete, C1 done early alongside B4,
+**16 of 19 chunks.** *(C5, E1 and F3 dissolved; D1, D2 and F2 deferred to one testing round.)* Stage A complete, Stage B complete, C1 done early alongside B4,
 C1b, C1c, C2 and C4a done 2026-09-15; C4b, C3 and F1 done 2026-09-16; F1b and the
 verification round 2026-09-17. **Stage C is complete.**
 
@@ -29,16 +29,26 @@ verification round 2026-09-17. **Stage C is complete.**
 
 ### What is left
 
-**The build is essentially done.** What remains is one small gap, two habits, and a deferred
-verification round — not a queue of chunks.
+**Nothing to build.** One deferred testing round, and distribution if it is ever wanted.
 
-| | | |
-|---|---|---|
-| **Start Ollama when it is down** | *the only buildable thing left* | Warden needs Ollama and Ollama does not start itself. `warm` detects it and prints the command, which is half the job. A1 opened this gap and it is still open — it is the last step between "open Warden" and "it works" |
-| **F2 — grow the eval set** | *a habit, not a task* | Two screenshots of one bug, one language, one theme. Every misread during real use is a case worth keeping. This is where E1's annoyance list went |
-| **F3 — re-test when a model lands** | *a trigger, not a task* | Gemma 3 first. `bench` makes it a ten-minute job |
-| **D1 / D2 — the invisibility sweep** | *deferred* | Three of ten paths verified. The rest are assumption. Worth doing before anyone else runs it, or before it matters in an unplanned meeting |
-| **Signing** | *whenever it suits* | Buys a binary for machines other than this one. Needs a LICENSE and CI. No longer urgent now the debug build is a real app |
+#### The testing round — an afternoon, whenever
+
+Everything remaining is the same activity: sitting down and putting the app through things.
+
+| | |
+|---|---|
+| **D1 — can they see it?** | Seven capture paths left. OBS counts twice; display and window capture are different mechanisms and can disagree. Then browser `getDisplayMedia`, Snipping Tool, Game Bar, Steam, Slack. **Two answers per app**: can it *see* the window, and does it *list* it |
+| **D2 — can I see it?** | Over a borderless game, fullscreen video, another always-on-top window. Invisible over an exclusive-fullscreen game and the lock screen is correct — confirm it fails cleanly |
+| **F2 — grow the eval set** | Put a variety of screens in front of it and record what it gets wrong. Two screenshots of one bug is thinner than the conclusions drawn from it |
+
+**The deferral has a cost, and it is not zero.** Seven capture paths are assumption rather than
+evidence. That is a fine trade for one person who knows which three were tested. It stops being
+fine the moment anyone else runs it, or the moment it matters in a meeting that was not planned.
+
+#### Not tasks
+
+- **F3** — fires when a model ships. `bench` makes it ten minutes. Gemma 3 first
+- **Signing** — a LICENSE and CI. Buys a binary for machines other than this one, and nothing else
 
 ---
 
@@ -540,7 +550,17 @@ the eval set stays local and is never committed, private repo or not.
 **Done when:** testing a new model *or a new prompt* is one command, and you can see whether a
 change regressed anything.
 
-### F2 — Grow the eval set from real failures
+### F2 — Grow the eval set — **FOLDED INTO THE TESTING ROUND 2026-09-17**
+
+> **The trade, stated so it is a choice.** The original design was to capture each failure *the
+> moment it happens in real use* — because that is the only time the screen still exists. Batched
+> into a testing session instead, past failures are unrecoverable; what a session can do is put a
+> variety of screens in front of the model deliberately and record what it gets wrong.
+>
+> That is real and it works. It is **less representative**, because the screens are chosen rather
+> than encountered. Accepted knowingly: a session that happens beats a habit that does not.
+
+### F2 — the original intent
 **Do:** Every time the model misreads something during normal use, **save that screenshot into
 the eval folder** with a note on what it should have said.
 
@@ -548,7 +568,15 @@ This is the highest-value habit in the whole project. Your E1 annoyance list bec
 suite that's specific to how you actually work — which is exactly what no public benchmark
 gives you. Twenty real failures beats any leaderboard.
 
-### F3 — Re-run it when something new lands
+### ~~F3 — Re-run it when something new lands~~ — DISSOLVED 2026-09-17
+
+**Not a task — a trigger.** It fires when a model ships, not when anyone schedules it, and `bench`
+already makes it a ten-minute job. Tracking it as open implied someone had to decide to do it.
+
+**The candidate list survives** (Gemma 3 first, then MiniCPM-V 4.5, InternVL, Qwen3-VL 30B) as the
+thing to reach for when the trigger fires. See the table below.
+
+### F3 — candidates, for when something new lands
 **Candidates to try over time:**
 
 | Model | Why it's worth a slot |
