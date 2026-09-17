@@ -27,23 +27,30 @@ clean, all four crates checked, both guards green.
 3. **`Esc` did not close the follow-up box**, and the tray menu **worked while looking broken** —
    both actions fired every time, but nothing on screen said so.
 
-## Still untested
+## Cleared 2026-09-17
 
-- [ ] **Does `Ctrl+Alt+F` collide with anything you use?** With an answer on screen, try it in
-      VS Code and the browser. C1c established that `RegisterHotKey` reports every
-      `Ctrl+Alt+<letter>` as free because it only knows about *global* registrations, never what
-      an application binds internally — so this cannot be detected in advance, by us or by the OS.
-      `Ctrl+Alt+C` and `Ctrl+Alt+Q`/`A` were all withdrawn for exactly this.
+- [x] **`Ctrl+Alt+F` collides with nothing in daily use.** Tried against the applications actually
+      open on this machine and nothing stopped responding.
+
+> Worth stating precisely what that does and does not prove. It is **absence of a known
+> collision**, not proof there is none — `RegisterHotKey` reports every `Ctrl+Alt+<letter>` as free
+> because it only knows about *global* registrations, never what an application binds internally.
+> `Ctrl+Alt+C` and `Ctrl+Alt+Q`/`A` were withdrawn on exactly this evidence, so if some app ever
+> starts behaving oddly while an answer is on screen, this is the first thing to suspect.
+
+**Nothing is waiting on a human.** Everything built through 2026-09-17 has been used, not just
+compiled.
 
 ## Open, and bigger than a check
 
-**The app needs a terminal running Vite to work at all.** `cargo build` bakes `devUrl` into debug
+**RESOLVED 2026-09-17 — `npm run app`.** The app needed a terminal running Vite to work at all: `cargo build` bakes `devUrl` into debug
 builds, and the debug build is the only one Smart App Control lets run. That breaks C5's premise —
 "you open Warden when you want the hotkey live" — because right now you also have to keep a dev
 server up.
 
-`npx tauri build --debug` looks like the fix: a debug-profile binary that bundles `frontendDist`
-and needs no server. Confirmed the flag exists; not yet tried.
+Fixed by `npm run app` (`tauri build --debug --no-bundle`), plus suppressing the console so the app
+survives the terminal that launched it, plus Desktop and Start Menu shortcuts so it can be opened
+at all. Verified: runs with no dev server, survives closing VS Code and every terminal.
 
 ## C2 — the picker disclosure
 
