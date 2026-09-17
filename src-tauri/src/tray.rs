@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::Manager;
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Runtime};
@@ -248,7 +248,12 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) -> tauri::Resu
     let warm_item = MenuItem::with_id(app, "warm", "Warm up", true, None::<&str>)?;
     let off_item = MenuItem::with_id(app, "off", "Turn off", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit Warden", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&status_item, &warm_item, &off_item, &quit_item])?;
+
+    // A separator above Quit, because it sits directly under "Turn off" and the
+    // two got confused twice in one testing session. One is reversible in a
+    // click; the other ends the process and takes the hotkey with it.
+    let gap = PredefinedMenuItem::separator(app)?;
+    let menu = Menu::with_items(app, &[&status_item, &warm_item, &off_item, &gap, &quit_item])?;
 
     // Kept so the poller can rewrite the line as the state moves.
     app.manage(StatusLine(std::sync::Mutex::new(Some(status_item.clone()))));
