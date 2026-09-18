@@ -1,0 +1,341 @@
+# Stage G — Execution Packet
+
+**Paste this into a fresh chat.** Self-contained; it doesn't assume the earlier conversations.
+
+---
+
+## Context
+
+I'm building a **local chat desktop app** — Claude Desktop's shape, but every token stays on this
+machine. Conversations, history, attachments, and eventually tool calling.
+
+It is a **new app in an existing workspace**, not a feature bolted onto the one already there.
+
+The existing app is **Warden**: a summoned overlay that screenshots the screen on a hotkey and
+(Stage C complete; `BUILD.md` says "nothing to build"). **Only G3 changes Warden**, and only to make
+it follow the model this app chooses.
+
+**Why a separate app, not a second window.** PLAN.md §0 makes Warden *"summoned, never ambient."*
+A chat app is the exact opposite — windowed, persistent, focused, left open. One binary cannot
+hold both rules without one of them losing. They share a backend instead, which costs nothing:
+Ollama is already a server anything on this machine can reach, and `warden-core` exists precisely
+*"now that there are two callers."* This is the third caller.
+
+**About me:** Warden was my first Rust. Explain what you're doing rather than just handing me
+code — I want to actually learn this.
+
+**Hard rule:** everything runs locally. No cloud API calls, ever, for any reason. If a local model
+is bad at something, the answer is a different local model, not a fallback.
+
+---
+
+## Machine (verified at Stage B — don't re-derive)
+
+- RTX 5070 Ti, **16 GB VRAM**, Blackwell (sm_120)
+- Ryzen 7 9700X, 31 GB RAM
+- **One monitor, 1920×1080, 100% scaling**
+- Windows 11 Pro build 26200
+- Rust 1.98.1 MSVC · Node 24.18 · WebView2 Runtime installed
+- Ollama 0.33.3 · `qwen3-vl:8b-instruct-q4_K_M` *(reports `completion` + `vision` + `tools` — one model can serve both apps)*
+- Repo root: `C:\Users\you\source\repos\warden`
+
+---
+
+## What already exists
+
+```
+warden/
+├── warden-core/      SHARED — ollama (ps/find/load/unload/is_running/ensure_running), vram (NVML)
+├── capture/          the CLI: screen → PNG → Ollama → streamed answer, plus warm/off/status
+├── src-tauri/        Warden, the overlay app — hotkey, popup, tray, power control
+├── src/              Warden's React frontend — Answer.tsx, CodeBlock.tsx
+├── bench/            F1 harness: model × image × prompt → TTFT, decode rate, resident VRAM
+├── evals/            cases.md rubric, fixtures/, saved runs
+└── docs/             A1–A4, B1–B4, C1b, C2, C4a, F1 results + shortcuts.md
+```
+
+### What you reuse, and what you write fresh
+
+| Reuse as-is | Where |
+|---|---|
+| Streaming Markdown renderer with mid-stream fence repair | `src/Answer.tsx` + `remend` |
+| Shiki highlighting — lazy, JS regex engine, no WASM | `src/CodeBlock.tsx` |
+| XSS/exfil hardening, verified by assertion | `npm run check:inert` |
+| Power control measured against **NVML**, not `ollama ps` | `warden-core::vram` |
+| Ollama autostart, ps/find/load/unload | `warden-core::ollama` |
+| Token streaming Rust → React over `tauri::ipc::Channel` | B2's pattern in `src-tauri/src/lib.rs` |
+| Model benchmarking | `bench/` |
+
+| Write fresh | Why |
+|---|---|
+| **`/api/chat` client** | `warden-core` only speaks `/api/generate` — no roles, no messages array, and it **cannot carry tools at all** |
+| Conversation storage | Warden deliberately saves nothing |
+| Window chrome, conversation list, composer | Warden has no chrome — it's a click-through overlay |
+
+---
+
+## Four decisions already made — do not relitigate them mid-build
+
+These are cheap now and a rewrite later. That is the only reason they are settled up front.
+
+1. **`/api/chat`, never `/api/generate`.** Messages-with-roles is the substrate for everything
+   above it: an attachment is a field on a message, a tool call is a field on a message.
+   `/api/generate` has nowhere to put either.
+
+2. **The stored message record carries fields it does not use yet** — `images`, `tool_calls`,
+   `model`, `created_at`. A record of `{role, content}` forces a migration of a database already
+   holding real conversations the moment G5 lands.
+
+3. **Shared config, not a third hardcoded constant.** The prompt already exists in three places
+   (`warden-core::DEFAULT_PROMPT`, `capture/prompt.txt`, and a `const` in `src/App.tsx` whose own
+   comment assigns the job to a chunk that was dissolved). Do not add a fourth.
+
+4. **One current model, and this app owns it.** Not per-app overrides — a single resident model
+   that both apps use. This app is the switchboard: it loads, unloads, tests and picks. Warden
+   reads that choice and follows it.
+
+   **This is the shape the hardware already forces.** 16 GB will not hold two 8B models, so
+   "per-app model" was never real — it was two apps evicting each other's runner. One resident
+   model, chosen in one place, is the honest version.
+
+   **And it is affordable, because capability is queryable** — see the `/api/show` finding below.
+   `qwen3-vl:8b-instruct-q4_K_M` reports `["completion", "vision", "tools"]`, so a single resident
+   model can serve the chat window, Warden's screenshots, and tool calling at once.
+
+---
+
+## Hard-won facts that carry into Stage G
+
+**The Ollama contract** (measured across 40+ requests at A2, re-confirmed at A4 and F1):
+- Raw base64 for images, **no `data:` prefix**.
+- **`num_ctx` must be set explicitly**, inside `options`. Ollama derives its default from VRAM and
+  lands at 4k on this card. A 1080p screenshot alone costs **2,042 image tokens**.
+- Response is NDJSON. Metrics arrive only on the final object where `done: true`, durations in **ns**.
+- Ollama keys a loaded runner by the model **and** by `num_ctx`. Warming at one context and asking
+  at another silently tears the runner down and reloads — costing seconds and buying nothing.
+  `load_duration` is the tell: after a real warm it reads ~0.00s.
+
+> **`/api/chat`'s exact request shape is the one thing here that is NOT measured.** Everything else
+> in this section was verified on this machine. Confirm the chat endpoint against the running
+> Ollama before building on it — this repo's standard is measured, not assumed.
+
+**`/api/show` reports capabilities — measured 2026-09-18 on Ollama 0.33.3.** This is what makes the
+switchboard buildable, so it is worth stating exactly:
+
+```
+POST /api/show  {"model": "qwen3-vl:8b-instruct-q4_K_M"}
+  → "capabilities": ["completion", "vision", "tools"]
+```
+
+Three consequences:
+
+- **The picker can label models** rather than making you remember which does what.
+- **Warden can refuse cleanly.** A model with no `vision` cannot answer about a screenshot, and
+  the popup should say so in its header instead of streaming a confident guess about an image the
+  model never received.
+- **One model can serve everything.** The tag Warden already uses declares all three capabilities,
+  so the common case is one resident model and no switching at all.
+
+Installed on this machine at the time of writing: `qwen3-vl:{8b,4b}-instruct-{q8_0,q4_K_M}` and
+`llama3.1:8b`. **`llama3.1:8b` is the useful negative test** — text-only, so it is exactly what
+Warden must detect and decline.
+
+**`warden-core` is blocking by design.** Calling it directly from an `async` Tauri command drops a
+tokio runtime inside an async context and kills the worker. This already happened once: the popup
+hung on "Reading your screen…" forever while Ollama loaded a model nobody was waiting for. Every
+call goes through `spawn_blocking`.
+
+**Never return the answer as a command's `Result`.** Tauri sends exactly one IPC reply per
+`invoke()`, so a command whose return value carries the payload buffers the whole thing. The
+`Result` carries success or failure; every token goes through the `Channel`. The tell is that the
+answer arrives all at once.
+
+**`reqwest` must keep `native-tls`** or the Windows build demands NASM:
+```toml
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json", "stream"] }
+```
+
+**Build with `npm run app`, never a plain `cargo build`.** `cargo build` bakes `devUrl` into debug
+binaries, so the window loads from `localhost:1420` and shows WebView2's error page unless Vite
+happens to be running. `npm run app` is `tauri build --debug --no-bundle` — same profile, frontend
+embedded.
+
+**Smart App Control is ON** and judges each binary by content hash. Release builds are refused;
+debug builds usually run, and when one is blocked, rebuilding for a fresh hash clears it.
+
+**Suppress the console and redirect stdout/stderr to a log file** at the Win32 level, as
+`src-tauri/src/main.rs` does. A console application dies with the terminal that launched it, and
+those logs are what found the last three real bugs.
+
+**16 GB will not hold two 8B models.** The model costs **+7,873 to +8,193 MiB** resident. If this
+app and Warden want different models, they take turns — `warm`/`off` is the switching mechanism.
+
+**The renderer's refusals were written for untrusted screen text.** `img` renders nothing and `a`
+renders as plain text, because Warden's input is whatever was on screen. In a conversation *you*
+started, killing links is probably wrong. Revisit deliberately — and keep `rehype-raw` absent
+either way. `HIGHLIGHTABLE` is also just `{rust, rs}`, which is thin for general chat.
+
+---
+
+## The order, and what gates what
+
+Everything hangs off G1. The one hard gate is G0 → G6: if a local model cannot emit reliable
+structured calls, the last chunk does not get built, and it is half an hour to find out.
+
+```mermaid
+flowchart TD
+    G0["G0 · tool-call probe<br/><i>half an hour, no app code</i>"]
+    G1["G1 · the spine<br/><i>a conversation you can hold</i>"]
+    G2["G2 · the switchboard<br/><i>pick, load, label</i>"]
+    G3["G3 · Warden follows<br/><i>the one chunk touching Warden</i>"]
+    G4["G4 · persistence"]
+    G5["G5 · attachments"]
+    G6["G6 · tools / MCP"]
+
+    G1 --> G2 --> G3
+    G1 --> G4 --> G5
+    G1 --> G6
+    G0 -. "gates" .-> G6
+
+    classDef probe stroke-dasharray:5 4
+    class G0 probe
+```
+
+**G3 is the one that answers the original question** — switch the model in the app, and the popup
+follows without a restart.
+
+---
+
+## G0 — Can the model call tools at all?
+
+**Before any app code.** This is the one result that can invalidate a whole chunk.
+
+> **`bench/` cannot run this as it stands.** It goes through `warden_core::ollama::generate_measured`,
+> which posts to **`/api/generate`** — an endpoint that cannot carry a `tools` array at all. So G0's
+> real first move is a small `/api/chat` function in `warden-core`: messages in, `tool_calls` out.
+> That is not wasted work — it is the same client G1 needs, written a chunk early and with a much
+> smaller thing depending on it.
+
+**Do:** Define two or three small tools as JSON schemas — something like `get_time`,
+`read_file(path)`, `add(a, b)`. Send them to `/api/chat` with `tools` set, across ~10 prompts:
+some that clearly need a tool, and **at least two that clearly do not**. Record, per candidate
+model: does the API accept a `tools` array for it at all; how many well-formed calls came back;
+how many carried correct arguments; and how often it invented a call when none was needed.
+
+**Done when:** you have a pass rate per model written into `docs/G0-results.md`, and a decision —
+G4 is worth building, or it waits for a model that can carry it.
+
+**Watch for:** a model that ignores `tools` entirely and answers in prose. That is a fail, not an
+error, and nothing will tell you except reading the output. Test the **negative** cases too — a
+model that calls a tool every time is as useless as one that never does.
+
+---
+
+## G1 — The spine
+
+**Do:** A new Tauri app in the workspace. One window, one conversation, `/api/chat` streamed over
+a `Channel`, rendered with Warden's `Answer.tsx`. A model picker populated from Ollama's own list.
+Power control reusing `warden-core::vram`, so you can see what the card actually holds.
+
+**Done when:** you can hold a real multi-turn conversation in a built `.exe`, and the second turn
+demonstrably knows what the first one said.
+
+**Watch for:** context. `num_ctx` is a budget and a conversation spends it every turn. Decide now
+what happens when it fills — drop the oldest turns, or summarize — because "it got strange after a
+while" is what an unmanaged context looks like from the outside.
+
+---
+
+## G2 — The switchboard
+
+**This is the chunk that makes it a hub rather than a chat box.**
+
+**Do:** A model picker that lists what `/api/tags` reports, labelled with the capabilities
+`/api/show` gives for each — vision, tools, completion. Load and unload from the UI, reusing
+`warden-core`'s `load`/`unload` and showing the real card figure from `warden-core::vram`. The
+choice is written to the shared config, which is the single source of truth for "current model".
+
+**Done when:** you can switch the resident model from the UI, watch the card's figure move to match,
+and see at a glance which models can see images and which can call tools.
+
+**Watch for:** `keep_alive` and `num_ctx`. Ollama keys a runner by model **and** context, so the
+switchboard must load at the same `num_ctx` the apps ask with, or the next request silently reloads.
+This is already solved in `warden-core::ollama::load` — use it rather than rolling a new call.
+
+**Not this chunk:** wiring `bench/` into the UI. Testing models from a button is a later sitting;
+`bench/` already works from the command line and the picker is worth having first.
+
+---
+
+## G3 — Warden follows the app
+
+**Do:** Replace Warden's `DEFAULT_MODEL` constant with a read of the shared config, **on every
+summon**. No IPC, no file watching, no daemon — Warden is summoned, so it re-reads when it wakes up.
+Then check the model's `capabilities` before sending a screenshot, and if `vision` is absent, say so
+in the popup header instead of asking anyway.
+
+**Done when:** you switch models in the app, press `Ctrl+Alt+W`, and the popup answers using the new
+model without Warden having been restarted. Then load `llama3.1:8b` and confirm the popup tells you
+it cannot see images rather than guessing.
+
+**Watch for:** the capability check costs a round trip to `/api/show`. Cache it per tag — a model's
+capabilities do not change between summons, and the popup's whole appeal is that it is instant.
+
+**This is the chunk that touches Warden.** Keep it to the two changes above: read the config, check
+the capability. Anything else belongs in `warden-core` or in this app.
+
+---
+
+## G4 — Persistence
+
+**Do:** Conversations survive a restart. A list you can pick from, rename and delete.
+
+**Done when:** you close the app, reopen it, and continue a conversation from yesterday.
+
+**Watch for:** the record shape from decision #2. Write the unused fields now.
+
+---
+
+## G5 — Attachments
+
+**Do:** Images and text files into a message. Images ride as base64 on the message itself.
+
+**Done when:** you drop a screenshot into the composer and ask about it.
+
+**Watch for:** the token budget again. An image is ~2,042 tokens of your 8,192 — two images and a
+few turns of history is the whole context. Show what a message costs.
+
+---
+
+## G6 — Tools / MCP
+
+**Gated on G0.** Do not start this chunk until G0 has a number.
+
+**Do:** A tool-call loop — the model requests a call, the app runs it, the result goes back as a
+message, the model continues. Start with **one** local tool, hardcoded, no MCP. MCP is a transport
+over this loop, not a replacement for it, and a loop that already works is far easier to debug.
+
+**Done when:** a single round trip works end to end — you ask something that needs the tool, watch
+the call go out, and get an answer that used the result.
+
+**Watch for:** every tool is code the model chose to run. Decide what it is allowed to touch
+before it can touch anything, and make the app show you what it is about to do.
+
+---
+
+## Done with Stage G when
+
+You keep it open, and reach for it instead of a browser tab.
+
+That is deliberately the same bar as Warden's: **a feature earns its keep by being used, not by
+sounding good** (PLAN.md §0). G1–G4 have to be worth keeping even if G6 never ships.
+
+## Do not
+
+- **Do not change Warden outside G3.** G3 is the one chunk that touches it, and it is two changes:
+  read the config, check the capability. Anything else both apps need goes in `warden-core`.
+- **Do not start G6 before G0.** The probe is half an hour and can save a whole chunk.
+- **Do not add a fourth copy of the prompt or the model tag.** See decision #3.
+- **Do not build MCP first.** One hardcoded tool, then the loop, then the transport.
+- **Do not give the two apps separate model settings.** See decision #4 — the card cannot hold two
+  8B models, so separate settings just means the apps evict each other.
