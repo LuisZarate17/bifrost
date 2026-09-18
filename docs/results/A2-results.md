@@ -36,7 +36,7 @@ do not exist and 404 on pull. The real tags carry `-instruct-`. The claim that 8
 
 ## Accuracy — the thing that decided it
 
-Graded against [evals/cases.md](../evals/cases.md). All three repetitions of every cell produced
+Graded against [evals/cases.md](../../evals/cases.md). All three repetitions of every cell produced
 **byte-identical output** (temperature 0, seed 42), so single-rep grading is safe.
 
 ### case-01 · terminal with the compiler error visible

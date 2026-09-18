@@ -3,8 +3,34 @@
 Press a hotkey, get an answer about whatever is on screen, from a model that never leaves the
 machine.
 
-**Status:** **Stage A is complete.** One terminal command captures the screen and streams a real
-answer about it. No GUI yet — that's Stage B.
+**Status: finished and in use.** Stages A–C are complete. `Ctrl+Alt+W` anywhere captures the
+What is left is one afternoon of testing — see [docs/BUILD.md](docs/BUILD.md).
+
+**Next up:** a local chat app that shares Warden's model and decides which one is loaded. Not
+started — the plan is [stages/STAGE-G.md](stages/STAGE-G.md).
+
+## The app
+
+```
+npm run app                          # build it
+src-tauri/target/debug/warden.exe    # or the Desktop / Start Menu shortcut
+```
+
+**Use `npm run app`, not `cargo build`.** A plain `cargo build` bakes `devUrl` into the binary, so
+the window loads from `localhost:1420` and shows WebView2's "can't reach this" page unless a Vite
+dev server happens to be running. `npm run app` is `tauri build --debug --no-bundle`: same debug
+profile, but the frontend is embedded, so the app opens and works on its own.
+
+Release builds are refused by Smart App Control on this machine; debug builds usually run, and when
+one is blocked, rebuilding for a fresh hash clears it. See [docs/PLAN.md](docs/PLAN.md) §3.
+
+**Every control Warden has is in [docs/shortcuts.md](docs/shortcuts.md)** — there is no menu and no
+window chrome, so that file is the interface.
+
+## The CLI
+
+The same pipeline without the GUI in the way. It is also ahead of the app on controls: a capture
+delay, a model flag, and a prompt you can edit without rebuilding.
 
 ```
 cd capture
@@ -17,76 +43,50 @@ cargo run -- off                                # release it, give the card its 
 cargo run -- status                             # what is loaded, per Ollama and per the card
 ```
 
-Needs `ollama serve` running. The prompt lives in `capture/prompt.txt`, not in source.
-
-Every control the app has is in **[docs/shortcuts.md](docs/shortcuts.md)** — there is no menu, tray
-item or window chrome, so that file is the interface.
-
-## The app
-
-```
-npm run app                 # build it
-src-tauri/target/debug/warden.exe
-```
-
-**Use `npm run app`, not `cargo build`.** A plain `cargo build` bakes `devUrl` into the binary, so the
-window loads from `localhost:1420` and shows WebView2's "can't reach this" page unless a Vite dev
-server happens to be running. `npm run app` is `tauri build --debug --no-bundle`: same debug profile,
-but the frontend is embedded, so the app opens and works on its own.
-
-Release builds are refused by Smart App Control on this machine; debug builds usually run, and when
-one is blocked, rebuilding for a fresh hash clears it. See [PLAN.md](PLAN.md) §3.
-
-The model holds **~8 GB** while resident, so `warm` and `off` are explicit rather than on a timer —
-a timeout decides for you and leaves you guessing whether the next press is instant or a stall.
-`status` reads the card through NVML, not `ollama ps`: the two disagree, and only one of them is
-the truth. After a `warm`, a capture reports `load 0.00s`, which is how you know the warm took.
-
-- **A1 — toolchain.** Rust 1.98.1 (MSVC), Ollama 0.33.3, GPU verified at 152 tok/s.
-  See [docs/A1-results.md](docs/A1-results.md).
-- **A2 — model bake-off.** Ran the full 2×2 (4B/8B × Q4_K_M/Q8_0) on real screenshots of this
-  repo's own code. **Chose `qwen3-vl:8b-instruct-q4_K_M`** — the only candidate that correctly
-  concluded a broken file wouldn't compile. Both 4B models called it fine, and higher precision
-  bought nothing. See [docs/A2-results.md](docs/A2-results.md).
-- **A3 — screen capture.** `capture/` grabs the primary monitor via Windows Graphics Capture and
-  writes a 1920×1080 PNG. Verified against fullscreen hardware-decoded video — no black frame,
-  so it is genuinely WGC and not GDI. See [docs/A3-results.md](docs/A3-results.md).
-- **A4 — the whole loop.** PNG encoded in memory, base64, POSTed to Ollama, answer streamed
-  token by token. Cross-validates A2 exactly: 2,077 tokens in, 1.19 s to first token.
-  See [docs/A4-results.md](docs/A4-results.md).
-- **B1 — the app shell.** Tauri 2 + React + TypeScript. A window titled Warden opens; `capture/`
-  still works untouched. See [docs/B1-results.md](docs/B1-results.md).
-- **B2 — streaming into the UI.** Tokens reach React through a Tauri `Channel` as they arrive,
-  in dev and in the packaged 4.8 MB `.exe`. See [docs/B2-results.md](docs/B2-results.md).
-
-- **B3 — capture behind a button.** Click and Warden screenshots your screen and streams an answer
-  screenshot. See [docs/B3-results.md](docs/B3-results.md).
-
-- **B4 + C1 — hotkey and corner popup.** `Ctrl+Alt+W` summons a translucent panel bottom-right
-  that streams an answer and never steals focus. See [docs/B4-results.md](docs/B4-results.md).
-
-> **Blocked here.** Smart App Control now refuses to run `warden.exe` - content-based, retroactive,
-> and with no per-app exception. This stops the rest of Stage C, all of Stage D, and E1.
-> **`capture/` is unaffected and still works.** See [PLAN.md §3](PLAN.md) for the analysis and the
-> options � code signing is the only route that keeps Smart App Control on.
+The prompt lives in `capture/prompt.txt`, not in source. Ollama is started automatically if it
+is not already running.
 
 ## How it works
 
-A global hotkey triggers a full-screen capture via Windows Graphics Capture, which gets sent
-with a default prompt to a local vision model running in Ollama. The answer streams into a
-small popup pinned to the bottom-right corner. That popup is excluded from screen/window
-own follow-up screenshot.
+A global hotkey triggers a full-screen capture via Windows Graphics Capture, which gets sent with a
+default prompt to a local vision model running in Ollama. The answer streams into a small popup
+pinned to the bottom-right corner. That popup is excluded from screen and window capture
+follow-up screenshot.
+
+The model holds **~8 GB** while resident, so `warm` and `off` are explicit rather than on a timer —
+a timeout decides for you and leaves you guessing whether the next press is instant or a stall.
+Power state reads the card through NVML, not `ollama ps`: the two disagree by ~2,500 MiB, and only
+one of them is the truth.
+
+## Layout
+
+```
+warden/
+├── warden-core/   shared — Ollama power control, NVML VRAM readout
+├── capture/       the CLI
+├── src-tauri/     Warden — hotkey, popup, tray
+├── src/           Warden's React frontend
+├── bench/         model × image × prompt benchmark harness
+├── evals/         rubric, fixtures, saved runs
+├── docs/          plan, build log, shortcuts, results  →  docs/README.md
+└── stages/        execution packets — paste one into a fresh chat
+```
+
+## Docs
+
+**[docs/README.md](docs/README.md) is the index** — it says what each document is and when to reach
+for it. The four you will actually open:
+
+| | |
+|---|---|
+| [docs/shortcuts.md](docs/shortcuts.md) | Every control. This is the interface |
+| [docs/PLAN.md](docs/PLAN.md) | Scope, the machine, decisions already closed, hard rules |
+| [docs/BUILD.md](docs/BUILD.md) | The build plan, chunk by chunk, and what is left |
+| [stages/STAGE-G.md](stages/STAGE-G.md) | The next thing — the local chat app |
 
 ## Stack
 
 Rust, Tauri 2, React + TypeScript, Ollama, Windows Graphics Capture.
-
-## Docs
-
-- [PLAN.md](PLAN.md) — scope, environment, decisions closed, hard rules
-- [BUILD.md](BUILD.md) — the full build plan, stages A–F
-- [STAGE-A.md](STAGE-A.md) — Stage A execution packet (foundations, no GUI) — complete
-- [STAGE-B.md](STAGE-B.md) — Stage B execution packet (the app shell) — in progress
 
 ## Hard rules
 

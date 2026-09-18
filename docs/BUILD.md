@@ -68,7 +68,7 @@ fine the moment anyone else runs it, or the moment it matters in a meeting that 
 > below. **Size decides accuracy; quantization decides nothing.** Both 4B models called a file
 > that does not compile "fine"; both 8B models found the bug. Q8 changed time-to-first-token by
 > under 2% while costing +3.2 GB of VRAM. The section below is kept as the reasoning that went
-> *into* A2 — see [docs/A2-results.md](docs/A2-results.md) for what came out.
+> *into* A2 — see [A2-results.md](results/A2-results.md) for what came out.
 
 The benchmark gap between Qwen3-VL **4B (95.3 DocVQA)** and **8B (96.1)** is **under one point**.
 
@@ -109,7 +109,7 @@ stalls, you still have something.
 
 ### A1 — Toolchain — DONE 2026-09-07
 Rust 1.98.1 (MSVC), Ollama 0.33.3, `llama3.1:8b`. GPU verified: **100% GPU, 152 tok/s warm**
-vs 12.74 on CPU. Full write-up: **[docs/A1-results.md](docs/A1-results.md)**.
+vs 12.74 on CPU. Full write-up: **[A1-results.md](results/A1-results.md)**.
 
 Two findings that change later chunks:
 - **Cold load is 17.9 s; warm is 0.002 s.** This first led to "keep the model resident forever,"
@@ -124,7 +124,7 @@ and simply runs on CPU, so check `ggml-cuda.dll` exists before debugging anythin
 ### A2 — The bake-off — DONE 2026-09-08
 **Chosen: `qwen3-vl:8b-instruct-q4_K_M`** — the only model that correctly concluded the editor
 screenshot would not compile, inside C4's VRAM budget. Full write-up:
-**[docs/A2-results.md](docs/A2-results.md)**.
+**[A2-results.md](results/A2-results.md)**.
 
 Ran the full 2×2 (4B/8B × Q4_K_M/Q8_0) rather than the planned pair, because the pair varies size
 and quantization together and could not have explained its own result. Harness: `evals/bench.mjs`.
@@ -149,7 +149,7 @@ identical. Only unloading clears it — see A2-results.md.
 ### A3 — First Rust: capture a PNG — DONE 2026-09-10
 `capture/` captures the primary monitor via `windows-capture` 2.0.1 and writes a 1920×1080
 `out.png`. Verified against fullscreen hardware-decoded video — full colour, no black frame,
-so this is genuinely WGC and not GDI. Full write-up: **[docs/A3-results.md](docs/A3-results.md)**.
+so this is genuinely WGC and not GDI. Full write-up: **[A3-results.md](results/A3-results.md)**.
 
 Two findings that change later chunks:
 - **The MSVC build tools were missing entirely.** A1 recorded the toolchain as verified but only
@@ -165,7 +165,7 @@ Gate worth reusing: a throwaway `cargo new` + `cargo run` printing `Hello, world
 ### A4 — First useful thing — DONE 2026-09-12 · **STAGE A COMPLETE**
 `cd capture && cargo run` captures the screen and streams a real answer about it. Prompt lives in
 `capture/prompt.txt`; `--model` swaps models without recompiling. Full write-up:
-**[docs/A4-results.md](docs/A4-results.md)**.
+**[A4-results.md](results/A4-results.md)**.
 
 Cross-validates A2 exactly — **2,077 tokens in, 1.19 s to first token, 9.0 s total** — from a
 completely separate harness, which is the check that `num_ctx` took and the screen wasn't
@@ -190,7 +190,7 @@ screen and corrected a misdiagnosis of the proc-macro failure. The thesis works.
 
 ### B1 — Tauri opens a window — DONE 2026-09-12
 Tauri 2.11.5 + React + TypeScript at the repo root, window titled **Warden**, identifier
-`com.warden.app`. First build 55 s, 362 units. Full write-up: **[docs/B1-results.md](docs/B1-results.md)**.
+`com.warden.app`. First build 55 s, 362 units. Full write-up: **[B1-results.md](results/B1-results.md)**.
 
 > **Never run `create-tauri-app` at the repo root.** Passing `.` and accepting the overwrite
 > prompt **recursively deletes everything except `.git`** — verified in its source. `evals/shots/`
@@ -203,7 +203,7 @@ And **Smart App Control did not fire** across 362 units — the A4 block was nar
 
 ### B2 — Streaming into the UI — DONE 2026-09-12
 An async command streams Ollama tokens to React through `tauri::ipc::Channel`. Verified in both
-dev and the packaged `.exe`. Full write-up: **[docs/B2-results.md](docs/B2-results.md)**.
+dev and the packaged `.exe`. Full write-up: **[B2-results.md](results/B2-results.md)**.
 
 **Streams identically in dev and release** — Rust-side and UI-side time-to-first-token match to
 the hundredth of a second (0.21 s dev, 0.17 s packaged), so nothing batches between Rust and the
@@ -224,7 +224,7 @@ only success or failure.
 ### B3 — Button-triggered capture — DONE 2026-09-13
 Click → live screenshot → streamed answer. `ask_about_screen` captures the primary monitor inside
 `spawn_blocking`, encodes a PNG in memory, and streams through B2's `Channel`. Full write-up:
-**[docs/B3-results.md](docs/B3-results.md)**.
+**[B3-results.md](results/B3-results.md)**.
 
 **C2's invisibility call landed early here**, and was verified rather than assumed:
 say so explicitly, so it was measured. Window visible, not minimised, foreground, affinity reading
@@ -240,7 +240,7 @@ Three findings that change later chunks:
 
 ### B4 — Global hotkey — DONE 2026-09-14 · with **C1** and C1b's translucency
 `Ctrl+Alt+W` summons a translucent panel bottom-right that streams an answer and never steals
-focus. Full write-up: **[docs/B4-results.md](docs/B4-results.md)**.
+focus. Full write-up: **[B4-results.md](results/B4-results.md)**.
 
 **The C1 layered-window contradiction is resolved.** Click-through does **not** break
 capture taken while visible. The documented failures were WPF windows calling `UpdateLayeredWindow`.
@@ -270,7 +270,7 @@ Three findings that change later chunks:
 taskbar. Windows toasts share that corner and will sometimes overlap — accepted, not a bug.
 
 ### C1b — Make the answer readable — DONE 2026-09-15
-**Added 2026-09-12.** Results: [docs/C1b-results.md](docs/C1b-results.md).
+**Added 2026-09-12.** Results: [C1b-results.md](results/C1b-results.md).
 
 **Outcome:** Markdown rendering with the img/link lockdown, lazy Shiki for Rust, grow-to-fit
 window, and a CSP. The prompt experiment ran and was **rejected on the evidence** — brevity kept
@@ -303,7 +303,7 @@ you can't read means you don't reach for it, and **E1 fails**.
 
 ### C1c — Reach the answer without a pointer — DONE 2026-09-15
 **Did:** `Ctrl+Alt`+wheel scrolls the answer; `Ctrl+Alt+Z` picks a top-level block and copies it.
-Every control is written down in [docs/shortcuts.md](docs/shortcuts.md) — there is no menu, tray
+Every control is written down in [shortcuts.md](shortcuts.md) — there is no menu, tray
 item or window chrome, so that file *is* the interface.
 
 **This answers C1b's open overflow question above:** a long answer scrolls, and the window grows to
@@ -331,7 +331,7 @@ must not autofocus anything, or C1's no-focus-steal guarantee breaks.
 
 `windows` crate — landed with B4; C2 owed only the test.
 **Verified:** **Discord, Zoom and Teams all show nothing.** Affinity reads back `17`.
-Results: [docs/C2-results.md](docs/C2-results.md).
+Results: [C2-results.md](results/C2-results.md).
 
 **One finding worth carrying into D1.** The exclusion hides a window's *contents*, not its
 *existence* — **Zoom's share picker lists "Warden" by name** with a black thumbnail, and will let
@@ -358,7 +358,7 @@ those few seconds are the only time the window can receive a key event at all.
 app for as long as an answer is on screen, and as C1c established, nothing detects that in advance.
 
 ### C4a — Power control in the CLI — DONE 2026-09-15
-**Did:** `capture warm` / `off` / `status`. Results: [docs/C4a-results.md](docs/C4a-results.md).
+**Did:** `capture warm` / `off` / `status`. Results: [C4a-results.md](results/C4a-results.md).
 
 Measured: **off −8,193 MiB · warm +7,873 MiB in 2.2 s · off −7,873 MiB.** The warm and off deltas
 match exactly in a tight cycle, which is the acceptance test — two measured figures compared to
@@ -514,7 +514,7 @@ syntax-highlighted code on a dark theme. Nobody benchmarks your actual use case 
 So make swapping models a ten-minute job instead of a vibes decision.
 
 ### F1 — Build a personal bench harness — DONE 2026-09-16
-**Did:** `bench/`, reusing `warden-core`. Results: [docs/F1-results.md](docs/F1-results.md).
+**Did:** `bench/`, reusing `warden-core`. Results: [F1-results.md](results/F1-results.md).
 
 **Validated against the reference, not just "it runs":** prefill 1,214 ms against A2's 1,165, decode
 131 t/s against 133, resident 8,187 MiB against 8,151.

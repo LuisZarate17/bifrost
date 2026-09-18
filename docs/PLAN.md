@@ -214,7 +214,7 @@ its own follow-up screenshot. One Win32 call does both:
 
 - **Settled at A2 on 2026-09-08: `qwen3-vl:8b-instruct-q4_K_M`.** 8,151 MiB resident, 1.2 s to
   first token, 3.7 s cold load. Chosen because it was the only model that correctly concluded a
-  broken file would not compile. Full write-up: [docs/A2-results.md](docs/A2-results.md).
+  broken file would not compile. Full write-up: [A2-results.md](results/A2-results.md).
 - Reading small dense text accurately is the whole job; a misread stack trace is worse than a
   slow answer.
 - ~~Vision models degrade under quantization harder than text models, so bias toward precision

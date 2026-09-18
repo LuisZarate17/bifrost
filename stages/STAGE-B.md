@@ -87,7 +87,7 @@ detached, never `ollama app.exe` (that opens a blocking first-run GUI). **C5 was
 ## B1 — Tauri opens a window — DONE 2026-09-12
 
 Tauri 2.11.5 + React + TypeScript at the repo root. Window titled **Warden**, identifier
-`com.warden.app`. First build 55 s. See [docs/B1-results.md](docs/B1-results.md).
+`com.warden.app`. First build 55 s. See [docs/B1-results.md](../docs/results/B1-results.md).
 
 > **If ever re-scaffolding: never run `create-tauri-app` at the repo root.** Passing `.` and
 > accepting the overwrite prompt **recursively deletes everything except `.git`** — verified in
@@ -100,7 +100,7 @@ Tauri 2.11.5 + React + TypeScript at the repo root. Window titled **Warden**, id
 
 > Async command + `tauri::ipc::Channel`. Streams in dev and in the packaged `.exe`; the Rust-side
 > and UI-side TTFT match exactly, so nothing batches in between.
-> See [docs/B2-results.md](docs/B2-results.md).
+> See [docs/B2-results.md](../docs/results/B2-results.md).
 
 
 **Do:** Move A4's Ollama call into `src-tauri`. Stream tokens up to React with
@@ -129,7 +129,7 @@ equivalent question here is whether anything between Rust and the webview batche
 ## B3 — Button-triggered capture — DONE 2026-09-13
 
 > Capture runs inside `spawn_blocking` — mandatory, because WebView2 puts Tauri's main thread in
-> to exclude from WGC. See [docs/B3-results.md](docs/B3-results.md).
+> to exclude from WGC. See [docs/B3-results.md](../docs/results/B3-results.md).
 
 
 **Do:** Move A3's capture into the app behind a button. Click → screenshot → answer streams in.
@@ -148,7 +148,7 @@ shape rather than rediscovering it.
 > Hotkey, corner popup, translucency and taskbar-following all work. Translucency is CSS alpha,
 > **not** a DWM backdrop � acrylic cannot go dark, mica cannot see through.
 > **Then Smart App Control blocked `warden.exe`** � see PLAN.md §3.
-> Full write-up: [docs/B4-results.md](docs/B4-results.md).
+> Full write-up: [docs/B4-results.md](../docs/results/B4-results.md).
 
 
 **Do:** `Ctrl+Alt+W` via Tauri 2's global-shortcut plugin. Fallback `Ctrl+Alt+Space`. **Never**
