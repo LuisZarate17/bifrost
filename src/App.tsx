@@ -144,6 +144,40 @@ function App() {
 
   /// Ask again about the screenshot already taken. No new capture — by now the
   /// screen has moved on, and the popup is sitting over what you asked about.
+  // Take another screenshot into the same conversation. The model keeps both
+  // pictures and everything already said about them, so this is the move for
+  // anything taller than one screen: capture, scroll, press again.
+  const anotherShot = useCallback(async () => {
+    if (busy.current) return;
+    busy.current = true;
+
+    setAnswer("");
+    setStats("");
+    setError("");
+    setStatus("Adding this screen…");
+    pinned.current = true;
+    setPick(null);
+    setCopied(false);
+
+    try {
+      await invoke("ask_another_shot", {
+        prompt: "Here is more of the same thing. Answer again with everything you have now seen.",
+        model: null,
+        onEvent: stream(),
+      });
+    } catch (e) {
+      setError(String(e));
+      setStatus("");
+    } finally {
+      busy.current = false;
+    }
+  }, [stream, setPick]);
+
+  useEffect(() => {
+    const unlisten = listen("warden://another-shot", () => void anotherShot());
+    return () => void unlisten.then((f) => f());
+  }, [anotherShot]);
+
   const followUp = useCallback(
     async (question: string) => {
       if (busy.current || !question.trim()) return;

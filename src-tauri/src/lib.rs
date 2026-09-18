@@ -24,13 +24,39 @@ use windows_capture::settings::{
 #[cfg(windows)]
 use windows::Win32::Foundation::{HWND, RECT};
 
-const OLLAMA_URL: &str = "http://127.0.0.1:11434/api/generate";
+/// `/api/chat`, not `/api/generate`. Only chat carries a message history, and
+/// only a history can hold more than one screenshot plus what was already said
+/// about them.
+const OLLAMA_URL: &str = "http://127.0.0.1:11434/api/chat";
 const DEFAULT_MODEL: &str = "qwen3-vl:8b-instruct-q4_K_M";
 
-/// A 1080p screen costs ~2,042 image tokens (measured at A2). Ollama derives its
-/// default from detected VRAM and lands at 4k on this card, which would silently
-/// truncate the screenshot — so it is always set explicitly.
-const NUM_CTX: u32 = 8192;
+/// A 1080p screen costs ~2,070 image tokens — measured at A2 as 2,042, and
+/// confirmed again at 2,056/4,132/6,208/8,284 for one through four shots. Ollama
+/// derives its default from detected VRAM and lands at 4k on this card, which
+/// would silently truncate even one screenshot, so it is always set explicitly.
+///
+/// **8192 was the old value, and it was sized for a single picture.** A
+/// conversation carrying four costs 8,284 tokens before a word of answer, so the
+/// limit had to move. Measured on the 5070 Ti, resident and fully on the GPU:
+///
+/// | num_ctx | VRAM     | on GPU |
+/// |---------|----------|--------|
+/// | 8192    | 6.09 GB  | yes    |
+/// | 16384   | 7.23 GB  | yes    |
+/// | 32768   | 9.51 GB  | yes    |
+/// | 65536   | 12.74 GB | **no** — spills to system RAM |
+///
+/// 32768 is the last rung before the cliff: 3.4 GB more than the old value, and
+/// room for far more context than `MAX_IMAGES` will ever use.
+const NUM_CTX: u32 = 32768;
+
+/// How many screenshots stay in the conversation.
+///
+/// Four costs ~8,300 tokens, which leaves most of `NUM_CTX` for the questions and
+/// the answers. Beyond the cap the oldest picture is dropped but its text stays,
+/// so the thread still reads as a conversation — it just stops being able to
+/// look back at that screen.
+const MAX_IMAGES: usize = 4;
 
 /// One captured frame as owned data. No borrows, so it can leave the callback
 /// and cross a thread boundary.
@@ -164,6 +190,37 @@ fn rgba_to_png(pixels: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String
 #[derive(Default)]
 struct LastCapture(std::sync::Mutex<Option<Vec<u8>>>);
 
+/// One turn of the conversation, in the shape `/api/chat` wants.
+#[derive(Clone, Serialize)]
+struct Turn {
+    role: &'static str,
+    content: String,
+    /// Base64 PNGs. Omitted entirely when empty — Ollama treats an empty array
+    /// as "an image was meant to be here".
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    images: Vec<String>,
+}
+
+impl Turn {
+    fn user(content: String, images: Vec<String>) -> Self {
+        Self { role: "user", content, images }
+    }
+    fn assistant(content: String) -> Self {
+        Self { role: "assistant", content, images: Vec::new() }
+    }
+}
+
+/// The conversation so far — every question asked and every answer given, with
+/// the screenshots attached to the turns they arrived on.
+///
+/// This is what makes a second screenshot a *continuation* rather than a new
+/// question. `/api/generate`, which the first version used, has no way to carry
+/// one: it takes a single prompt and a single image and remembers nothing, so
+/// the old "follow-up" was really just another first question about a stored
+/// picture.
+#[derive(Default)]
+struct Chat(std::sync::Mutex<Vec<Turn>>);
+
 /// Capture the screen, send it to Ollama, and stream the answer back token by token.
 mod tray;
 
@@ -173,6 +230,7 @@ async fn ask_about_screen(
     model: Option<String>,
     on_event: Channel<StreamEvent>,
     last: tauri::State<'_, LastCapture>,
+    chat: tauri::State<'_, Chat>,
 ) -> Result<(), String> {
     let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
@@ -214,7 +272,108 @@ async fn ask_about_screen(
     // a follow-up always refers to the answer currently on screen.
     *last.0.lock().map_err(|_| "capture store poisoned")? = Some(png.clone());
 
-    ask_with_png(png, prompt, model, on_event).await
+    // A new question starts a new conversation. Everything the model was told
+    // about the last screen goes, because this one is about a different screen.
+    {
+        let mut turns = chat.0.lock().map_err(|_| "chat store poisoned")?;
+        turns.clear();
+        turns.push(Turn::user(prompt, vec![BASE64_STANDARD.encode(&png)]));
+    }
+
+    run_turns(&chat, model, on_event).await
+}
+
+/// Take another screenshot **into the same conversation**.
+///
+/// The point of it: one screen is often not the whole thing. Scroll, press it
+/// again, and the model answers with both pictures and everything already said
+/// about them in view — rather than starting over on the second one.
+#[tauri::command]
+async fn ask_another_shot(
+    prompt: String,
+    model: Option<String>,
+    on_event: Channel<StreamEvent>,
+    last: tauri::State<'_, LastCapture>,
+    chat: tauri::State<'_, Chat>,
+) -> Result<(), String> {
+    let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+
+    if chat.0.lock().map_err(|_| "chat store poisoned")?.is_empty() {
+        return Err("nothing to continue — summon Warden first".into());
+    }
+
+    // See `capture_screen_blocking` — this must not run on an async worker.
+    let shot = tauri::async_runtime::spawn_blocking(capture_screen_blocking)
+        .await
+        .map_err(|e| format!("capture thread panicked: {e}"))??;
+
+    let png = rgba_to_png(&shot.pixels, shot.width, shot.height)?;
+
+    on_event
+        .send(StreamEvent::Captured {
+            width: shot.width,
+            height: shot.height,
+            png_bytes: png.len(),
+        })
+        .map_err(|e| format!("channel send failed: {e}"))?;
+
+    // The newest shot is what a plain follow-up should refer to from here on.
+    *last.0.lock().map_err(|_| "capture store poisoned")? = Some(png.clone());
+
+    chat.0
+        .lock()
+        .map_err(|_| "chat store poisoned")?
+        .push(Turn::user(prompt, vec![BASE64_STANDARD.encode(&png)]));
+
+    run_turns(&chat, model, on_event).await
+}
+
+/// Send the conversation, stream the answer, and remember what was said.
+///
+/// The remembering is the part that makes it a conversation at all: without it
+/// every turn arrives at a model that has never seen the previous one.
+async fn run_turns(
+    chat: &Chat,
+    model: String,
+    on_event: Channel<StreamEvent>,
+) -> Result<(), String> {
+    // Cloned out of the lock before any `await` — a `MutexGuard` held across one
+    // is not `Send`, and this future has to be.
+    let turns = {
+        let turns = chat.0.lock().map_err(|_| "chat store poisoned")?;
+        trim_images(&turns)
+    };
+
+    let reply = ask_with_turns(turns, model, on_event).await?;
+
+    chat.0
+        .lock()
+        .map_err(|_| "chat store poisoned")?
+        .push(Turn::assistant(reply));
+    Ok(())
+}
+
+/// Keep only the newest `MAX_IMAGES` pictures, and strip the rest.
+///
+/// The turns themselves all stay. An older screenshot loses its picture but keeps
+/// the question that came with it and the answer that followed, so the thread
+/// still reads in order — the model simply can't look at that screen any more.
+/// Dropping whole turns instead would leave the conversation full of holes.
+fn trim_images(turns: &[Turn]) -> Vec<Turn> {
+    let mut out = turns.to_vec();
+    let mut budget = MAX_IMAGES;
+
+    for turn in out.iter_mut().rev() {
+        if turn.images.is_empty() {
+            continue;
+        }
+        if budget == 0 {
+            turn.images.clear();
+        } else {
+            budget -= 1;
+        }
+    }
+    out
 }
 
 /// Let the popup hold a caret so a follow-up can be typed.
@@ -252,30 +411,33 @@ async fn ask_followup(
     prompt: String,
     model: Option<String>,
     on_event: Channel<StreamEvent>,
-    last: tauri::State<'_, LastCapture>,
+    chat: tauri::State<'_, Chat>,
 ) -> Result<(), String> {
     let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
 
-    let png = last
-        .0
-        .lock()
-        .map_err(|_| "capture store poisoned")?
-        .clone()
-        .ok_or("no capture to follow up on — summon Warden first")?;
+    {
+        let mut turns = chat.0.lock().map_err(|_| "chat store poisoned")?;
+        if turns.is_empty() {
+            return Err("no capture to follow up on — summon Warden first".into());
+        }
+        // No image: this asks about the screens already in the conversation. It
+        // used to re-send the stored PNG as a fresh single-turn question, which
+        // meant the model answered without knowing it had already answered once.
+        turns.push(Turn::user(prompt, Vec::new()));
+    }
 
-    ask_with_png(png, prompt, model, on_event).await
+    run_turns(&chat, model, on_event).await
 }
 
 /// Ask about a PNG that is already in hand.
 ///
 /// Shared by the first question and every follow-up, so the two can never drift
 /// apart in how they talk to Ollama — same body, same `num_ctx`, same streaming.
-async fn ask_with_png(
-    png: Vec<u8>,
-    prompt: String,
+async fn ask_with_turns(
+    turns: Vec<Turn>,
     model: String,
     on_event: Channel<StreamEvent>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     // Cold? Say so before the wait, not after. Checked rather than assumed: the
     // model may have been warmed from the tray, from the CLI, or by Ollama's own
     // timeout not having expired yet.
@@ -299,11 +461,11 @@ async fn ask_with_png(
         let _ = on_event.send(StreamEvent::Warming);
     }
 
-    // `images` is top-level; `num_ctx` lives inside `options`. Either wrong fails silently.
+    // `images` sits on each message, not at the top level; `num_ctx` lives inside
+    // `options`. Either in the wrong place fails silently.
     let body = serde_json::json!({
         "model": model,
-        "prompt": prompt,
-        "images": [BASE64_STANDARD.encode(&png)],
+        "messages": turns,
         "stream": true,
         "options": { "num_ctx": NUM_CTX },
     });
@@ -325,6 +487,9 @@ async fn ask_with_png(
     let mut stream = response.bytes_stream();
     let mut remainder = String::new();
     let mut ttft_ms: Option<f64> = None;
+    // Kept so the caller can append it to the conversation: the model has to be
+    // told what it already said, or the next turn is a first question again.
+    let mut reply = String::new();
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("stream error: {e}"))?;
@@ -340,8 +505,11 @@ async fn ask_with_png(
             let v: serde_json::Value =
                 serde_json::from_str(line).map_err(|e| format!("bad JSON from Ollama: {e}"))?;
 
-            let text = v["response"].as_str().unwrap_or("");
+            // `/api/chat` puts the text under `message.content`; `/api/generate`
+            // used `response`. Reading the wrong one streams nothing, silently.
+            let text = v["message"]["content"].as_str().unwrap_or("");
             if !text.is_empty() {
+                reply.push_str(text);
                 if ttft_ms.is_none() {
                     ttft_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
                 }
@@ -359,12 +527,12 @@ async fn ask_with_png(
                         ttft_ms: ttft_ms.unwrap_or(0.0),
                     })
                     .map_err(|e| format!("channel send failed: {e}"))?;
-                return Ok(());
+                return Ok(reply);
             }
         }
     }
 
-    Ok(())
+    Ok(reply)
 }
 
 /// Hide the window from screen capture — the project's headline feature, and also
@@ -767,12 +935,10 @@ fn show_without_focus(
 
     report_affinity(window);
     animate(window.clone(), anim.clone(), generation);
-    watch_wheel(
-        window.clone(),
-        window.app_handle().clone(),
-        anim.clone(),
-        generation,
-    );
+    // The wheel only means something once there is an answer to scroll. The hook
+    // itself runs for the life of the app, because the side button has to work
+    // when the popup is *not* up.
+    WHEEL_ACTIVE.store(true, Ordering::Relaxed);
     Ok(())
 }
 
@@ -1204,10 +1370,23 @@ fn key_followup() -> Shortcut {
     Shortcut::new(chord(), Code::KeyF)
 }
 
+/// Capture again into the same conversation.
+///
+/// D for nothing in particular — it is simply a letter whose bare `Ctrl+` form is
+/// not an editing command, which is the rule `Ctrl+Alt+C` and `Ctrl+Alt+A` both
+/// broke. The rear side button does the same thing without claiming a key at all.
+fn key_another_shot() -> Shortcut {
+    Shortcut::new(chord(), Code::KeyD)
+}
+
 /// Every key that only means something while an answer is on screen, with the
 /// label to print if it can't be claimed.
-fn popup_keys() -> [(Shortcut, &'static str); 2] {
-    [(key_copy(), "Ctrl+Alt+Z"), (key_followup(), "Ctrl+Alt+F")]
+fn popup_keys() -> [(Shortcut, &'static str); 3] {
+    [
+        (key_copy(), "Ctrl+Alt+Z"),
+        (key_followup(), "Ctrl+Alt+F"),
+        (key_another_shot(), "Ctrl+Alt+D"),
+    ]
 }
 
 /// Claim the scroll keys, and say whether both were actually claimed.
@@ -1272,10 +1451,28 @@ static WHEEL_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBo
 
 /// The installed hook as a raw handle, so the main thread can take it back down
 /// later. Zero when nothing is hooked.
-static WHEEL_HOOK: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+static MOUSE_HOOK: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+/// Side-button presses seen and not yet acted on.
+static SUMMON_PRESSES: AtomicI32 = AtomicI32::new(0);
+
+/// Presses of the *other* side button — capture again into the same
+/// conversation. Only claimed while an answer is on screen, because continuing a
+/// conversation that doesn't exist is meaningless; the rest of the time Back is
+/// left alone to be Back.
+static CONTINUE_PRESSES: AtomicI32 = AtomicI32::new(0);
+
+/// Which side button summons: `1` is XBUTTON1 and `2` is XBUTTON2 — on a typical
+/// mouse the rear and front thumb buttons, which Windows treats as Back and
+/// Forward. `0` disables it. Set from `WARDEN_MOUSE_BUTTON` at startup.
+///
+/// XBUTTON2 is the default because the press is **swallowed**, and Forward is the
+/// one of the pair almost nobody uses. Swallowing is not optional: a summon that
+/// also navigated the window behind it would be worse than no summon at all.
+static SUMMON_BUTTON: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(2);
 
 #[cfg(windows)]
-unsafe extern "system" fn wheel_hook(
+unsafe extern "system" fn mouse_hook(
     code: i32,
     wparam: windows::Win32::Foundation::WPARAM,
     lparam: windows::Win32::Foundation::LPARAM,
@@ -1283,12 +1480,48 @@ unsafe extern "system" fn wheel_hook(
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_MENU};
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, HC_ACTION, MSLLHOOKSTRUCT, WM_MOUSEWHEEL,
+        CallNextHookEx, HC_ACTION, MSLLHOOKSTRUCT, WM_MOUSEWHEEL, WM_XBUTTONDOWN, WM_XBUTTONUP,
     };
 
-    if code == HC_ACTION as i32
-        && wparam.0 as u32 == WM_MOUSEWHEEL
-        && WHEEL_ACTIVE.load(Ordering::Relaxed)
+    let message = wparam.0 as u32;
+
+    // The side buttons. Summon is live whenever Warden is running; continue is
+    // live only while an answer is up, so Back stays Back the rest of the time.
+    if code == HC_ACTION as i32 && (message == WM_XBUTTONDOWN || message == WM_XBUTTONUP) {
+        let summon = SUMMON_BUTTON.load(Ordering::Relaxed);
+        // The other one of the pair. Falls out of the choice rather than being
+        // configured separately: there are only two, so picking one picks both.
+        let continue_with = match summon {
+            1 => 2,
+            2 => 1,
+            _ => 0,
+        };
+
+        // SAFETY: for HC_ACTION the system guarantees lparam points at a
+        // MSLLHOOKSTRUCT valid for the duration of this call.
+        let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
+        // Which of the two side buttons it was lives in the high word.
+        let which = (info.mouseData >> 16) as u32;
+
+        if summon != 0 && which == summon {
+            if message == WM_XBUTTONDOWN {
+                SUMMON_PRESSES.fetch_add(1, Ordering::Relaxed);
+            }
+            // Swallow the release as well as the press. Passing on a lone
+            // button-up leaves the window underneath with half a click it never
+            // saw the start of.
+            return LRESULT(1);
+        }
+
+        if continue_with != 0 && which == continue_with && WHEEL_ACTIVE.load(Ordering::Relaxed) {
+            if message == WM_XBUTTONDOWN {
+                CONTINUE_PRESSES.fetch_add(1, Ordering::Relaxed);
+            }
+            return LRESULT(1);
+        }
+    }
+
+    if code == HC_ACTION as i32 && message == WM_MOUSEWHEEL && WHEEL_ACTIVE.load(Ordering::Relaxed)
     {
         // SAFETY: reads only. The high bit of GetAsyncKeyState is "currently down".
         let held = |vk: u16| unsafe { GetAsyncKeyState(vk as i32) < 0 };
@@ -1318,12 +1551,7 @@ unsafe extern "system" fn wheel_hook(
 /// decides to remove the hook. That is also why this cannot live on the animator
 /// thread, which blocks on `SetWindowPos` by design.
 #[cfg(windows)]
-fn watch_wheel(
-    window: tauri::WebviewWindow,
-    app: tauri::AppHandle,
-    anim: Arc<Anim>,
-    generation: u64,
-) {
+fn watch_mouse(app: tauri::AppHandle) {
     // Install on Tauri's **main** thread, not on one of ours.
     //
     // A low-level hook is called on the thread that installed it, and only while
@@ -1351,60 +1579,126 @@ fn watch_wheel(
 
         // SAFETY: WH_MOUSE_LL is one of the two hooks that needs no DLL — it is
         // called on this thread rather than injected into other processes.
-        match unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(wheel_hook), module, 0) } {
+        match unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), module, 0) } {
             Ok(hook) => {
                 WHEEL_DELTA.store(0, Ordering::Relaxed);
-                WHEEL_HOOK.store(hook.0 as isize, Ordering::Relaxed);
-                WHEEL_ACTIVE.store(true, Ordering::Relaxed);
+                MOUSE_HOOK.store(hook.0 as isize, Ordering::Relaxed);
             }
             Err(e) => eprintln!(
-                "[warden] WARNING: Ctrl+Alt+wheel unavailable ({e}) — Ctrl+Alt+Z still copies"
+                "[warden] WARNING: mouse hook unavailable ({e}) — the side button won't summon, and Ctrl+Alt+wheel won't scroll"
             ),
         }
     });
 
     if let Err(e) = installed {
-        eprintln!("[warden] WARNING: could not reach the main thread to hook the wheel ({e})");
+        eprintln!("[warden] WARNING: could not reach the main thread to hook the mouse ({e})");
         return;
     }
 
-    // The hook only counts. This hands what it counted to the webview, and takes
-    // the hook back down when the popup goes away. It needs no message loop of
+    // The hook only counts; this does the talking. It needs no message loop of
     // its own precisely because the hook does not live here.
-    std::thread::spawn(move || {
-        while anim.generation.load(Ordering::Relaxed) == generation && is_really_visible(&window) {
-            // Whole notches go to the webview; the remainder stays banked, so a
-            // high-resolution wheel reporting in fractions of a notch is not
-            // quietly rounded away to nothing.
-            let delta = WHEEL_DELTA.swap(0, Ordering::Relaxed);
-            let notches = delta / 120;
-            if notches == 0 {
-                WHEEL_DELTA.fetch_add(delta, Ordering::Relaxed);
-            } else {
-                WHEEL_DELTA.fetch_add(delta % 120, Ordering::Relaxed);
-                // Negated: Windows reports a forward roll as positive, and rolling
-                // forward should move the answer *up*, which is a negative step.
-                let _ = app.emit("warden://scroll", -notches);
-            }
-
-            std::thread::sleep(Duration::from_millis(8));
+    std::thread::spawn(move || loop {
+        // A side-button press summons or dismisses, exactly as the hotkey does.
+        // Counted rather than flagged so a genuine double-press still toggles
+        // twice instead of being swallowed as one.
+        let presses = SUMMON_PRESSES.swap(0, Ordering::Relaxed);
+        for _ in 0..presses.min(2) {
+            let app = app.clone();
+            // Off this thread and onto the runtime, the same way the hotkey
+            // hands off: `toggle_popup` touches windows, and this thread is the
+            // one the hook's own bookkeeping runs on.
+            tauri::async_runtime::spawn(async move { toggle_popup(&app, "side button") });
         }
 
-        WHEEL_ACTIVE.store(false, Ordering::Relaxed);
+        // The other button continues the conversation. Only ever counted while
+        // the popup is up, so there is always something to continue.
+        if CONTINUE_PRESSES.swap(0, Ordering::Relaxed) > 0 {
+            let _ = app.emit("warden://another-shot", 0);
+        }
 
-        // Removed from the same thread that installed it, as Windows requires.
-        let _ = app.run_on_main_thread(|| {
-            use windows::Win32::UI::WindowsAndMessaging::{UnhookWindowsHookEx, HHOOK};
+        // Whole notches go to the webview; the remainder stays banked, so a
+        // high-resolution wheel reporting in fractions of a notch is not quietly
+        // rounded away to nothing. The hook only banks these while the popup is
+        // up, so there is nothing to drain the rest of the time.
+        let delta = WHEEL_DELTA.swap(0, Ordering::Relaxed);
+        let notches = delta / 120;
+        if notches == 0 {
+            WHEEL_DELTA.fetch_add(delta, Ordering::Relaxed);
+        } else {
+            WHEEL_DELTA.fetch_add(delta % 120, Ordering::Relaxed);
+            // Negated: Windows reports a forward roll as positive, and rolling
+            // forward should move the answer *up*, which is a negative step.
+            let _ = app.emit("warden://scroll", -notches);
+        }
 
-            let raw = WHEEL_HOOK.swap(0, Ordering::Relaxed);
-            if raw != 0 {
-                // SAFETY: our own handle, taken exactly once by the swap above.
-                unsafe {
-                    let _ = UnhookWindowsHookEx(HHOOK(raw as *mut std::ffi::c_void));
-                }
-            }
-        });
+        std::thread::sleep(Duration::from_millis(8));
     });
+}
+
+/// Summon the popup, or dismiss it if it is already up.
+///
+/// Everything that can summon Warden comes through here — the hotkey and the
+/// mouse's side button — so the two cannot drift apart in what a press does.
+/// `source` only names the caller in the log.
+///
+/// Must not run on the main thread: it touches windows, and doing that while
+/// holding the Win32 message pump is a confirmed Windows 11 freeze
+/// (plugins-workspace#1923).
+fn toggle_popup(app: &tauri::AppHandle, source: &str) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+
+    #[cfg(windows)]
+    let visible = is_really_visible(&window);
+    #[cfg(not(windows))]
+    let visible = window.is_visible().unwrap_or(false);
+
+    let anim = app.state::<Arc<Anim>>().inner().clone();
+
+    println!("[warden] {source}: visible={visible}");
+    if visible {
+        // Bump before hiding, so the animator stops on its next frame rather
+        // than steering a window that is on its way out.
+        anim.bump();
+        anim.forget_height();
+        anim.prefer_right();
+        WHEEL_ACTIVE.store(false, Ordering::Relaxed);
+        release_popup_keys(app);
+
+        // Hide the same way we show: raw Win32. Showing via ShowWindow and
+        // hiding via Tauri's dispatcher leaves Windows and Tauri disagreeing
+        // about the window, and the next IsWindowVisible still reported `true`.
+        #[cfg(windows)]
+        hide_now(&window);
+        #[cfg(not(windows))]
+        let _ = window.hide();
+        return;
+    }
+
+    // One generation per show: a fast hide/show cannot leave the previous
+    // animator running alongside the new one.
+    let generation = anim.bump();
+
+    #[cfg(windows)]
+    {
+        // Place first, then show — the popup appears already in position, and
+        // only animates from there.
+        if let Err(e) = place_now(&window, &anim) {
+            eprintln!("[warden] WARNING: positioning failed: {e}");
+        }
+        if let Err(e) = show_without_focus(&window, &anim, generation) {
+            eprintln!("[warden] WARNING: show failed: {e}");
+        }
+    }
+
+    // Claim the scroll keys for as long as this answer is up.
+    let keys_bound = bind_popup_keys(app);
+
+    // The frontend owns the Channel, so it starts the capture. The payload says
+    // whether the scroll keys are listening, so the UI can offer them without
+    // ever advertising a shortcut that failed to bind.
+    let _ = app.emit("warden://summoned", keys_bound);
 }
 
 /// Put one block of the answer on the clipboard.
@@ -1486,7 +1780,7 @@ pub fn run() {
                     // means — enter the pick, or take what is picked.
                     //
                     // Scrolling is not here any more. It arrives as Ctrl+Alt+wheel
-                    // through `watch_wheel`, which claims no key from anyone.
+                    // through the mouse hook, which claims no key from anyone.
                     if *shortcut == key_copy() {
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
@@ -1507,72 +1801,23 @@ pub fn run() {
                         return;
                     }
 
+                    // Another screenshot into the same conversation. Same shape
+                    // again: the frontend owns the Channel the answer streams
+                    // down, so it has to be the one to start the request.
+                    if *shortcut == key_another_shot() {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = app.emit("warden://another-shot", 0);
+                        });
+                        return;
+                    }
+
                     // The handler runs on the main thread, synchronously, holding
                     // the Win32 message pump. Touching windows inline here is a
                     // confirmed Windows 11 freeze (plugins-workspace#1923), so
                     // hand off immediately.
                     let app = app.clone();
-                    tauri::async_runtime::spawn(async move {
-                        let Some(window) = app.get_webview_window("main") else {
-                            return;
-                        };
-
-                        // Toggle. Esc can't dismiss a non-focusable window — it
-                        // never receives key events — so the hotkey does both jobs
-                        // until C3 sorts out the focus transition.
-                        #[cfg(windows)]
-                        let visible = is_really_visible(&window);
-                        #[cfg(not(windows))]
-                        let visible = window.is_visible().unwrap_or(false);
-
-                        let anim = app.state::<Arc<Anim>>().inner().clone();
-
-                        println!("[warden] hotkey: visible={visible}");
-                        if visible {
-                            // Bump before hiding, so the animator stops on its
-                            // next frame rather than steering a window that is
-                            // on its way out.
-                            anim.bump();
-                            anim.forget_height();
-                            anim.prefer_right();
-                            release_popup_keys(&app);
-
-                            // Hide the same way we show: raw Win32. Showing via
-                            // ShowWindow and hiding via Tauri's dispatcher leaves
-                            // Windows and Tauri disagreeing about the window, and
-                            // the next IsWindowVisible still reported `true`.
-                            #[cfg(windows)]
-                            hide_now(&window);
-                            #[cfg(not(windows))]
-                            let _ = window.hide();
-                            return;
-                        }
-
-                        // One generation per show: a fast hide/show cannot leave
-                        // the previous animator running alongside the new one.
-                        let generation = anim.bump();
-
-                        #[cfg(windows)]
-                        {
-                            // Place first, then show — the popup appears already
-                            // in position, and only animates from there.
-                            if let Err(e) = place_now(&window, &anim) {
-                                eprintln!("[warden] WARNING: positioning failed: {e}");
-                            }
-                            if let Err(e) = show_without_focus(&window, &anim, generation) {
-                                eprintln!("[warden] WARNING: show failed: {e}");
-                            }
-                        }
-
-                        // Claim the scroll keys for as long as this answer is up.
-                        let keys_bound = bind_popup_keys(&app);
-
-                        // The frontend owns the Channel, so it starts the capture.
-                        // The payload says whether the scroll keys are listening,
-                        // so the UI can offer them without ever advertising a
-                        // shortcut that failed to bind.
-                        let _ = app.emit("warden://summoned", keys_bound);
-                    });
+                    tauri::async_runtime::spawn(async move { toggle_popup(&app, "hotkey") });
                 })
                 .build(),
         )
@@ -1583,6 +1828,26 @@ pub fn run() {
             let anim = Arc::new(Anim::default());
             app.manage(anim.clone());
             app.manage(LastCapture::default());
+            app.manage(Chat::default());
+
+            #[cfg(windows)]
+            {
+                // Which side button summons, if any. Swallowed when it fires, so
+                // it defaults to the one of the pair almost nobody uses.
+                match std::env::var("WARDEN_MOUSE_BUTTON").as_deref() {
+                    Ok("1") => SUMMON_BUTTON.store(1, Ordering::Relaxed),
+                    Ok("2") => SUMMON_BUTTON.store(2, Ordering::Relaxed),
+                    Ok("off") | Ok("0") => SUMMON_BUTTON.store(0, Ordering::Relaxed),
+                    Ok(other) => eprintln!(
+                        "[warden] WARNING: WARDEN_MOUSE_BUTTON={other} is not 1, 2 or off — using 2"
+                    ),
+                    Err(_) => {}
+                }
+
+                // One hook for the life of the app: the side button has to work
+                // while the popup is down, which is exactly when it is needed.
+                watch_mouse(app.handle().clone());
+            }
 
             #[cfg(windows)]
             {
@@ -1643,6 +1908,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ask_about_screen,
             ask_followup,
+            ask_another_shot,
             begin_followup,
             end_followup,
             hotkey_label,

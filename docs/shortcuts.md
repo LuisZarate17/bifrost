@@ -10,10 +10,13 @@ whole interface.
 | Shortcut | What it does | Live when |
 |---|---|---|
 | **`Ctrl+Alt+W`** | Summon the popup and ask about the screen. Press again to dismiss. | Always, while Warden is running |
+| **Mouse side button** | The same thing, in one press. `XBUTTON2` — the *front* thumb button, which Windows calls Forward | Always, while Warden is running |
 | `Ctrl+Alt+Space` | The same thing — **only** used if `Ctrl+Alt+W` could not be claimed at startup | Always, as a fallback |
 | **`Ctrl+Alt`+wheel** | Scroll the answer — or, while picking, move the pick | Only while the popup is on screen |
 | **`Ctrl+Alt+Z`** | Pick a block of the answer; press again to **copy** it | Only while the popup is on screen |
-| **`Ctrl+Alt+F`** | Ask a **follow-up** about the same screenshot | Only while the popup is on screen |
+| **`Ctrl+Alt+F`** | Ask a **follow-up** about the screens already in the conversation | Only while the popup is on screen |
+| **`Ctrl+Alt+D`** | Take **another screenshot into the same conversation** | Only while the popup is on screen |
+| **Mouse rear button** | The same thing, in one press. `XBUTTON1` — Back, and only claimed while the popup is up | Only while the popup is on screen |
 | `Esc` | Close the follow-up box without asking | **Only** while the follow-up box is open |
 
 Each notch travels 96px — about five lines — and the notches ease into each other, so a fast roll
@@ -42,10 +45,12 @@ removed.
 
 ## Follow-ups, and the one moment `Esc` works
 
-`Ctrl+Alt+F` opens a box and asks again about **the screenshot already taken** — deliberately not a
-new one. By the time you have read an answer and thought of a second question the screen has moved
-on: you scrolled, or the popup itself is sitting over the thing you were asking about. Re-capturing
-would answer a question about a different screen than the one you meant.
+`Ctrl+Alt+F` opens a box and asks again about **the screens already in the conversation** —
+deliberately not a new one. By the time you have read an answer and thought of a second question the
+screen has moved on: you scrolled, or the popup itself is sitting over the thing you were asking
+about. Re-capturing would answer a question about a different screen than the one you meant.
+
+When you *do* want the new screen, that is `Ctrl+Alt+D` — see below.
 
 Typing needs a caret, and this window is built never to take one — `focusable: false` is what stops
 a summon from yanking the cursor out of whatever you were writing. So the rule bends for exactly as
@@ -59,6 +64,45 @@ does have focus, so a key event can reach the page. Every other moment it cannot
 summoning it never pulls the caret out of whatever you were typing in, and a window that never takes
 focus never receives key events. `Ctrl+Alt+W` does both jobs. (See `PLAN.md` step 6 and
 `docs/B4-results.md`.)
+
+---
+
+## More than one screen
+
+`Ctrl+Alt+D`, or the rear side button, takes **another screenshot into the same conversation**. The
+model answers with every picture so far *and* everything it has already said about them. It is the
+move for anything taller than one screen: capture, scroll, press again, and it can compare the two.
+
+**This is genuinely new, not an extension.** Until now every question — including `Ctrl+Alt+F` — was
+a single `/api/generate` call carrying one image and no history at all. The model was never told it
+had already answered; a "follow-up" was just another first question about a stored picture. Holding a
+conversation meant moving to `/api/chat`, which is the only Ollama endpoint that takes a message
+history with an image attached to any turn.
+
+The prompt-token count is the proof, straight from the stats line:
+
+| | prompt tokens | what is in the request |
+|---|---|---|
+| first question | **2,077** | one screenshot |
+| after one `Ctrl+Alt+D` | **4,933** | both screenshots + the first answer |
+| after another | **7,905** | three screenshots + both answers |
+
+A fresh single-turn call would have read ~2,077 every time.
+
+**`num_ctx` had to move, and the measurement is why.** It was 8192 — a number chosen so a *single*
+screenshot would not be truncated, long before a second one was imagined. Three screenshots is 7,905
+tokens before a word of answer, so it never fitted. Measured on this card, model resident:
+
+| num_ctx | VRAM | fully on GPU |
+|---|---|---|
+| 8192 | 6.09 GB | yes |
+| 16384 | 7.23 GB | yes |
+| **32768** | **9.51 GB** | **yes** |
+| 65536 | 12.74 GB | **no** — spills to system RAM |
+
+32768 is the last rung before the cliff. `MAX_IMAGES` caps the conversation at four pictures; past
+that the oldest loses its image but keeps its text, so the thread still reads in order — it just
+stops being able to look back at that screen.
 
 ---
 
@@ -155,25 +199,44 @@ included — verified against the block byte for byte.
 
 ---
 
-## Why `Ctrl+Alt+Z` and the wheel hook come and go
+## The side button, and why the hook now stays
 
-Both are taken when the popup appears and released when it is dismissed, rather than held for the
-life of the process.
+Windows has no way to register a mouse button as a global shortcut — `RegisterHotKey` takes keys
+only. The one mechanism that hears a button press anywhere in the session is a low-level mouse hook,
+and the one that can *stop* the press reaching the app underneath is the same hook returning
+non-zero.
 
-Warden sits in the background all day. A hidden overlay with nothing on screen has no business
-owning `Ctrl+Alt+Z` session-wide, and still less putting a low-level mouse hook in front of every
-mouse event in the session. While an answer is up they mean something and are claimed; the moment it
-is dismissed they go back.
+**So the hook runs for the life of the app**, where it used to be installed on show and removed on
+hide. A summon button that only worked while the popup was already up would be of no use at all.
+What is still gated is the *wheel*: the hook ignores it unless an answer is on screen.
+
+**The press is swallowed.** `XBUTTON2` is Forward in most applications, and a summon that also
+navigated the window behind it would be worse than no summon. Verified with a second, downstream
+hook installed before Warden's: `XBUTTON1` reached it, `XBUTTON2` did not.
+
+`XBUTTON2` is the default precisely *because* it is swallowed — of the two thumb buttons, Forward is
+the one almost nobody uses. `WARDEN_MOUSE_BUTTON=1` moves it to the rear button (Back),
+and `WARDEN_MOUSE_BUTTON=off` disables it and leaves both alone.
+
+The hook is built to be invisible: its callback does nothing but compare a couple of integers and
+add to a counter. Windows silently removes a low-level hook whose callback overruns
+`LowLevelHooksTimeout` (300ms by default), and this one is now in front of every mouse event you
+make, all day. A separate thread drains the counter and does the talking — which is also why the
+hook cannot share the window animator's thread, which blocks on `SetWindowPos` by design.
+
+> If the main thread ever stalls past that timeout the hook is dropped and the side button goes
+> quiet until Warden restarts. `Ctrl+Alt+W` is unaffected, so the failure is a degraded summon
+> rather than a lost one.
+
+## Why `Ctrl+Alt+Z` comes and goes
+
+It is taken when the popup appears and released when it is dismissed, rather than held for the life
+of the process. Warden sits in the background all day, and a hidden overlay with nothing on screen
+has no business owning `Ctrl+Alt+Z` session-wide.
 
 **The side effect that matters: while the popup is on screen, `Ctrl+Alt+Z` and `Ctrl+Alt`+wheel do
 not reach the app underneath.** That is what ruled out `Ctrl+Alt+C` and `Ctrl+Alt+A`. Dismissing the
 popup releases them immediately.
-
-The hook itself is built to be invisible: its callback does nothing but add a number to a counter,
-because Windows silently removes a low-level hook whose callback overruns `LowLevelHooksTimeout`
-(300ms by default) — and because it is in front of every mouse event you make. A separate thread
-drains the counter and does the talking. That thread is also why the hook cannot share the window
-animator's thread, which blocks on `SetWindowPos` by design.
 
 ---
 
@@ -188,9 +251,9 @@ already hold one.
 - **`Ctrl+Alt+Z` unavailable** → a warning is printed and the popup doesn't offer it. The hint in the
   header appears *only* when it actually bound, so it never advertises a shortcut that isn't
   listening.
-- **The wheel hook won't install** → a warning is printed and scrolling is gone for that session;
-  copy still works. With click-through on there is no bare wheel to fall back to, so this one is
-  worth noticing in the log.
+- **The mouse hook won't install** → a warning is printed, and both the side button and
+  `Ctrl+Alt`+wheel are gone for that session; the keys still work. With click-through on there is no
+  bare wheel to fall back to, so this one is worth noticing in the log.
 
 The header says whatever is most useful at that moment: `copied` right after a copy, then
 `Ctrl+Alt+wheel to pick · Z to copy` while picking, then `Ctrl+Alt+wheel scrolls · Z copies` when
