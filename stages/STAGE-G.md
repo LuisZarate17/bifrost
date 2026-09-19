@@ -346,6 +346,13 @@ Restore this if a later check disagrees. It is what "it already worked" means fo
 
 #### The chunks — 1a to 1h
 
+> **Progress, 2026-09-19.** 1a–1f are done and committed. **1g is half done** —
+> `tools/shortcuts.mjs` exists and both shortcuts are repointed; only `gh repo rename odin` is
+> left, and it is deliberately held until immediately before the next push, so nothing
+> outward-facing moves while local work is still landing. **1h is yours**, and is tracked in
+> `docs/PENDING-CHECKS.md` together with 1e's visual check — the one thing in this step that no
+> tool call can settle.
+
 Ordered so **every manifest is written once, against final paths**: the crates move before a
 workspace exists to name them, and Warden moves before the root `Cargo.toml` lists its members.
 Each one ends somewhere observable, so you can stop between any two.
@@ -609,13 +616,27 @@ a worse failure than one that is obviously broken.
 - **A moved `target/` means new binary hashes,** so Smart App Control will evaluate Warden fresh.
   Per PLAN.md §3 that clears on a rebuild — expect it rather than being surprised by it.
 
-### 2. The doc pass
+### 2. The doc pass — **DONE 2026-09-19**
 
 > **Amended 2026-09-18 — scope unchanged, boundary clarified.** Chunk **1f** already fixes every
 > reference the restructure itself made false: `README.md`'s layout block and `cd capture`,
 > `docs/README.md`'s code map, and the `warden-core` mentions in `BUILD.md` and
 > `PENDING-CHECKS.md`. **This step is the three things that are false independently of any move.**
 > If a correction is about a path, it belongs to 1f; if it is about a fact, it belongs here.
+
+> **Done, and it was five things rather than three.** The two extras were both in PLAN.md §3's
+> environment table and both would have misled a future chunk:
+>
+> - **"Not installed: Python"** — wrong. Four uv-managed interpreters are in `%APPDATA%\uv\python\`.
+>   Every conventional check reports absent because uv writes no `PythonCore` registry key, plain
+>   `python` on PATH is a Microsoft Store alias stub, and the `python3.14.exe` shim is SAC-blocked.
+>   The row now says how to reach it: `uv run python`.
+> - **"Author's Rust: read about it, never written it"** — true when written on 2026-09-07, and
+>   false after three stages of Rust. Chunks no longer need to be sized for a first-timer, though
+>   explanation is still wanted over bare code.
+>
+> The README was also retitled from *Warden* to *ODIN*, since the repo root is the project and no
+> longer just the overlay.
 
 **Do:** three separate corrections, all of them things that are currently false.
 

@@ -3,6 +3,21 @@
 Things built here that no tool call can verify — they need a keypress, a hover, or a second
 machine.
 
+## Open — to do before the next push, 2026-09-19
+
+Three things are deliberately held back until immediately before pushing, so the remote and the
+working copy change together rather than drifting apart mid-restructure.
+
+- [ ] **1h — rename the repo root** `C:\Users\you\source\repos\warden` → `…\repos\odin`.
+      **Needs a human**: Windows will not rename a directory that a process holds open, and that
+      includes VS Code, `warden.exe`, and any agent shell working inside it. Close all three,
+      rename, reopen.
+- [ ] **Re-run `node tools/shortcuts.mjs`** straight afterwards. Both shortcuts point at the old
+      path until it does, and a shortcut that silently does nothing is worse than one that is
+      obviously broken. `--check` reports where they point without changing anything.
+- [ ] **`gh repo rename odin`**, then update `origin`. GitHub redirects the old URL, so a stale
+      clone keeps working.
+
 ## Open — Before G0 step 1e, 2026-09-19
 
 - [ ] **Does the popup still look identical after the renderer moved to `@odin/ui`?**

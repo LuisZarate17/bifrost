@@ -1,13 +1,17 @@
-# Warden
+# ODIN — On-Device INference
 
-Press a hotkey, get an answer about whatever is on screen, from a model that never leaves the
-machine.
+Local AI tools that share one model and one machine. Nothing leaves the computer, ever.
 
-**Status: finished and in use.** Stages A–C are complete. `Ctrl+Alt+W` anywhere captures the
-What is left is one afternoon of testing — see [docs/BUILD.md](docs/BUILD.md).
+| | |
+|---|---|
+| **`odin`** | The same pipeline from the command line, plus `warm` / `off` / `status` power control |
+| **Citadel** | A local chat app sharing Warden's model and deciding which one is loaded. **Being built** — [stages/STAGE-G.md](stages/STAGE-G.md) |
 
-**Next up:** a local chat app that shares Warden's model and decides which one is loaded. Not
-started — the plan is [stages/STAGE-G.md](stages/STAGE-G.md).
+Things with an icon get a name; things you type get a description (PLAN.md §0b).
+
+**Status.** Stages A–C are complete — `Ctrl+Alt+W` anywhere captures the screen and streams an
+answer into the popup. What is left of the original plan is one afternoon of testing, see
+[docs/BUILD.md](docs/BUILD.md). Stage G's groundwork is in progress.
 
 ## The app
 

@@ -42,7 +42,8 @@ records of what happened.
 
 - **[STAGE-A.md](../stages/STAGE-A.md)** — foundations, no GUI. Complete.
 - **[STAGE-B.md](../stages/STAGE-B.md)** — the app shell. Complete.
-- **[STAGE-G.md](../stages/STAGE-G.md)** — the local chat app sharing Warden's model. Not started.
+- **[STAGE-G.md](../stages/STAGE-G.md)** — **Citadel**, the local chat app sharing Warden's
+  model. In progress — its groundwork restructured this repo.
 
 ---
 

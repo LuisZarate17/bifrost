@@ -1,12 +1,22 @@
-# Warden — Handoff Packet
+# ODIN — Handoff Packet
 
-> Press one key. Warden looks at your screen and answers immediately, in a corner popup that
+> Press one key. **Warden** looks at your screen and answers immediately, in a corner popup that
 > nobody you're screen sharing with can see. Entirely on your own machine.
 
-**Status:** v1 fully scoped 2026-09-07. **Stage A is COMPLETE** (A1–A4). Model
-chosen: `qwen3-vl:8b-instruct-q4_K_M`. One terminal command now answers about the screen.
-**Next: B1** — scaffold Tauri.
-**Repo root:** `C:\Users\you\source\repos\warden`
+**Status:** **Stages A–C are COMPLETE** and Warden is finished and in daily use — the hotkey
+captures the screen and streams an answer into the popup. Model chosen at A2:
+`qwen3-vl:8b-instruct-q4_K_M`. What is left of the original plan is one deferred testing round
+(BUILD.md D1/D2), not a feature.
+
+**Next: Stage G** — **Citadel**, a local chat app sharing Warden's model.
+See [`../stages/STAGE-G.md`](../stages/STAGE-G.md); its groundwork is in progress.
+
+**Repo root:** `C:\Users\you\source\repos\warden` *(being renamed to `odin` — see
+PENDING-CHECKS.md)*
+
+> **Names, since this document predates them.** **ODIN** is the project; **Warden** is the overlay
+> this packet was originally written about; **Citadel** is the chat app. Settled in §0b. Where the
+> text below says "Warden" it means the overlay unless it says otherwise.
 
 ---
 
@@ -110,8 +120,9 @@ on what each was trying to fix — the failed ones are as informative as the win
 | Display | **One monitor, 1920×1080, 100% scaling** — no DPI handling needed at all |
 | Machine | **Not domain-joined**, Windows Defender only — but see the Smart App Control note below |
 | Installed | Docker Desktop 4.82, Node 24.18 |
-| **Not** installed | Python, CUDA toolkit. *(Rust 1.98.1 and Ollama 0.33.3 installed at A1.)* |
-| Author's Rust | **Read about it, never written it.** Plan accordingly. |
+| **Not** installed | CUDA toolkit. *(Rust 1.98.1 and Ollama 0.33.3 installed at A1.)* |
+| Python | **Installed, via `uv`** — corrected 2026-09-19, this row used to say it was absent. Four interpreters in `%APPDATA%\uv\python\` (3.13.14, 3.14.6). Reach them with `uv run python`: plain `python` on PATH is a Microsoft Store **alias stub**, the `python3.14.exe` shim is SAC-blocked, and uv writes no `PythonCore` registry key — so every conventional check reports "not installed" |
+| Author's Rust | **Read about it, never written it** *(true when written, 2026-09-07)*. Stages A–C have since been built in it, so the chunks no longer need to assume a first-timer — but explanation is still wanted over bare code. |
 | Time pressure | None stated. Size phases by scope, never by weeks. |
 
 ### Smart App Control blocks Rust proc-macros — found at A4, 2026-09-12
@@ -140,7 +151,18 @@ than a blocker.
 
 ### It escalated at B4 — SAC now blocks `warden.exe` itself (2026-09-14)
 
-**This is a project-level blocker, not a build nuisance. Pinned, not solved.**
+> **Retracted 2026-09-15. This was never a project-level blocker.** The line here used to read
+> *"This is a project-level blocker, not a build nuisance. Pinned, not solved."* That was wrong,
+> and wrong in the costly direction — it discouraged the one-command test that disproved it.
+>
+> **The debug build runs** with SAC enforced. C2 was verified against Discord, Zoom and Teams
+> using it. Only *release* builds are refused every time. When a debug binary is blocked, a
+> rebuild for a fresh hash clears it — seen repeatedly during the Stage G restructure, where
+> relinking produced a genuinely different binary from identical source.
+>
+> **So signing is a shipping problem, not a building problem.** It buys a binary that runs on a
+> machine other than this one. Six chunks were listed as blocked on it and none of them were.
+> The account below is kept because the measurements in it are real.
 
 Smart App Control now refuses to run the built application:
 
@@ -364,8 +386,9 @@ Stage C does.
 the existing binary. Runs today under SAC, closes A1's unresolved "Ollama has no autostart" gap,
 and the logic is precisely what **C4** needs and what the hub needs after that.
 
-**Not before v1.** Warden is unfinished, and §0's rule stands: a feature earns its keep by being
-used, not by sounding good.
+**Not before v1.** *(Written while Warden was unfinished. It shipped at Stage C, and the model hub
+is now being built as **Citadel** — Stage G. §0's rule still stands: a feature earns its keep by
+being used, not by sounding good.)*
 
 ---
 
