@@ -20,7 +20,7 @@ use tauri::Manager;
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Runtime};
 
-use warden_core::{ollama, vram};
+use odin_core::{ollama, vram};
 
 /// How often the poller asks the card and Ollama what is going on.
 ///

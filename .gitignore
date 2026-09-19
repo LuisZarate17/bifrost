@@ -19,6 +19,9 @@ dist
 /evals/shots/
 /evals/**/*.png
 /*.png
+/crates/odin-cli/*.png
+# Leftover from the C4a-era capture/ dir, which is still on disk. Screenshots of
+# a real desktop can contain anything - keep them out until the dir is gone.
 /capture/*.png
 
 # Windows / editor noise

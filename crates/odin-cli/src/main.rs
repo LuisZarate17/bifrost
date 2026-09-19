@@ -17,7 +17,7 @@ use windows_capture::settings::{
 
 mod power;
 
-use warden_core::ollama;
+use odin_core::ollama;
 
 const DEFAULT_MODEL: &str = "qwen3-vl:8b-instruct-q4_K_M";
 

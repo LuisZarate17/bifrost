@@ -238,12 +238,12 @@ async fn ask_about_screen(
     // waits - 12.6s measured on a busy card - and reporting it second meant the
     // popup said "Reading your screen..." while it was actually waiting on a
     // server that had not started yet.
-    if !tauri::async_runtime::spawn_blocking(warden_core::ollama::is_running)
+    if !tauri::async_runtime::spawn_blocking(odin_core::ollama::is_running)
         .await
         .unwrap_or(false)
     {
         let _ = on_event.send(StreamEvent::StartingOllama);
-        let started = tauri::async_runtime::spawn_blocking(warden_core::ollama::ensure_running)
+        let started = tauri::async_runtime::spawn_blocking(odin_core::ollama::ensure_running)
             .await
             .map_err(|e| format!("start thread panicked: {e}"))?;
         match started {
@@ -441,18 +441,18 @@ async fn ask_with_turns(
     // Cold? Say so before the wait, not after. Checked rather than assumed: the
     // model may have been warmed from the tray, from the CLI, or by Ollama's own
     // timeout not having expired yet.
-    // warden_core is blocking by design - both its other callers drive it from a
+    // odin_core is blocking by design - both its other callers drive it from a
     // thread of their own. Calling it straight from this async command spins up a
     // second tokio runtime inside reqwest and then drops it in an async context,
     // which panics the worker and kills the request: "Cannot drop a runtime in a
     // context where blocking is not allowed". So it goes off-thread, like the tray
     // already does.
-    // Off the async worker, like every other warden_core call — it is blocking by
+    // Off the async worker, like every other odin_core call — it is blocking by
     // design, and dropping its runtime in an async context panics.
     let model_for_check = model.clone();
     let resident = tauri::async_runtime::spawn_blocking(move || {
-        warden_core::ollama::ps()
-            .map(|m| warden_core::ollama::find(&m, &model_for_check).is_some())
+        odin_core::ollama::ps()
+            .map(|m| odin_core::ollama::find(&m, &model_for_check).is_some())
             .unwrap_or(false)
     })
     .await

@@ -183,19 +183,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
-name = "capture"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "image",
- "reqwest",
- "serde",
- "serde_json",
- "warden-core",
- "windows-capture",
-]
-
-[[package]]
 name = "cc"
 version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1098,6 +1085,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "odin-cli"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "image",
+ "odin-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "windows-capture",
+]
+
+[[package]]
+name = "odin-core"
+version = "0.1.0"
+dependencies = [
+ "nvml-wrapper",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1926,16 +1936,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bfa7760aed19e106de2c7c0b581b509f2f25d3dacaf737cb82ac61bc6d760b0e"
 dependencies = [
  "try-lock",
-]
-
-[[package]]
-name = "warden-core"
-version = "0.1.0"
-dependencies = [
- "nvml-wrapper",
- "reqwest",
- "serde",
- "serde_json",
 ]
 
 [[package]]

@@ -25,7 +25,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use warden_core::ollama::Measured;
+use odin_core::ollama::Measured;
 
 /// One measured repetition, kept whole so the report can say more than the
 /// terminal did.

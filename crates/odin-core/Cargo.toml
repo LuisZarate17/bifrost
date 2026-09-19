@@ -1,5 +1,5 @@
 [package]
-name = "warden-core"
+name = "odin-core"
 version = "0.1.0"
 edition = "2024"
 

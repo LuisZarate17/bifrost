@@ -2990,6 +2990,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "odin-core"
+version = "0.1.0"
+dependencies = [
+ "nvml-wrapper",
+ "reqwest",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5231,6 +5241,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "image",
+ "odin-core",
  "reqwest",
  "serde",
  "serde_json",
@@ -5239,19 +5250,8 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
- "warden-core",
  "windows 0.61.3",
  "windows-capture",
-]
-
-[[package]]
-name = "warden-core"
-version = "0.1.0"
-dependencies = [
- "nvml-wrapper",
- "reqwest",
- "serde",
- "serde_json",
 ]
 
 [[package]]

@@ -26,7 +26,7 @@ use std::io::Write;
 use std::time::Duration;
 
 use base64::prelude::*;
-use warden_core::{ollama, vram};
+use odin_core::{ollama, vram};
 
 mod report;
 
