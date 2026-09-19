@@ -26,6 +26,36 @@ Fixed:
 
 ---
 
+## 0b. Names — settled 2026-09-18
+
+**ODIN — On-Device INference.** The project, and the command you type.
+
+| Piece | Name | Why |
+|---|---|---|
+| The project | **ODIN** | On-Device INference. What it is, in four letters |
+| The overlay | **Warden** | Summoned, and guards what it shows. Unchanged since B4 |
+| The chat app | **Citadel** | The fortified seat a garrison is commanded from — and this app commands which model is loaded |
+| The CLI | `odin` | |
+| The harness | `bench` | |
+| The shared crate | `odin-core` | |
+
+**The rule: things with an icon get a name, things you type get a description.**
+
+Warden and Citadel are launched from the Desktop and live in the tray or the taskbar, so they carry
+the theme — it costs nothing and it makes them memorable. `odin` and `bench` are typed, and a typed
+name should be short, honest and guessable. `odin warm`, `odin status`, the same shape as `git` and
+`cargo`.
+
+That rule is also why **`capture/` is renamed and `bench/` is not.** `capture` describes one of its
+four subcommands and has been wrong since C4a added `warm`, `off` and `status`; `bench` describes
+all of itself. A themed name would have made the CLI worse — `courier warm` reads no better than
+`capture warm`.
+
+**Warden keeping its name is load-bearing.** `warden.exe`, `com.warden.app`, the tray tooltip, the
+Desktop shortcut and all of `shortcuts.md` stay correct. Only the umbrella moves.
+
+---
+
 ## 1. v1, exactly
 
 1. Press the hotkey.
