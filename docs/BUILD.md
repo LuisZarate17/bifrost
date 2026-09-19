@@ -1,13 +1,54 @@
-# Warden — Build Plan
+# ODIN — Build Plan
 
-Companion to [PLAN.md](PLAN.md). Nineteen chunks in six stages. **Each chunk is one sitting
+Companion to [PLAN.md](PLAN.md). Stages A-F built **Warden**, the overlay, in nineteen chunks;
+Stage G builds **Citadel** and is tracked in its own packet. **Each chunk is one sitting
 and one execution chat.** Every one ends in something observable, so you can always stop.
 
 Author has read about Rust but never written it. Chunks are sized for that.
 
 ---
 
-## Where this stands — 2026-09-15
+## Where this stands — 2026-09-19
+
+**Stages A–C complete; Warden is finished and in daily use.** Stage G is under way — the groundwork
+that turns this repo into a workspace two apps can live in, then **Citadel**, the local chat app.
+Chunk-by-chunk detail is in [`../stages/STAGE-G.md`](../stages/STAGE-G.md); this is the summary.
+
+### Stage G so far — 2026-09-19
+
+| | | |
+|---|---|---|
+| **1a–1d** | ✅ | Repo restructured. Crates under `crates/`, `warden-core` → `odin-core`, Warden into `apps/warden/`, four Cargo projects merged into one workspace |
+| **1e** | ✅ | Renderer extracted to `@odin/ui`, stylesheet split with it. *(Visual check still open)* |
+| **1f** | ✅ | ~30 stale doc paths fixed, `tools/shortcuts.mjs` written, ~17,200 stale build files swept |
+| **1g** | ◐ | Shortcuts repointed. `gh repo rename odin` held until the next push |
+| **1h** | ☐ | **Needs a human** — rename the repo root folder to `odin` |
+| **Step 2** | ✅ | Five false claims corrected across the docs |
+| **Step 3** | ✅ | Shared config at `%APPDATA%\odin\config.json`; six duplicated constants removed |
+| **G0** | ✅ | Tool-call probe. **[G0-results.md](G0-results.md)** — `qwen3-vl:8b` 10/10, `llama3.1:8b` 6/10 |
+| **G1** | ☐ | **Next** — the spine: one window, one conversation, `/api/chat` streamed |
+
+**What the groundwork actually found**, none of which a build would have caught:
+
+- **`num_ctx` had diverged** between the CLI (8192) and Warden (32768). Ollama keys a runner by
+  model *and* context, so `odin warm` was being thrown away and the model reloaded — measured at
+  ~3s in **both** directions. Now one value in one place; the same sequence reads `load 0.00s`.
+- **`[profile.release]` stopped applying** the moment the workspace appeared. Cargo only honours
+  profiles at the workspace root and demotes a package-level one to a *warning*, so Warden's `lto`,
+  `strip` and `panic = "abort"` were silently ignored.
+- **Both Desktop shortcuts had been dead for three chunks**, pointing at a path that stopped
+  existing. A broken shortcut does nothing and says nothing.
+- **The CLI read `prompt.txt` by relative path**, so running it from anywhere else silently used an
+  inline fallback — which was itself a fourth copy of the prompt.
+- **`odin help` still said `capture`** six chunks after the binary was renamed. A string literal,
+  so no compiler had reason to object.
+
+Three things are waiting on a human before the next push — see
+[PENDING-CHECKS.md](PENDING-CHECKS.md).
+
+---
+
+## Where Stages A–F stood — 2026-09-15
 
 **16 of 19 chunks.** *(C5, E1 and F3 dissolved; D1, D2 and F2 deferred to one testing round.)* Stage A complete, Stage B complete, C1 done early alongside B4,
 C1b, C1c, C2 and C4a done 2026-09-15; C4b, C3 and F1 done 2026-09-16; F1b and the
