@@ -36,8 +36,38 @@ is bad at something, the answer is a different local model, not a fallback.
 - **One monitor, 1920×1080, 100% scaling**
 - Windows 11 Pro build 26200
 - Rust 1.98.1 MSVC · Node 24.18 · WebView2 Runtime installed
-- Ollama 0.33.3 · `qwen3-vl:8b-instruct-q4_K_M` *(reports `completion` + `vision` + `tools` — one model can serve both apps)*
+- Ollama 0.33.3 · `qwen3-vl:8b-instruct-q4_K_M` *(reports `completion` + `vision` + `tools`)*
 - Repo root: `C:\Users\you\source\repos\warden`
+
+**Match Warden's versions — Citadel is a sibling, not a newer thing.** Tauri 2 (`tray-icon`,
+`image-png`), `@tauri-apps/api` ^2, React ^19.1, TypeScript ~6.0.3, Vite ^8.0.16.
+
+---
+
+## Citadel is an ordinary window — most of Warden's tricks do NOT apply
+
+You will read Warden's `lib.rs` for patterns, and it is full of Win32 work that exists only because
+the popup is a click-through overlay that never takes focus. **Copying any of it into Citadel would
+be a bug.** Citadel is a normal, focusable, resizable application window.
+
+| Warden does | Citadel should |
+|---|---|
+| `focusable: false`, `SW_SHOWNOACTIVATE` | Take focus normally — you are typing in it |
+| `WS_EX_TRANSPARENT` click-through | Receive the mouse like any window |
+| `decorations: false`, `skipTaskbar: true`, `alwaysOnTop` | Have chrome, sit in the taskbar, no always-on-top |
+| A low-level global mouse hook for the wheel | Just scroll. It owns its own wheel events |
+| A tray icon | **No tray icon** — see decision #5 |
+| Global shortcuts bound and released per show | None. A windowed app does not claim global chords |
+
+What *does* carry over: the `Channel` streaming pattern, `spawn_blocking` around every `odin-core`
+call, the Markdown renderer, and the log-to-file trick if you make it windowless (you probably
+should not — a console is useful while building).
+
+> **Scaffolding warning, carried from STAGE-B and worth repeating.** **Never run
+> `create-tauri-app` at the repo root.** Passing `.` and accepting the overwrite prompt
+> **recursively deletes everything except `.git`** — verified in its source. `evals/shots/` is
+> gitignored and would not come back. Scaffold into a sibling temp directory and move files in by
+> hand, or hand-write Citadel's `src-tauri/` against Warden's as the reference.
 
 ---
 
@@ -48,11 +78,27 @@ warden/
 ├── warden-core/      SHARED — ollama (ps/find/load/unload/is_running/ensure_running), vram (NVML)
 ├── capture/          the CLI: screen → PNG → Ollama → streamed answer, plus warm/off/status
 ├── src-tauri/        Warden, the overlay app — hotkey, popup, tray, power control
-├── src/              Warden's React frontend — Answer.tsx, CodeBlock.tsx
+├── src/              Warden's React frontend — App.tsx, Answer.tsx, CodeBlock.tsx
 ├── bench/            F1 harness: model × image × prompt → TTFT, decode rate, resident VRAM
 ├── evals/            cases.md rubric, fixtures/, saved runs
-└── docs/             A1–A4, B1–B4, C1b, C2, C4a, F1 results + shortcuts.md
+├── tools/icon/       generates Warden's icon set and installs its shortcuts
+├── stages/           STAGE-A, STAGE-B, and this file
+├── docs/             see docs/README.md — it is a navigator for the whole repo
+│   ├── PLAN.md  BUILD.md  shortcuts.md  D-testing.md  PENDING-CHECKS.md
+│   └── results/      A1–A4, B1–B4, C1b, C2, C4a, F1 write-ups
+└── index.html  package.json  vite.config.ts  tsconfig.json  public/
+                      ^ Warden's, at the root — this is the collision Before G0 fixes
 ```
+
+**Read [`docs/README.md`](../docs/README.md) first.** It maps every document and, more usefully,
+every function: which file registers the hotkey, where the capture pipeline lives, where the
+clipboard write happens. It will save you grepping.
+
+> **This is the layout as it stands, and the names this document uses throughout.** "Before G0"
+> step 1 restructures it: `warden-core` becomes `odin-core`, `capture/` becomes
+> `crates/odin-cli/`, and Warden moves into `apps/warden/`. Every mention of `warden-core` below
+> means `odin-core` once that step is done — the old names are kept here so the instructions match
+> what you will actually be looking at when you start.
 
 ### What you reuse, and what you write fresh
 
@@ -74,7 +120,7 @@ warden/
 
 ---
 
-## Four decisions already made — do not relitigate them mid-build
+## Five decisions already made — do not relitigate them mid-build
 
 These are cheap now and a rewrite later. That is the only reason they are settled up front.
 
@@ -86,9 +132,12 @@ These are cheap now and a rewrite later. That is the only reason they are settle
    `model`, `created_at`. A record of `{role, content}` forces a migration of a database already
    holding real conversations the moment G5 lands.
 
-3. **Shared config, not a third hardcoded constant.** The prompt already exists in three places
+3. **One shared config, at `%APPDATA%\odin\config.json`.** It holds the current model tag and the
+   prompt, it is read through `odin-core`, and **a missing file is a normal state that yields the
+   built-in defaults.** The prompt currently exists in three places
    (`warden-core::DEFAULT_PROMPT`, `capture/prompt.txt`, and a `const` in `src/App.tsx` whose own
-   comment assigns the job to a chunk that was dissolved). Do not add a fourth.
+   comment assigns the job to a chunk that was dissolved). Do not add a fourth — Before G0 step 3
+   reduces it to one.
 
 4. **One current model, and this app owns it.** Not per-app overrides — a single resident model
    that both apps use. This app is the switchboard: it loads, unloads, tests and picks. Warden
@@ -101,6 +150,29 @@ These are cheap now and a rewrite later. That is the only reason they are settle
    **And it is affordable, because capability is queryable** — see the `/api/show` finding below.
    `qwen3-vl:8b-instruct-q4_K_M` reports `["completion", "vision", "tools"]`, so a single resident
    model can serve the chat window, Warden's screenshots, and tool calling at once.
+
+5. **Two shortcuts, two apps, and Warden never depends on this one.**
+
+   Warden already has Desktop and Start Menu shortcuts, and launching it is already the whole
+   "quick access" story: the hotkey goes live, the tray appears, and there is no window to open.
+   This app gets its own shortcut beside it. **Launching one must never launch the other**, and
+   either alone must be fully usable.
+
+   **The trap this closes.** G3 makes Warden read a shared config. If that config only exists once
+   *this* app has written one, then Warden on a fresh machine has nothing to read — and a new app
+   would have broken the finished one. So: a missing config is a **normal state, not an error**,
+   and the read falls back to Warden's own built-in default.
+
+   **Only Warden gets a tray icon.** It has no window, so the tray is its only surface. This app
+   has a window and belongs in the taskbar. Two tray icons for one project is a wart, and the
+   split is clean — no window means tray, a window means taskbar.
+
+   **Give them different marks.** `tools/icon/` generates Warden's icon; this app needs a variant
+   from the same family, not the same image. Two identical icons on the Desktop is worse than no
+   icon at all.
+
+   **Not this app's job:** starting, stopping, or reporting on Warden. It is tempting to add a
+   "hotkey is live" indicator, and it is coupling for a fact you can read off the tray.
 
 ---
 
@@ -177,6 +249,119 @@ either way. `HIGHLIGHTABLE` is also just `{rust, rs}`, which is thin for general
 
 ---
 
+## Before G0 — groundwork
+
+**Three sittings, none of them Stage G proper.** The first is not optional: the repo root *is*
+Warden's Tauri scaffold, so a second app cannot exist until Warden moves down a level.
+
+The project is now **ODIN — On-Device INference**; the overlay stays **Warden** and the chat app is
+**Citadel** (PLAN.md §0b).
+
+### 1. Restructure and rename
+
+**Why it cannot wait.** `index.html`, `package.json`, `vite.config.ts`, `tsconfig.json`, `src/`,
+`src-tauri/` and `public/` all sit at the repo root and all belong to Warden. Citadel needs its own
+copy of every one of them. They collide. And with a fifth crate arriving, four separate
+`Cargo.lock` files stop being tolerable.
+
+**Do:**
+
+```
+odin/
+├── Cargo.toml              new — Rust workspace over the three crates
+├── package.json            new — npm workspaces: ["apps/*", "packages/*"]
+├── node_modules/           one, shared
+├── apps/
+│   ├── warden/             src/ + src-tauri/ + index.html + vite.config.ts + package.json
+│   └── citadel/            created at G1, NOT here
+├── packages/
+│   └── ui/                 Answer.tsx + CodeBlock.tsx, imported as @odin/ui
+├── crates/
+│   ├── odin-core/          was warden-core/
+│   ├── odin-cli/           was capture/ — package odin-cli, binary `odin`
+│   └── bench/
+├── docs/  stages/  evals/  tools/
+```
+
+**Decided 2026-09-18, so don't re-open them mid-restructure:**
+
+- **npm workspaces**, one `node_modules` at the root. Two independent installs would let React and
+  Vite drift between the apps, and finding that out via a rendering difference is a bad afternoon.
+- **`packages/ui/`** holds the Markdown renderer, imported by both apps as `@odin/ui`. Extract it
+  **now, while Warden is its only consumer** — a move you can verify against one app is far safer
+  than the same move with two. Behaviour stays identical in this step; G1 adds the props Citadel
+  needs.
+- **`npm run check:inert` follows the renderer into `packages/ui/`**, and keeps guarding it there.
+  One renderer means one security review rather than two that drift.
+
+- **`warden-core` → `odin-core`.** Sixteen references across ten files: the four `Cargo.toml`s,
+  `use warden_core::` in `src-tauri/src/lib.rs` (×6), `tray.rs`, `capture/src/main.rs`,
+  `capture/src/power.rs` (×2), `bench/src/main.rs`, `bench/src/report.rs`.
+- **`capture/` → `crates/odin-cli/`, binary `odin`.** The old name has described one of its four
+  subcommands since C4a added `warm`, `off` and `status`.
+- **Warden down a level**, into `apps/warden/`, with its whole frontend and its Vite config.
+- **`Answer.tsx` and `CodeBlock.tsx` out to `packages/ui/`**, published as `@odin/ui`, with
+  `check:inert` moved alongside them. Warden imports from the package instead of `./Answer`.
+- **A root `Cargo.toml` workspace**, so there is one lockfile and one `target/`.
+- **A root `package.json`** declaring `"workspaces": ["apps/*", "packages/*"]`, so `npm install`
+  runs once at the root.
+- **The GitHub repo and the `origin` remote.**
+- **Regenerate the shortcuts.** They point at `src-tauri/target/debug/warden.exe`; under a workspace
+  that becomes `target/debug/warden.exe`. `tools/icon/install.mjs` is where this lives.
+
+**Done when:** every crate builds, `odin status` prints the card's figure, `npm run app` produces a
+Warden that launches from its Desktop shortcut, and nothing outside `docs/results/` says
+`warden-core`.
+
+**Watch for:**
+
+- **`docs/results/` is history. Do not rewrite it.** Those files record what was true when written;
+  the rename is documented going forward, never backdated.
+- **A moved `target/` means new binary hashes,** so Smart App Control will evaluate Warden fresh.
+  Per PLAN.md §3 that clears on a rebuild — expect it rather than being surprised by it.
+- **`evals/shots/` is gitignored and cannot be recovered.** Move directories with `git mv`, never
+  by scaffolding a new tree and copying into it.
+
+### 2. The doc pass
+
+**Do:** three separate corrections, all of them things that are currently false.
+
+- **PLAN.md's header.** Line 6 claims *"Stage A is COMPLETE"* and line 8 says *"**Next: B1** —
+  scaffold Tauri."* Stage C is complete.
+- **PLAN.md §3, line 144.** Still reads *"This is a project-level blocker, not a build nuisance.
+  Pinned, not solved."* BUILD.md retracted that on 2026-09-15: the debug build runs, and a blocked
+  binary clears on a rebuild.
+- **"Warden" now means two things.** Thirty mentions — PLAN 11, `shortcuts.md` 8, BUILD 6, README 5
+  — and each one has to resolve to either the project or the overlay. Mechanical, and the part most
+  likely to be skipped.
+
+**Done when:** no document claims Stage A is the frontier or that Smart App Control is unsolved, and
+every surviving "Warden" means the overlay.
+
+### 3. Build the shared config
+
+**Do:** build the config, now that its location is settled.
+
+**`%APPDATA%\odin\config.json`** — decided 2026-09-18. JSON rather than TOML so a frontend can read
+it directly later without a Rust round trip, and the conventional per-user location rather than
+anything repo-local, because a repo path is wrong the moment something is installed instead of run
+out of a build directory.
+
+It holds the current model tag and the prompt, and it is read by `odin-core` so all three binaries
+get it from one place.
+
+- **Kill the prompt's third copy.** It exists in `odin-core::DEFAULT_PROMPT`, in
+  `crates/odin-cli/prompt.txt`, and as a `const` in Warden's `App.tsx` — whose own comment assigns
+  the fix to a chunk that was dissolved. `DEFAULT_PROMPT` stays as the **fallback when no config
+  file exists** (decision #5), and becomes the only copy in source.
+- **A missing config is a normal state.** Write the loader so that "no file" returns the built-in
+  defaults without complaint. This is what keeps Warden working with Citadel never installed.
+
+**Done when:** deleting `%APPDATA%\odin\config.json` changes nothing about how Warden or the CLI
+behave, and the prompt exists in exactly one place in source.
+
+---
+
 ## The order, and what gates what
 
 Everything hangs off G1. The one hard gate is G0 → G6: if a local model cannot emit reliable
@@ -234,7 +419,7 @@ model that calls a tool every time is as useless as one that never does.
 ## G1 — The spine
 
 **Do:** A new Tauri app in the workspace. One window, one conversation, `/api/chat` streamed over
-a `Channel`, rendered with Warden's `Answer.tsx`. A model picker populated from Ollama's own list.
+a `Channel`, rendered with `@odin/ui`. A model picker populated from Ollama's own list.
 Power control reusing `warden-core::vram`, so you can see what the card actually holds.
 
 **Done when:** you can hold a real multi-turn conversation in a built `.exe`, and the second turn
@@ -277,6 +462,11 @@ in the popup header instead of asking anyway.
 **Done when:** you switch models in the app, press `Ctrl+Alt+W`, and the popup answers using the new
 model without Warden having been restarted. Then load `llama3.1:8b` and confirm the popup tells you
 it cannot see images rather than guessing.
+
+**And done when Warden still works with this app deleted.** Decision #5: rename the config file and
+press the hotkey — the popup must answer on its built-in default, with no error and no stall. This
+is the acceptance test that matters most in the chunk, because it is the one that says a new app did
+not break a finished one.
 
 **Watch for:** the capability check costs a round trip to `/api/show`. Cache it per tag — a model's
 capabilities do not change between summons, and the popup's whole appeal is that it is instant.
@@ -339,3 +529,5 @@ sounding good** (PLAN.md §0). G1–G4 have to be worth keeping even if G6 never
 - **Do not build MCP first.** One hardcoded tool, then the loop, then the transport.
 - **Do not give the two apps separate model settings.** See decision #4 — the card cannot hold two
   8B models, so separate settings just means the apps evict each other.
+- **Do not make Warden need this app.** Two shortcuts, two processes, no launching each other, and
+  a missing config is a normal state. See decision #5.
