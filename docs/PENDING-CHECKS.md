@@ -18,6 +18,24 @@ working copy change together rather than drifting apart mid-restructure.
 - [ ] **`gh repo rename odin`**, then update `origin`. GitHub redirects the old URL, so a stale
       clone keeps working.
 
+## Open — Before G0 step 3, 2026-09-19
+
+The config was verified end to end **through the CLI**: no file at all gives working defaults and
+exit 0; a file with a distinctive prompt reaches the model; renaming it away falls back silently
+without forcing a reload. `odin warm` then `odin` now reports **`load 0.00s`**, where the same
+sequence cost 3.09s before. What none of that exercises is the popup.
+
+- [ ] **Does Warden read the config too?** Write `%APPDATA%\odin\config.json` with an obvious
+      prompt — `{"model":"qwen3-vl:8b-instruct-q4_K_M","prompt":"Say only the word BANANA.","num_ctx":32768}`
+      — then press `Ctrl+Alt+W`. The popup should answer `BANANA`.
+- [ ] **Then delete the file and press it again.** The popup must answer normally on the built-in
+      default, **with no error and no stall**. This is the one that matters: PLAN.md decision #5
+      says a missing config is a normal state, and it is what keeps Warden working on a machine
+      where Citadel was never installed.
+- [ ] **Warm survives the hotkey.** `odin warm`, then `Ctrl+Alt+W`. The popup should not show
+      "Warming the model…" — the tray and the CLI now load at the same `num_ctx` the popup asks
+      with, so the runner is no longer torn down between them.
+
 ## Open — Before G0 step 1e, 2026-09-19
 
 - [ ] **Does the popup still look identical after the renderer moved to `@odin/ui`?**
