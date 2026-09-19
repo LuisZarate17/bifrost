@@ -32,13 +32,10 @@ tauri-plugin-global-shortcut = "2.3.2"
 tauri-plugin-clipboard-manager = "2"
 
 
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
-[profile.release]
-codegen-units = 1
-lto = true
-opt-level = 3
-panic = "abort"
-strip = true
+# The [profile.release] that used to live here moved to the workspace root at
+# Before-G0 step 1d. Cargo ignores profiles on non-root packages and says so only
+# as a warning, so leaving it here would have silently dropped Warden's release
+# optimizations rather than failing.
 
 [target."cfg(windows)".dependencies]
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_Console", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }

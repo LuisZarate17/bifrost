@@ -1,0 +1,35 @@
+# One workspace over every crate in the repo, so there is one Cargo.lock and one
+# target/ instead of four of each. Added at Before-G0 step 1d, when a fifth crate
+# (Citadel) was about to arrive and four separate lockfiles stopped being tolerable.
+#
+# Four members, not three: Warden's src-tauri belongs here too. A crate that sits
+# inside a workspace tree without being a member — or excluded — fails to build with
+# "current package believes it's in a workspace when it's not", which is the same
+# error the exclude below prevents.
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/odin-core",
+    "crates/odin-cli",
+    "crates/bench",
+    "apps/warden/src-tauri",
+]
+
+# evals/fixtures/frametest is the E0502 fixture that C1b and fixcheck.mjs are built
+# around. It is *meant* not to compile, it is built on its own rather than with the
+# workspace, and it keeps its own Cargo.lock. Without this line, `cargo check` in
+# that directory stops reaching the borrow checker at all and reports a workspace
+# error instead — which looks like the fixture breaking when it is this file's fault.
+exclude = ["evals/fixtures/frametest"]
+
+# Moved up from apps/warden/src-tauri/Cargo.toml at 1d. Cargo only honours profiles
+# on the workspace root and downgrades a package-level one to a warning, so these
+# settings were being silently ignored the moment the workspace appeared.
+# Tauri's guidance: https://tauri.app/concept/size/#cargo-configuration
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
