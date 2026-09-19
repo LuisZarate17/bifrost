@@ -95,6 +95,29 @@ header {
   display: flow-root;
 }
 
+/* Collapsed: show the verdict, keep the working. The rest of the blocks stay in
+   the DOM rather than being unmounted, so `Ctrl+Alt+Z` can still pick across the
+   whole answer and the measured height is right the instant it expands. */
+.content.collapsed .answer > *:not(:first-child) {
+  display: none;
+}
+
+/* A fade at the foot of the collapsed block, so it reads as "there is more"
+   rather than as the whole answer. */
+.content.collapsed .answer::after {
+  content: "";
+  display: block;
+  margin-top: 6px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(159, 208, 255, 0.35) 30%,
+    rgba(159, 208, 255, 0.35) 70%,
+    transparent
+  );
+}
+
 .scroll::-webkit-scrollbar {
   width: 6px;
 }

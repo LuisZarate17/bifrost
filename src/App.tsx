@@ -55,6 +55,18 @@ function App() {
   // keys actually bound. The hint is only offered when both are true — there is
   // nothing worse than a shortcut printed on screen that does nothing.
   const [overflowing, setOverflowing] = useState(false);
+
+  // Answers run 3,600-7,950 characters across ~34 blocks, and the first block is
+  // the verdict — the rest is the working. So the popup opens showing only that
+  // first block, and the rest stays one gesture away rather than filling the
+  // screen uninvited. Measured, not guessed: shortening the *answer* instead was
+  // tried three ways and each one lost the conclusion (evals/prompts/README.md).
+  const [collapsed, setCollapsed] = useState(true);
+  // The event listeners are registered once, so they need the live value.
+  const collapsedRef = useRef(true);
+  useEffect(() => {
+    collapsedRef.current = collapsed;
+  }, [collapsed]);
   const [scrollKeys, setScrollKeys] = useState(false);
 
   // Where the keyboard scroll is heading. `null` means it has arrived and the
@@ -158,6 +170,7 @@ function App() {
     pinned.current = true;
     setPick(null);
     setCopied(false);
+    setCollapsed(true);
 
     try {
       await invoke("ask_another_shot", {
@@ -225,6 +238,7 @@ function App() {
     // A pick refers to a block of the old answer, which is about to be replaced.
     setPick(null);
     setCopied(false);
+    setCollapsed(true);
 
     // One handler, not two. This copy predated `stream()` and had already
     // drifted — it never learned about the Ollama-starting event, which is
@@ -322,6 +336,26 @@ function App() {
   useEffect(() => {
     const unlisten = listen<number>("warden://scroll", (event) => {
       const at = pickRef.current;
+
+      // Collapsed, and asked to go down: that *is* the request to see more. The
+      // answer is 30-odd blocks of which the first is the whole verdict, so it
+      // opens collapsed and the same gesture you would already use to read on
+      // expands it. No shortcut had to be claimed for this.
+      if (collapsedRef.current && at === null) {
+        if (event.payload > 0) setCollapsed(false);
+        return;
+      }
+
+      // Scrolling up with nothing above you folds it back. Symmetric, and it
+      // means the popup can be returned to a glance without reaching for a key.
+      if (!collapsedRef.current && at === null && event.payload < 0) {
+        const box = scrollRef.current;
+        if (box && box.scrollTop <= 1 && scrollGoal.current === null) {
+          setCollapsed(true);
+          return;
+        }
+      }
+
       if (at === null) {
         nudge(event.payload);
         return;
@@ -530,6 +564,8 @@ function App() {
           <span className="hint ok">copied</span>
         ) : pickRef.current !== null ? (
           <span className="hint ok">Ctrl+Alt+wheel to pick · Z to copy</span>
+        ) : collapsed && answer ? (
+          <span className="hint">Ctrl+Alt+wheel down for the rest</span>
         ) : scrollKeys && overflowing ? (
           <span className="hint">Ctrl+Alt+wheel scrolls · Z copies</span>
         ) : scrollKeys && answer ? (
@@ -548,7 +584,7 @@ function App() {
         <div className="scroll" ref={scrollRef} onScroll={onScroll}>
           {/* Wrapper so the content's own height can be observed — the scroll
               box's height is decided by the window, not by what's in it. */}
-          <div className="content" ref={contentRef}>
+          <div className={collapsed ? "content collapsed" : "content"} ref={contentRef}>
             {answer && <Answer text={answer} />}
             {probe && <Answer text={probe} />}
           </div>
