@@ -81,7 +81,7 @@ warden/
 ├── src/              Warden's React frontend — App.tsx, Answer.tsx, CodeBlock.tsx
 ├── bench/            F1 harness: model × image × prompt → TTFT, decode rate, resident VRAM
 ├── evals/            cases.md rubric, fixtures/, saved runs
-├── tools/icon/       generates Warden's icon set and installs its shortcuts
+├── tools/icon/       generates Warden's icon set — it does NOT touch shortcuts (see 1g)
 ├── stages/           STAGE-A, STAGE-B, and this file
 ├── docs/             see docs/README.md — it is a navigator for the whole repo
 │   ├── PLAN.md  BUILD.md  shortcuts.md  D-testing.md  PENDING-CHECKS.md
@@ -261,14 +261,14 @@ The project is now **ODIN — On-Device INference**; the overlay stays **Warden*
 
 **Why it cannot wait.** `index.html`, `package.json`, `vite.config.ts`, `tsconfig.json`, `src/`,
 `src-tauri/` and `public/` all sit at the repo root and all belong to Warden. Citadel needs its own
-copy of every one of them. They collide. And with a fifth crate arriving, four separate
+copy of every one of them. They collide. And with a fifth crate arriving, five separate
 `Cargo.lock` files stop being tolerable.
 
 **Do:**
 
 ```
 odin/
-├── Cargo.toml              new — Rust workspace over the three crates
+├── Cargo.toml              new — Rust workspace over the four crates
 ├── package.json            new — npm workspaces: ["apps/*", "packages/*"]
 ├── node_modules/           one, shared
 ├── apps/
@@ -307,22 +307,271 @@ odin/
   runs once at the root.
 - **The GitHub repo and the `origin` remote.**
 - **Regenerate the shortcuts.** They point at `src-tauri/target/debug/warden.exe`; under a workspace
-  that becomes `target/debug/warden.exe`. `tools/icon/install.mjs` is where this lives.
+  that becomes `target/debug/warden.exe`.
 
-**Done when:** every crate builds, `odin status` prints the card's figure, `npm run app` produces a
-Warden that launches from its Desktop shortcut, and nothing outside `docs/results/` says
-`warden-core`.
+#### Surveyed 2026-09-18 — five corrections to what this step used to say
 
-**Watch for:**
+Each was checked against the files rather than reasoned about.
+
+1. **Shortcuts are not in `tools/icon/install.mjs`.** That file writes icon PNG and ICO bytes into
+   a directory given as `argv[2]`; it creates nothing else. A repo-wide grep for `.lnk`, `WScript`,
+   `CreateShortcut` and `Shell.Application` returns **nothing**. The two shortcuts were made by
+   hand, so "regenerate the shortcuts" is new code — chunk **1g**.
+2. **Five `Cargo.lock` files, not four,** and the fifth is a trap rather than a footnote. A crate
+   nested inside a workspace tree that is neither a member nor excluded **fails to build** with
+   *"current package believes it's in a workspace when it's not."* Reproduced in a scratch
+   workspace, not assumed. The root manifest needs `exclude = ["evals/fixtures/frametest"]`.
+3. **`.gitattributes` pins `capture/prompt.txt -text`,** and that line has to follow the file to
+   `crates/odin-cli/prompt.txt`. If it does not, the prompt starts being line-ending converted on
+   checkout — and the note in that same file records one trailing newline flipping a C1b verdict.
+4. **The prompt has a fourth copy.** `evals/prompts/current.txt` is byte-identical to
+   `capture/prompt.txt`, md5 `c8dd6719007b1ef1f81b38833eec84af` for both. It is measured input
+   rather than a duplicate — see the amendment to step 3.
+5. **The workspace covers four crates, not three.** The tree above used to say three. Warden's
+   `apps/warden/src-tauri` has to be a member as well — that is the whole point of one `target/`
+   and one lockfile. Leave it out and it hits **the identical error frametest does**, because a
+   crate inside the tree that is not a member and not excluded is the same mistake either way.
+
+#### The baseline, measured before anything moved — 2026-09-18
+
+Restore this if a later check disagrees. It is what "it already worked" means for this step.
+
+| | |
+|---|---|
+| `cargo check` | clean on all four crates |
+| `npm run check:inert` | **12/12 PASS**, elements emitted: `div, ol, li, code, strong, span` |
+| `npm run check:fixes` | 5/5 candidates behaved as expected |
+| `capture status` | `Ready` · card **12,563 MiB of 16,303** · Ollama 0.33.3 |
+| `git` | working tree clean at `73925c1`, two commits ahead of `origin/main` |
+
+#### The chunks — 1a to 1h
+
+Ordered so **every manifest is written once, against final paths**: the crates move before a
+workspace exists to name them, and Warden moves before the root `Cargo.toml` lists its members.
+Each one ends somewhere observable, so you can stop between any two.
+
+**1h is yours, not a chat's.** Windows will not rename a directory that an open editor or a running
+process is holding, and during this work that includes VS Code, `warden.exe`, and the agent's own
+shell.
+
+---
+
+##### 1a — Standstill and safety net
+
+> Not a sitting. Two minutes, and the price of admission for everything after it.
+
+**Do:** Push, cut a named restore point, stop the app.
+
+```
+git push                      # a remote copy is the real undo
+git branch pre-restructure    # the local one
+```
+
+Then quit Warden. It is a running process holding `src-tauri/target/debug/warden.exe`, and
+`target/` is about to move. **The tray icon and `Ctrl+Alt+W` stay dead until 1f rebuilds it** —
+that is the visible cost of this step, and it is worth knowing before you start rather than
+noticing.
+
+**Done when:** `git status` is clean, `main` and `origin/main` agree, `pre-restructure` exists, and
+no `warden.exe` is in the process list.
+
+**Watch for:** starting dirty. A mass `git mv` mixed into unrelated edits is unreviewable, and
+`git mv` on a modified file muddies rename detection in the diff you will want to read.
+
+---
+
+##### 1b — The three crates move and rename
+
+**Do:** Rust only. No npm is involved, so it verifies with `cargo` alone.
+
+- `mkdir crates` **first** — `git mv` will not create a missing parent directory.
+- `git mv warden-core crates/odin-core` · `git mv capture crates/odin-cli` ·
+  `git mv bench crates/bench`
+- `crates/odin-core/Cargo.toml`: `name = "warden-core"` → `"odin-core"`.
+- The three dependents' `[dependencies]` entries — **the name and the path both change**:
+  `warden-core = { path = "../warden-core" }` → `odin-core = { path = "../odin-core" }`.
+- **Twelve source occurrences** of `warden_core::` → `odin_core::` across six files:
+  `bench/src/main.rs`, `bench/src/report.rs`, `odin-cli/src/main.rs`, `odin-cli/src/power.rs` (×2),
+  `src-tauri/src/lib.rs` (×6, two of them comments), `src-tauri/src/tray.rs`. With the four
+  manifests that is the sixteen across ten files this step always claimed — confirmed by grep.
+- `crates/odin-cli/Cargo.toml`: `name = "odin-cli"`, plus `[[bin]] name = "odin"`. The package and
+  the binary get different names on purpose — PLAN.md §0b's rule is that a typed name should be
+  short and guessable.
+- `.gitattributes`: `capture/prompt.txt` → `crates/odin-cli/prompt.txt`.
+- `.gitignore`: `/capture/*.png` → `/crates/odin-cli/*.png`.
+
+> **Why the manifest says `odin-core` and the Rust says `odin_core`.** A hyphen is not a legal
+> character in a Rust identifier, so Cargo maps the hyphenated *package* name to an underscored
+> *crate* name automatically. They are the same crate spelled for two different grammars, and you
+> never write the mapping down anywhere.
+
+**Done when:** all three crates `cargo check` clean **from their new paths, still standalone** —
+before any workspace exists to hide a mistake behind a shared lockfile.
+
+**Watch for:** `src-tauri/` is still at the repo root here, so its dependency path becomes
+`../crates/odin-core` — and then `../../../crates/odin-core` at 1c when Warden moves. **That is the
+one path written twice**, and it is deliberate: the alternative is moving both trees before
+checking either, which trades a two-line edit for a much worse failure to diagnose.
+
+---
+
+##### 1c — Warden down a level
+
+**Do:** Nine root entries into `apps/warden/`, with `git mv`:
+
+`src/` · `src-tauri/` · `public/` · `index.html` · `vite.config.ts` · `tsconfig.json` ·
+`tsconfig.node.json` · `package.json` · `package-lock.json`
+
+Then `src-tauri/Cargo.toml`'s path to `odin-core` becomes `../../../crates/odin-core`.
+
+**`tauri.conf.json` needs no change, and it is worth knowing why.** `frontendDist: "../dist"` and
+`beforeBuildCommand: "npm run build"` both resolve against `src-tauri`'s *parent* — which is still
+the directory holding `package.json`. The relationship those settings depend on is unchanged; only
+the absolute location moved.
+
+**Done when:** `npm install && npm run app` from `apps/warden/` produces a working Warden — before
+any shared code has been extracted, so a failure here is about the move and nothing else.
+
+**Watch for:** `check:fixes` is `node evals/fixcheck.mjs`, and **`evals/` does not move**. That
+script belongs to the root `package.json` at 1d, not to Warden's. Carrying it down a level breaks
+the path silently — it is a script that runs from the wrong directory, not one that errors clearly.
+
+---
+
+##### 1d — One workspace, one lockfile, one target
+
+**Do:** Every path is final now, so the two roots get written once.
+
+- Root `Cargo.toml`: `[workspace]`, members `crates/odin-core`, `crates/odin-cli`, `crates/bench`,
+  `apps/warden/src-tauri` — and **`exclude = ["evals/fixtures/frametest"]`**.
+- `git rm` the four now-redundant `Cargo.lock` files. `evals/fixtures/frametest/Cargo.lock`
+  **stays**: excluded means it is still its own workspace and still needs its own lock.
+- Root `package.json`: `"workspaces": ["apps/*", "packages/*"]`, with `check:fixes` living here.
+
+**Done when:** one `cargo build` at the root produces one `target/` holding `warden.exe`,
+`odin.exe` and `bench.exe` — **and** `cargo check` inside `evals/fixtures/frametest/` still reaches
+the borrow checker.
+
+**Watch for:** **frametest is meant not to compile** — it is the E0502 fixture that C1b and
+`fixcheck.mjs` are built around. So "still works" is a distinction between two failures, not
+between failure and success:
+
+| What it prints | Meaning |
+|---|---|
+| `error[E0502]: cannot borrow 'frames' as mutable…` | ✅ correct — Cargo reached the borrow checker |
+| `error: current package believes it's in a workspace when it's not` | ❌ the `exclude` is missing or wrong |
+
+Measured before the restructure: `cargo check` there exits **101** with E0502. That exit code is
+the pass condition, which is exactly the sort of check that gets skipped for looking like a failure.
+
+---
+
+##### 1e — `@odin/ui`
+
+**Do:** The last move, and the only one that changes how code imports rather than where it sits.
+
+- `git mv` `Answer.tsx`, `CodeBlock.tsx` and `Answer.inert-check.tsx` from `apps/warden/src/` into
+  `packages/ui/src/`.
+- `packages/ui/package.json` as `@odin/ui`. `check:inert` moves with it and keeps guarding it there.
+- Warden's `App.tsx`: `from "./Answer"` → `from "@odin/ui"`.
+
+**Behaviour stays identical in this chunk.** G1 adds the props Citadel needs; this one only changes
+where the file lives. If anything renders differently, something moved that should not have.
+
+**Done when:** `npm run check:inert` prints the same **12 PASS** and the same emitted-element list —
+`div, ol, li, code, strong, span` — from its new home, and `npm run app` still builds Warden.
+
+**Watch for:** the inert check is an SSR build of a single file into
+`node_modules/.cache/inert`, which assumes a hoisted root `node_modules`. npm workspaces gives you
+that, but only after a root `npm install` — so run one before concluding the move broke something.
+
+---
+
+##### 1f — Acceptance: the gate this step was always judged on
+
+**Do:** Nothing new. Re-run the four criteria end to end.
+
+| Criterion | How |
+|---|---|
+| Every crate builds | `cargo build` at the root |
+| `odin status` prints the card's figure | `target/debug/odin.exe status` |
+| `npm run app` produces a Warden that launches from its Desktop shortcut | from `apps/warden/` |
+| Nothing outside `docs/results/` says `warden-core` | `grep -rn warden-core` |
+
+That last one pulls documentation into this chunk. `README.md`'s layout block and its CLI section
+(`cd capture`), and `docs/README.md`'s *Where things live in code* headings, all name paths that
+1b–1e just made false.
+
+> **The split with step 2: fix what the move made false here, leave what was already false to step
+> 2.** This chunk stays mechanical — paths and names — and step 2 stays about facts. Neither one
+> inherits the other's judgement calls.
+
+**Done when:** all four pass, and Warden answers a real `Ctrl+Alt+W` from the rebuilt binary.
+
+**Watch for:** **Smart App Control judges the new binary fresh.** One root `target/` means a new
+content hash for `warden.exe`. PLAN.md §3 says a blocked binary clears on a rebuild, so a single
+refusal here is expected rather than a failure — rebuild before diagnosing anything else.
+
+---
+
+##### 1g — Shortcuts and the remote
+
+**Do:** The two outward-facing changes, deliberately last — so everything before them is still
+reversible with `git reset --hard pre-restructure` against a repo nobody else has seen move.
+
+- **`tools/shortcuts.mjs`** — new. Creates or repoints the Desktop and Start Menu `.lnk` files
+  through `WScript.Shell`. Written as a script rather than done by hand because decision #5 gives
+  Citadel its own shortcut beside Warden's, so this gets written eventually either way.
+  Both currently target `…\warden\src-tauri\target\debug\warden.exe` with the repo root as working
+  directory; both become `<root>\target\debug\warden.exe`.
+- **`gh repo rename odin`**, then point `origin` at the new URL. GitHub redirects the old one, so a
+  stale clone keeps working and nothing breaks for being slow to update.
+
+**Done when:** both shortcuts launch the rebuilt Warden, and `git push` succeeds against the renamed
+remote.
+
+**Watch for:** the Desktop on this machine is **OneDrive-redirected** —
+`C:\Users\you\OneDrive\Desktop`, not `%USERPROFILE%\Desktop`. Resolve it with
+`[Environment]::GetFolderPath('Desktop')` rather than assembling the path, or the script writes a
+shortcut somewhere nobody will ever see it.
+
+---
+
+##### 1h — The root folder rename · yours, not a chat's
+
+**Do:** Close VS Code, confirm no `warden.exe` is running, rename
+`C:\Users\you\source\repos\warden` to `…\repos\odin`, reopen.
+
+**Windows will not rename a directory that a process is holding open.** During this work that is
+the editor, the app, and the agent's own shell — which is why this is the one part of step 1 that
+cannot be done from inside a session working in the folder.
+
+**Done when:** the folder is `odin`, VS Code reopens on it, and `tools/shortcuts.mjs` has been
+re-run at the new path.
+
+**Watch for:** re-running `shortcuts.mjs` is **not optional**. Between the rename and that re-run,
+both shortcuts point at a path that no longer exists — and a shortcut that silently does nothing is
+a worse failure than one that is obviously broken.
+
+---
+
+**Watch for, throughout:**
 
 - **`docs/results/` is history. Do not rewrite it.** Those files record what was true when written;
   the rename is documented going forward, never backdated.
+- **`evals/shots/` is gitignored and cannot be recovered.** Move directories with `git mv`, never
+  by scaffolding a new tree and copying into it. `evals/` does not move at all, so `shots/` and
+  `out/` should never appear in a `git mv` — if they do, something is wrong.
 - **A moved `target/` means new binary hashes,** so Smart App Control will evaluate Warden fresh.
   Per PLAN.md §3 that clears on a rebuild — expect it rather than being surprised by it.
-- **`evals/shots/` is gitignored and cannot be recovered.** Move directories with `git mv`, never
-  by scaffolding a new tree and copying into it.
 
 ### 2. The doc pass
+
+> **Amended 2026-09-18 — scope unchanged, boundary clarified.** Chunk **1f** already fixes every
+> reference the restructure itself made false: `README.md`'s layout block and `cd capture`,
+> `docs/README.md`'s code map, and the `warden-core` mentions in `BUILD.md` and
+> `PENDING-CHECKS.md`. **This step is the three things that are false independently of any move.**
+> If a correction is about a path, it belongs to 1f; if it is about a fact, it belongs here.
 
 **Do:** three separate corrections, all of them things that are currently false.
 
@@ -357,6 +606,16 @@ get it from one place.
 - **A missing config is a normal state.** Write the loader so that "no file" returns the built-in
   defaults without complaint. This is what keeps Warden working with Citadel never installed.
 
+> **Amended 2026-09-18 — there is a fourth copy, and it stays.** `evals/prompts/current.txt` is
+> byte-identical to `crates/odin-cli/prompt.txt`: md5 `c8dd6719007b1ef1f81b38833eec84af` for both.
+> It is **not** a fourth place to forget to update. It is **measured input** — read verbatim by
+> `bench.mjs --prompt-file`, sitting beside `brief.txt`, `lead.txt`, `ordered.txt` and `tight.txt`,
+> and protected from line-ending conversion by `.gitattributes` for the reason recorded there: at
+> C1b one trailing newline flipped a case-02 verdict.
+>
+> Said out loud here so the next reader does not tidy it away and quietly change what the bench
+> measures. **"The prompt exists in one place in source" means source — `evals/prompts/` is data.**
+
 **Done when:** deleting `%APPDATA%\odin\config.json` changes nothing about how Warden or the CLI
 behave, and the prompt exists in exactly one place in source.
 
@@ -364,11 +623,17 @@ behave, and the prompt exists in exactly one place in source.
 
 ## The order, and what gates what
 
-Everything hangs off G1. The one hard gate is G0 → G6: if a local model cannot emit reliable
-structured calls, the last chunk does not get built, and it is half an hour to find out.
+**Everything hangs off step 1, then off G1.** Step 1 is blocking for a structural reason — Citadel
+has nowhere to exist until Warden vacates the repo root — and the two hard gates after it are
+step 3 → G2/G3 and G0 → G6. If a local model cannot emit reliable structured calls, the last chunk
+does not get built, and it is half an hour to find out.
 
 ```mermaid
 flowchart TD
+    S1["Before G0 · step 1<br/>restructure and rename<br/><i>1a–1h · 1h is yours</i>"]
+    S2["step 2 · the doc pass"]
+    S3["step 3 · the shared config"]
+
     G0["G0 · tool-call probe<br/><i>half an hour, no app code</i>"]
     G1["G1 · the spine<br/><i>a conversation you can hold</i>"]
     G2["G2 · the switchboard<br/><i>pick, load, label</i>"]
@@ -377,6 +642,12 @@ flowchart TD
     G5["G5 · attachments"]
     G6["G6 · tools / MCP"]
 
+    S1 --> S2
+    S1 --> S3
+    S1 ==> G0
+    S1 ==> G1
+    S3 -. "writes the choice" .-> G2
+    S3 -. "Warden reads it" .-> G3
     G1 --> G2 --> G3
     G1 --> G4 --> G5
     G1 --> G6
@@ -384,7 +655,12 @@ flowchart TD
 
     classDef probe stroke-dasharray:5 4
     class G0 probe
+    classDef ground stroke-width:2px,stroke-dasharray:2 3
+    class S1,S2,S3 ground
 ```
+
+**Step 1's own chunks run strictly in order** — 1a → 1h. Each writes a manifest or a path that the
+next one depends on, so they are a sequence rather than a set.
 
 **G3 is the one that answers the original question** — switch the model in the app, and the popup
 follows without a restart.
