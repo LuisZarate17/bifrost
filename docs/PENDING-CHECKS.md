@@ -41,7 +41,7 @@ clean, all four crates checked, both guards green.
 1. **The popup could not load at all.** The debug build hard-codes `localhost:1420`, so it needs
    Vite running. Without it the window shows WebView2's "can't reach this" page. See the open
    item below.
-2. **The resident check panicked the request that needed it.** `warden_core` is blocking by
+2. **The resident check panicked the request that needed it.** `odin_core` is blocking by
    design; calling it from an async command drops a tokio runtime inside an async context and
    kills the worker. The popup hung on "Reading your screen…" forever while Ollama loaded a model
    nobody was waiting for.

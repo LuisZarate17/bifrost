@@ -48,10 +48,13 @@ records of what happened.
 
 ## Where things live in code
 
-Four Rust crates and one React frontend. Line numbers drift; function names don't, so grep the
-name if a number has gone stale.
+Four Rust crates, one shared React package and one app frontend. Line numbers drift; function
+names don't, so grep the name if a number has gone stale.
 
-### `warden-core/` — shared by everything
+> **Paths changed at Before-G0 step 1** (Stage G). Everything moved under `apps/`, `packages/` and
+> `crates/`, and `warden-core` became `odin-core`. The headings below are the current locations.
+
+### `crates/odin-core/` — shared by everything
 
 - **What Ollama believes is loaded** — `ollama.rs` → `ps()`, `find()`
 - **Load or release a model** — `ollama.rs` → `load()`, `unload()`, via `keep_alive: -1` and `0`
@@ -62,7 +65,7 @@ name if a number has gone stale.
 > Everything here is **blocking by design**. Calling it from an `async` Tauri command drops a tokio
 > runtime inside an async context and kills the worker. Go through `spawn_blocking`.
 
-### `src-tauri/src/lib.rs` — Warden's Rust side
+### `apps/warden/src-tauri/src/lib.rs` — Warden's Rust side
 
 About 2,000 lines, and most of the app is in it.
 
@@ -86,29 +89,43 @@ About 2,000 lines, and most of the app is in it.
 - **Where the logs go** — `redirect_log_to_file()` (~1732)
   The app is windowless, so this is the only way to see anything it printed.
 
-### `src-tauri/src/tray.rs` — the tray
+### `apps/warden/src-tauri/src/tray.rs` — the tray
 
 - **The menu, and Off / Warming / Ready** — `install()` (~324), `Power`
 - **Warming exists only here** — `/api/ps` has no "loading" entry, so only a long-lived process
   that knows it issued a load can show it
 
-### `src/` — Warden's React frontend
+### `apps/warden/src/` — Warden's own React frontend
 
 - **The popup's markup, header hints, pick-and-copy state** — `App.tsx`
-- **Markdown rendering, and the security refusals** — `Answer.tsx`
-  No raw HTML, `img` renders nothing, links render as plain text.
-- **Syntax highlighting** — `CodeBlock.tsx`, Shiki, lazy, JS regex engine so no WASM
-- **Proof the refusals hold** — `Answer.inert-check.tsx`, run by `npm run check:inert`
+- **The popup's chrome** — `App.css`. The renderer's styles are *not* here; see `@odin/ui` below.
+  Three rules that select `.answer` descendants do stay, because they are Warden behaviours rather
+  than renderer ones: `.answer > .copy-pick` and the two `.content.collapsed .answer…` rules.
 
-### `capture/` — the CLI
+### `packages/ui/` — `@odin/ui`, the renderer both apps share
+
+Extracted at Before-G0 step 1e, while Warden was still its only consumer. Citadel imports the same
+package from G1, so **one renderer means one security review rather than two that drift**.
+
+- **Markdown rendering, and the security refusals** — `src/Answer.tsx`
+  No raw HTML, `img` renders nothing, links render as plain text.
+- **Syntax highlighting** — `src/CodeBlock.tsx`, Shiki, lazy, JS regex engine so no WASM
+- **The renderer's styles** — `src/answer.css`
+- **Proof the refusals hold** — `src/Answer.inert-check.tsx`, run by `npm run check:inert`
+
+> **The component does not import its own CSS; the consumer does** — `import "@odin/ui/answer.css"`.
+> `check:inert` SSR-builds `Answer` and runs the output under plain `node`, where a CSS import
+> would fail outright.
+
+### `crates/odin-cli/` — the CLI, binary `odin`
 
 - **Capture, encode, stream, print** — `src/main.rs`
 - **`warm` / `off` / `status`** — `src/power.rs`
 - **The prompt, editable without a rebuild** — `prompt.txt`
 
-### `bench/` and `evals/` — measuring models
+### `crates/bench/` and `evals/` — measuring models
 
-- **Run model × image × prompt** — `bench/src/main.rs`
+- **Run model × image × prompt** — `crates/bench/src/main.rs`
 - **The grading rubric** — `evals/cases.md`
 - **Cases that regenerate from tracked source** — `evals/fixtures/`
 - **Saved runs** — `evals/out/`

@@ -12,8 +12,8 @@ started — the plan is [stages/STAGE-G.md](stages/STAGE-G.md).
 ## The app
 
 ```
-npm run app                          # build it
-src-tauri/target/debug/warden.exe    # or the Desktop / Start Menu shortcut
+npm run app                    # build it
+target/debug/warden.exe        # or the Desktop / Start Menu shortcut
 ```
 
 **Use `npm run app`, not `cargo build`.** A plain `cargo build` bakes `devUrl` into the binary, so
@@ -32,19 +32,22 @@ window chrome, so that file is the interface.
 The same pipeline without the GUI in the way. It is also ahead of the app on controls: a capture
 delay, a model flag, and a prompt you can edit without rebuilding.
 
-```
-cd capture
-cargo run                                       # answer about your screen, now
-cargo run -- 12                                 # wait 12s first
-cargo run -- --model qwen3-vl:4b-instruct-q8_0  # try a different model
+The binary is `odin` — short and guessable, because it is a name you type rather than one that
+carries an icon (PLAN.md §0b).
 
-cargo run -- warm                               # load the model and pin it in VRAM
-cargo run -- off                                # release it, give the card its memory back
-cargo run -- status                             # what is loaded, per Ollama and per the card
+```
+cargo build                                    # builds every crate into target/
+target/debug/odin                              # answer about your screen, now
+target/debug/odin 12                           # wait 12s first
+target/debug/odin --model qwen3-vl:4b-instruct-q8_0
+
+target/debug/odin warm                         # load the model and pin it in VRAM
+target/debug/odin off                          # release it, give the card its memory back
+target/debug/odin status                       # what is loaded, per Ollama and per the card
 ```
 
-The prompt lives in `capture/prompt.txt`, not in source. Ollama is started automatically if it
-is not already running.
+The prompt lives in `crates/odin-cli/prompt.txt`, not in source. Ollama is started automatically
+if it is not already running.
 
 ## How it works
 
@@ -60,17 +63,26 @@ one of them is the truth.
 
 ## Layout
 
+One Cargo workspace and one npm workspace, so there is a single `target/`, a single lockfile of
+each kind, and a single `node_modules`.
+
 ```
-warden/
-├── warden-core/   shared — Ollama power control, NVML VRAM readout
-├── capture/       the CLI
-├── src-tauri/     Warden — hotkey, popup, tray
-├── src/           Warden's React frontend
-├── bench/         model × image × prompt benchmark harness
-├── evals/         rubric, fixtures, saved runs
-├── docs/          plan, build log, shortcuts, results  →  docs/README.md
-└── stages/        execution packets — paste one into a fresh chat
+odin/
+├── apps/
+│   └── warden/        the overlay — hotkey, popup, tray (src-tauri/ + its React frontend)
+├── packages/
+│   └── ui/            @odin/ui — the Markdown renderer both apps share
+├── crates/
+│   ├── odin-core/     shared — Ollama power control, NVML VRAM readout
+│   ├── odin-cli/      the CLI, binary `odin`
+│   └── bench/         model × image × prompt benchmark harness
+├── evals/             rubric, fixtures, saved runs
+├── docs/              plan, build log, shortcuts, results  →  docs/README.md
+└── stages/            execution packets — paste one into a fresh chat
 ```
+
+*(Restructured at Before-G0 step 1 of Stage G. The project is **ODIN**; **Warden** is the overlay
+and **Citadel** will be the chat app — PLAN.md §0b.)*
 
 ## Docs
 

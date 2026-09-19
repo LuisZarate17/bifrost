@@ -46,10 +46,10 @@ the theme — it costs nothing and it makes them memorable. `odin` and `bench` a
 name should be short, honest and guessable. `odin warm`, `odin status`, the same shape as `git` and
 `cargo`.
 
-That rule is also why **`capture/` is renamed and `bench/` is not.** `capture` describes one of its
-four subcommands and has been wrong since C4a added `warm`, `off` and `status`; `bench` describes
-all of itself. A themed name would have made the CLI worse — `courier warm` reads no better than
-`capture warm`.
+That rule is also why **`capture/` was renamed and `bench/` was not.** `capture` describes one of
+its four subcommands and had been wrong since C4a added `warm`, `off` and `status`; `bench`
+describes all of itself. A themed name would have made the CLI worse — `courier warm` reads no
+better than `capture warm`.
 
 **Warden keeping its name is load-bearing.** `warden.exe`, `com.warden.app`, the tray tooltip, the
 Desktop shortcut and all of `shortcuts.md` stay correct. Only the umbrella moves.
@@ -186,7 +186,7 @@ possible** — worth recording, since it was considered.
 | **Code-sign** | ~$10/month (Azure Artifact Signing, US/Canada individuals). The only path where SAC stays enforced *and* the GUI runs |
 | **Open-source it** | SignPath Foundation signs qualifying open-source projects free |
 | **Disable SAC** | Free; costs a real protection layer. Defender and SmartScreen are unaffected |
-| **Stay on the CLI** | Free, SAC stays on, works today — `capture/` is not blocked |
+| **Stay on the CLI** | Free, SAC stays on, works today — the CLI is not blocked |
 
 **Which chunks this blocks:** everything that runs the GUI — the rest of **C**, all of **D**'s
 verification, and **E1**'s two weeks of daily use. **Stage A is unaffected.** BUILD.md's own hedge

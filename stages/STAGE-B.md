@@ -8,7 +8,7 @@
 
 I'm building **Warden**: a private, fully local AI that screenshots my screen when I press a
 
-**Stage A is done.** `cd capture && cargo run` already captures the screen, sends it to a local
+**Stage A is done.** The CLI at `crates/odin-cli/` already captures the screen, sends it to a local
 vision model, and streams a real answer to the terminal. Stage B wraps that in an app.
 
 **About me:** Stage A was my first Rust ever. Explain what you're doing rather than just handing
@@ -36,7 +36,7 @@ is bad at something the answer is a different local model, not a fallback.
 
 ```
 warden/
-├── capture/          Stage A CLI — screen → PNG → base64 → Ollama → streamed answer
+├── crates/odin-cli/  Stage A CLI — screen → PNG → base64 → Ollama → streamed answer
 │   ├── prompt.txt    the default prompt, NOT in source (PLAN.md §2)
 │   └── src/main.rs
 ├── src/              React + TypeScript frontend (B1)
@@ -45,7 +45,7 @@ warden/
 └── docs/             A1–A4 + B1 results
 ```
 
-`capture/` stays working throughout Stage B. Its logic migrates into `src-tauri/` at B2 and B3,
+The CLI stays working throughout Stage B. Its logic migrates into `src-tauri/` at B2 and B3,
 but keep the CLI — it's the way to test the pipeline without the GUI in the way.
 
 ---
@@ -65,7 +65,7 @@ but keep the CLI — it's the way to test the pipeline without the GUI in the wa
 **`reqwest` must keep `native-tls`** or the Windows build demands NASM — 0.13 switched its default
 TLS backend to `aws-lc-rs`. Two variants are in use:
 ```toml
-# capture/ — synchronous CLI
+# crates/odin-cli/ — synchronous CLI
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "native-tls"] }
 # src-tauri/ — async, streams the body
 reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json", "stream"] }
@@ -138,7 +138,8 @@ equivalent question here is whether anything between Rust and the webview batche
 
 **Watch for:** the borrow-checker fight, already met at A3. `Frame` and `FrameBuffer` are
 `!Send`/`!Sync`, and their buffer is unmapped when the callback returns — so copy the pixels out
-with `.to_vec()` before they can leave. `capture/src/main.rs` already does exactly this; reuse the
+with `.to_vec()` before they can leave. `crates/odin-cli/src/main.rs` already does exactly this;
+reuse the
 shape rather than rediscovering it.
 
 ---
@@ -146,8 +147,8 @@ shape rather than rediscovering it.
 ## B4 — Global hotkey — DONE 2026-09-14 (with C1)
 
 > Hotkey, corner popup, translucency and taskbar-following all work. Translucency is CSS alpha,
-> **not** a DWM backdrop � acrylic cannot go dark, mica cannot see through.
-> **Then Smart App Control blocked `warden.exe`** � see PLAN.md §3.
+> **not** a DWM backdrop � acrylic cannot go dark, mica cannot see through.
+> **Then Smart App Control blocked `warden.exe`** � see PLAN.md §3.
 > Full write-up: [docs/B4-results.md](../docs/results/B4-results.md).
 
 

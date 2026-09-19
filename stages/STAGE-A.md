@@ -82,7 +82,7 @@ strong OCR, GUI grounding). A misread stack trace is worse than a slow answer.
 
 ## A3 — First Rust: capture a PNG — DONE 2026-09-10
 
-> Built as `capture/` using `windows-capture` 2.0.1. Writes a 1920×1080 `out.png`, verified
+> Built as `crates/odin-cli/` using `windows-capture` 2.0.1. Writes a 1920×1080 `out.png`, verified
 > against fullscreen hardware-decoded video (no black frame — genuinely WGC, not GDI).
 > See [docs/A3-results.md](../docs/results/A3-results.md).
 >
@@ -106,8 +106,8 @@ compiler is complaining about when it complains.
 
 ## A4 — First useful thing — DONE 2026-09-12
 
-> Built into `capture/`. `cargo run` captures the screen and streams a real answer.
-> Prompt in `capture/prompt.txt`, `--model` flag to swap models.
+> Built into `crates/odin-cli/`. The binary is `odin`; it captures the screen and
+> streams a real answer. Prompt in `crates/odin-cli/prompt.txt`, `--model` flag to swap models.
 > See [docs/A4-results.md](../docs/results/A4-results.md).
 >
 > **Gotchas found:** Smart App Control blocks Rust proc-macro DLLs (symptom: `can't find crate

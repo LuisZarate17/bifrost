@@ -147,7 +147,7 @@ image at once, so repeat runs return prefill in 5 ms instead of ~450 ms and ever
 identical. Only unloading clears it — see A2-results.md.
 
 ### A3 — First Rust: capture a PNG — DONE 2026-09-10
-`capture/` captures the primary monitor via `windows-capture` 2.0.1 and writes a 1920×1080
+`crates/odin-cli/` captures the primary monitor via `windows-capture` 2.0.1 and writes a 1920×1080
 `out.png`. Verified against fullscreen hardware-decoded video — full colour, no black frame,
 so this is genuinely WGC and not GDI. Full write-up: **[A3-results.md](results/A3-results.md)**.
 
@@ -163,8 +163,8 @@ Gate worth reusing: a throwaway `cargo new` + `cargo run` printing `Hello, world
 **and link** in ten seconds, before any dependency can muddy the diagnosis.
 
 ### A4 — First useful thing — DONE 2026-09-12 · **STAGE A COMPLETE**
-`cd capture && cargo run` captures the screen and streams a real answer about it. Prompt lives in
-`capture/prompt.txt`; `--model` swaps models without recompiling. Full write-up:
+`target/debug/odin` captures the screen and streams a real answer about it. Prompt lives in
+`crates/odin-cli/prompt.txt`; `--model` swaps models without recompiling. Full write-up:
 **[A4-results.md](results/A4-results.md)**.
 
 Cross-validates A2 exactly — **2,077 tokens in, 1.19 s to first token, 9.0 s total** — from a
@@ -207,7 +207,7 @@ dev and the packaged `.exe`. Full write-up: **[B2-results.md](results/B2-results
 
 **Streams identically in dev and release** — Rust-side and UI-side time-to-first-token match to
 the hundredth of a second (0.21 s dev, 0.17 s packaged), so nothing batches between Rust and the
-webview. `prompt_eval_count` 2,077 again, agreeing with `bench.mjs` and `capture/`.
+webview. `prompt_eval_count` 2,077 again, agreeing with `bench.mjs` and the CLI.
 **Watch for:** **Never return the answer as the command's `Result`.** Tauri delivers exactly one
 IPC reply per `invoke()`, so a command whose return value carries the payload buffers the whole
 thing by construction. Send tokens through a `Channel` instead and let `Result<(), String>` carry
@@ -255,7 +255,7 @@ Three findings that change later chunks:
   live rect, not `work_area`, or the popup sits under the bar.
 
 > **BLOCKED AFTER THIS CHUNK.** Smart App Control now refuses to run `warden.exe` � content-based,
-> retroactive, no workaround. **This blocks the rest of C, all of D, and E1.** `capture/` is
+> retroactive, no workaround. **This blocks the rest of C, all of D, and E1.** The CLI is
 > unaffected. See [PLAN.md §3](PLAN.md) for the full analysis and the four options.
 
 ---
@@ -514,7 +514,7 @@ syntax-highlighted code on a dark theme. Nobody benchmarks your actual use case 
 So make swapping models a ten-minute job instead of a vibes decision.
 
 ### F1 — Build a personal bench harness — DONE 2026-09-16
-**Did:** `bench/`, reusing `warden-core`. Results: [F1-results.md](results/F1-results.md).
+**Did:** `crates/bench/`, reusing `odin-core`. Results: [F1-results.md](results/F1-results.md).
 
 **Validated against the reference, not just "it runs":** prefill 1,214 ms against A2's 1,165, decode
 131 t/s against 133, resident 8,187 MiB against 8,151.
