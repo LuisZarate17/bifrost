@@ -1,0 +1,313 @@
+//! `/api/chat` — messages with roles, and the tool calls that ride on them.
+//!
+//! Separate from [`crate::ollama`], which speaks `/api/generate`. That endpoint
+//! takes one prompt and one set of images and has nowhere to put a role, a
+//! conversation, or a tool call. Everything Stage G builds above this — history,
+//! attachments, tool calling — is a field on a message, so the messages endpoint
+//! is the substrate (PLAN §0b, STAGE-G decision #1).
+//!
+//! Written at G0 rather than G1 on purpose: the tool-call probe needs a client,
+//! and a client is far easier to get right with a probe depending on it than with
+//! a whole app.
+//!
+//! **Non-streaming.** For a tool call that is the right shape anyway — you cannot
+//! act on a call until the whole `tool_calls` array has arrived. G1 adds a
+//! streaming variant for the token-by-token case, reusing B2's `Channel` pattern.
+//!
+//! Blocking, like the rest of this crate. Tauri callers go through
+//! `spawn_blocking`.
+
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+
+use crate::ollama;
+
+/// Long enough for a cold model load plus a real answer. `ollama::WARM_TIMEOUT`
+/// is 120s for the same reason: A1 saw 18s reading a model off cold disk.
+const CHAT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// One turn of the conversation.
+///
+/// Carries the fields it does not use yet — `images`, `tool_calls`, `tool_name`
+/// — because STAGE-G decision #2 is that adding them later means migrating a
+/// database already holding real conversations. They serialize away when empty,
+/// so a plain text turn is still `{"role":..., "content":...}` on the wire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Message {
+    pub role: String,
+    pub content: String,
+
+    /// Raw base64, **no `data:` prefix** — measured across 40+ requests at A2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
+
+    /// Present on an assistant turn that asked for a tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
+
+    /// Set on a `role: "tool"` turn, naming which tool produced `content`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+}
+
+impl Message {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self::plain("user", content)
+    }
+
+    pub fn system(content: impl Into<String>) -> Self {
+        Self::plain("system", content)
+    }
+
+    /// The result of running a tool, handed back for the model to continue from.
+    pub fn tool_result(name: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: "tool".to_string(),
+            content: content.into(),
+            images: None,
+            tool_calls: None,
+            tool_name: Some(name.into()),
+        }
+    }
+
+    fn plain(role: &str, content: impl Into<String>) -> Self {
+        Self {
+            role: role.to_string(),
+            content: content.into(),
+            images: None,
+            tool_calls: None,
+            tool_name: None,
+        }
+    }
+
+    /// Attach images to a user turn.
+    pub fn with_images(mut self, images: Vec<String>) -> Self {
+        self.images = Some(images);
+        self
+    }
+}
+
+/// A tool the model asked to run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolCall {
+    /// Ollama supplies one; it is absent on some models, so it stays optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    pub function: FunctionCall,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FunctionCall {
+    pub name: String,
+    /// **A JSON object, not a string.** Measured 2026-09-19 against Ollama
+    /// 0.33.3: `{"a": 847, "b": 1259}` arrives parsed. This differs from
+    /// OpenAI's API, which serializes arguments to a string the caller must
+    /// parse again — code ported from there will double-parse and fail.
+    #[serde(default)]
+    pub arguments: serde_json::Value,
+}
+
+/// A tool offered to the model, as JSON Schema.
+///
+/// Build with [`Tool::function`] rather than by hand: the nesting
+/// (`type`/`function`/`parameters`) is easy to get subtly wrong, and a malformed
+/// schema is accepted silently and simply never called.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tool {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub function: ToolFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolFunction {
+    pub name: String,
+    pub description: String,
+    pub parameters: serde_json::Value,
+}
+
+impl Tool {
+    pub fn function(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: serde_json::Value,
+    ) -> Self {
+        Self {
+            kind: "function".to_string(),
+            function: ToolFunction {
+                name: name.into(),
+                description: description.into(),
+                parameters,
+            },
+        }
+    }
+}
+
+/// Sampling and context settings.
+///
+/// `num_ctx` is never left to Ollama on purpose: it derives its own from VRAM
+/// and lands at 4k on this card, and **it keys a loaded runner by model *and*
+/// context**, so asking at a value you did not warm at silently tears the runner
+/// down and reloads — measured 2026-09-19 at roughly 3s each way.
+///
+/// `temperature` exists for the same reason `evals/` pins its prompt files:
+/// **a verdict that moves between runs is not a measurement.** Use
+/// [`Options::measured`] for anything whose result gets written down, and
+/// [`Options::new`] in the apps, where Ollama's own sampling is what you want.
+#[derive(Debug, Clone, Copy)]
+pub struct Options {
+    pub num_ctx: u32,
+    pub temperature: Option<f32>,
+}
+
+impl Options {
+    /// Ollama's own sampling, at the given context. What the apps use.
+    pub fn new(num_ctx: u32) -> Self {
+        Self {
+            num_ctx,
+            temperature: None,
+        }
+    }
+
+    /// Deterministic. What a probe or a benchmark uses.
+    pub fn measured(num_ctx: u32) -> Self {
+        Self {
+            num_ctx,
+            temperature: Some(0.0),
+        }
+    }
+}
+
+/// What came back, plus the numbers worth recording.
+#[derive(Debug, Clone)]
+pub struct ChatReply {
+    pub message: Message,
+    /// `~0.00s` after a real warm. Anything else means the runner was rebuilt —
+    /// usually because `num_ctx` did not match what it was loaded with.
+    pub load: Duration,
+    pub total: Duration,
+    pub prompt_eval_count: u32,
+    pub eval_count: u32,
+}
+
+impl ChatReply {
+    /// The calls the model asked for, or an empty slice.
+    pub fn tool_calls(&self) -> &[ToolCall] {
+        self.message.tool_calls.as_deref().unwrap_or(&[])
+    }
+}
+
+#[derive(Deserialize)]
+struct RawReply {
+    message: Message,
+    #[serde(default)]
+    load_duration: u64,
+    #[serde(default)]
+    total_duration: u64,
+    #[serde(default)]
+    prompt_eval_count: u32,
+    #[serde(default)]
+    eval_count: u32,
+}
+
+/// Send a conversation, optionally offering tools, and wait for the whole reply.
+///
+/// `num_ctx` is always set explicitly — Ollama derives its default from VRAM and
+/// lands at 4k on this card, and **it keys a loaded runner by model *and*
+/// context**, so asking at a different value than you warmed at silently tears
+/// the runner down and reloads (measured 2026-09-19 at ~3s each way). Pass
+/// `config::DEFAULT_NUM_CTX` unless you have a reason not to.
+pub fn chat(
+    model: &str,
+    messages: &[Message],
+    tools: &[Tool],
+    options: Options,
+) -> Result<ChatReply, String> {
+    let mut opts = serde_json::json!({ "num_ctx": options.num_ctx });
+    if let Some(t) = options.temperature {
+        opts["temperature"] = serde_json::json!(t);
+    }
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": false,
+        "options": opts,
+    });
+    // Omitted entirely rather than sent empty: a model with no `tools`
+    // capability should see a request identical to one that never wanted them.
+    if !tools.is_empty() {
+        body["tools"] = serde_json::to_value(tools).map_err(|e| format!("encoding tools: {e}"))?;
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(CHAT_TIMEOUT)
+        .build()
+        .map_err(|e| format!("building client: {e}"))?;
+
+    let response = client
+        .post(ollama::url("/api/chat"))
+        .json(&body)
+        .send()
+        .map_err(|e| format!("POST /api/chat: {e}"))?;
+
+    let status = response.status();
+    let text = response
+        .text()
+        .map_err(|e| format!("reading /api/chat body: {e}"))?;
+
+    if !status.is_success() {
+        // Ollama reports a model that cannot take tools here rather than by
+        // refusing the connection, so the body is the interesting part.
+        return Err(format!("/api/chat returned {status}: {}", text.trim()));
+    }
+
+    let raw: RawReply =
+        serde_json::from_str(&text).map_err(|e| format!("parsing /api/chat reply: {e}"))?;
+
+    Ok(ChatReply {
+        message: raw.message,
+        load: Duration::from_nanos(raw.load_duration),
+        total: Duration::from_nanos(raw.total_duration),
+        prompt_eval_count: raw.prompt_eval_count,
+        eval_count: raw.eval_count,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_plain_turn_serializes_without_the_unused_fields() {
+        // Decision #2 keeps the fields on the struct; the wire format should not
+        // pay for them until something fills them in.
+        let json = serde_json::to_string(&Message::user("hello")).unwrap();
+        assert_eq!(json, r#"{"role":"user","content":"hello"}"#);
+    }
+
+    #[test]
+    fn tool_call_arguments_arrive_as_an_object() {
+        // Guards against porting OpenAI-shaped code that expects a string here.
+        let reply: Message = serde_json::from_str(
+            r#"{"role":"assistant","content":"",
+                "tool_calls":[{"id":"call_1","function":{"name":"add","arguments":{"a":1,"b":2}}}]}"#,
+        )
+        .unwrap();
+        let calls = reply.tool_calls.unwrap();
+        assert_eq!(calls[0].function.name, "add");
+        assert_eq!(calls[0].function.arguments["a"], 1);
+    }
+
+    #[test]
+    fn a_reply_with_no_tool_calls_yields_an_empty_slice() {
+        let reply = ChatReply {
+            message: Message::user("hi"),
+            load: Duration::ZERO,
+            total: Duration::ZERO,
+            prompt_eval_count: 0,
+            eval_count: 0,
+        };
+        assert!(reply.tool_calls().is_empty());
+    }
+}

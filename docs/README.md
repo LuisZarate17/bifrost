@@ -168,6 +168,11 @@ Finished chunks: what was built, what was measured, what the measurement changed
 - **[C4a](results/C4a-results.md)** — power control in the CLI.
   **off −8,193 MiB · warm +7,873 MiB in 2.2 s** — the deltas match, which is the test.
 
+**Stage G — Citadel, the local chat app**
+
+- **[G0](G0-results.md)** — the tool-call probe. **qwen3-vl:8b 10/10, llama3.1:8b 6/10** with a
+  spurious call on every negative case. G6 is worth building, on the model Warden already uses.
+
 **Stage F — keep testing models**
 
 - **[F1](results/F1-results.md)** — the bench harness in Rust, validated against `bench.mjs`'s own
