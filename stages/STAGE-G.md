@@ -421,10 +421,14 @@ serde_derive-<hash>.dll: LoadLibraryExW failed:
 An Application Control policy has blocked this file. (os error 4551)
 ```
 
-**The same DLL had compiled fine an hour earlier at `capture/target/`.** Nothing about its contents
-changed — only its path — so SAC's cached verdict is invalidated by a **move**, not just by a
-rewrite. PLAN.md §3's rule still fixes it: `cargo clean -p serde_derive -p serde` and check again,
-about a minute. Expect it on whichever crate happens to own the first proc-macro rebuild.
+The baseline check an hour earlier had passed. **Do not conclude from that that a move changes
+SAC's verdict** — the baseline was fully cached, so Cargo never had to *load* the proc-macro at
+all. Moving the crate invalidated the fingerprints, forced a rebuild, and the rebuild is what
+exposed the block. Whether the block was new or simply never exercised is **not established**, and
+PLAN.md §3's finding that the block follows file content rather than path still stands unchallenged.
+
+Either way the fix is the same: `cargo clean -p serde_derive -p serde` and check again, about a
+minute. Expect it on whichever crate owns the first proc-macro rebuild after a restructure.
 
 > **`cd` into a directory you are about to move, and you will lock it.** Git Bash keeps its own
 > notion of the working directory separate from the Win32 process cwd, so `cd` out again does
