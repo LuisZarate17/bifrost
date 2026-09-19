@@ -28,27 +28,33 @@ use windows::Win32::Foundation::{HWND, RECT};
 /// only a history can hold more than one screenshot plus what was already said
 /// about them.
 const OLLAMA_URL: &str = "http://127.0.0.1:11434/api/chat";
-const DEFAULT_MODEL: &str = "qwen3-vl:8b-instruct-q4_K_M";
+// DEFAULT_MODEL and NUM_CTX moved to odin_core::config at Before-G0 step 3, so
+// the CLI and the popup finally agree. They had drifted on num_ctx - 8192 there
+// against 32768 here - and Ollama keys a runner by model AND context, so every
+// `odin warm` was thrown away by the next hotkey press. Measured 2026-09-19:
+// a 3.09s reload each way. The VRAM ladder that chose 32768 moved with it.
 
-/// A 1080p screen costs ~2,070 image tokens — measured at A2 as 2,042, and
-/// confirmed again at 2,056/4,132/6,208/8,284 for one through four shots. Ollama
-/// derives its default from detected VRAM and lands at 4k on this card, which
-/// would silently truncate even one screenshot, so it is always set explicitly.
+// The reasoning that picked 32768 - the image-token measurements and the VRAM
+// ladder showing 65536 spills to system RAM - moved to odin_core::config with
+// the constant itself.
+use odin_core::config::DEFAULT_NUM_CTX as NUM_CTX;
+
+/// The shared settings, read off the async worker.
 ///
-/// **8192 was the old value, and it was sized for a single picture.** A
-/// conversation carrying four costs 8,284 tokens before a word of answer, so the
-/// limit had to move. Measured on the 5070 Ti, resident and fully on the GPU:
+/// odin_core is blocking by design and this crate’s rule is that every call into
+/// it goes through spawn_blocking - a rule worth following even for a file read
+/// this small, because the exception is what people remember rather than the
+/// reason for it. A missing or corrupt file yields the built-in defaults, so
+/// this cannot fail.
 ///
-/// | num_ctx | VRAM     | on GPU |
-/// |---------|----------|--------|
-/// | 8192    | 6.09 GB  | yes    |
-/// | 16384   | 7.23 GB  | yes    |
-/// | 32768   | 9.51 GB  | yes    |
-/// | 65536   | 12.74 GB | **no** — spills to system RAM |
-///
-/// 32768 is the last rung before the cliff: 3.4 GB more than the old value, and
-/// room for far more context than `MAX_IMAGES` will ever use.
-const NUM_CTX: u32 = 32768;
+/// Read per request for now. G3 is what makes that *matter*: re-reading on every
+/// summon is how switching the model in Citadel reaches the popup without a
+/// restart.
+async fn defaults() -> odin_core::config::Config {
+    tauri::async_runtime::spawn_blocking(odin_core::config::load)
+        .await
+        .unwrap_or_default()
+}
 
 /// How many screenshots stay in the conversation.
 ///
@@ -226,13 +232,14 @@ mod tray;
 
 #[tauri::command]
 async fn ask_about_screen(
-    prompt: String,
+    prompt: Option<String>,
     model: Option<String>,
     on_event: Channel<StreamEvent>,
     last: tauri::State<'_, LastCapture>,
     chat: tauri::State<'_, Chat>,
 ) -> Result<(), String> {
-    let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let cfg = defaults().await;
+    let model = model.unwrap_or(cfg.model);
 
     // Before the capture, not after. Ollama takes the longest of the three
     // waits - 12.6s measured on a busy card - and reporting it second meant the
@@ -277,7 +284,10 @@ async fn ask_about_screen(
     {
         let mut turns = chat.0.lock().map_err(|_| "chat store poisoned")?;
         turns.clear();
-        turns.push(Turn::user(prompt, vec![BASE64_STANDARD.encode(&png)]));
+        turns.push(Turn::user(
+            prompt.unwrap_or(cfg.prompt),
+            vec![BASE64_STANDARD.encode(&png)],
+        ));
     }
 
     run_turns(&chat, model, on_event).await
@@ -290,13 +300,14 @@ async fn ask_about_screen(
 /// about them in view — rather than starting over on the second one.
 #[tauri::command]
 async fn ask_another_shot(
-    prompt: String,
+    prompt: Option<String>,
     model: Option<String>,
     on_event: Channel<StreamEvent>,
     last: tauri::State<'_, LastCapture>,
     chat: tauri::State<'_, Chat>,
 ) -> Result<(), String> {
-    let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let cfg = defaults().await;
+    let model = model.unwrap_or(cfg.model);
 
     if chat.0.lock().map_err(|_| "chat store poisoned")?.is_empty() {
         return Err("nothing to continue — summon Warden first".into());
@@ -323,7 +334,10 @@ async fn ask_another_shot(
     chat.0
         .lock()
         .map_err(|_| "chat store poisoned")?
-        .push(Turn::user(prompt, vec![BASE64_STANDARD.encode(&png)]));
+        .push(Turn::user(
+            prompt.unwrap_or(cfg.prompt),
+            vec![BASE64_STANDARD.encode(&png)],
+        ));
 
     run_turns(&chat, model, on_event).await
 }
@@ -413,7 +427,8 @@ async fn ask_followup(
     on_event: Channel<StreamEvent>,
     chat: tauri::State<'_, Chat>,
 ) -> Result<(), String> {
-    let model = model.unwrap_or_else(|| DEFAULT_MODEL.to_string());
+    let cfg = defaults().await;
+    let model = model.unwrap_or(cfg.model);
 
     {
         let mut turns = chat.0.lock().map_err(|_| "chat store poisoned")?;
@@ -1895,10 +1910,14 @@ pub fn run() {
             // Power control. The CLI proved the mechanism at C4a; this is the
             // half you can reach without a terminal, and the only place Warming
             // can be shown — see tray.rs.
-            let power = std::sync::Arc::new(tray::Power::new(
-                DEFAULT_MODEL.to_string(),
-                NUM_CTX,
-            ));
+            // Read straight, not through spawn_blocking: `setup` is synchronous,
+            // so there is no async worker here to block.
+            //
+            // **This is also what makes the tray's warm useful again.** It loads
+            // at the same num_ctx the popup asks with, so the two no longer evict
+            // each other — measured 2026-09-19 at a 3.09s reload every switch.
+            let cfg = odin_core::config::load();
+            let power = std::sync::Arc::new(tray::Power::new(cfg.model, cfg.num_ctx));
             app.manage(power.clone());
             if let Err(e) = tray::install(app.handle(), power) {
                 eprintln!("[warden] WARNING: tray unavailable: {e}");

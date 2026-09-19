@@ -7,11 +7,6 @@ import { Answer } from "@odin/ui";
 import "@odin/ui/answer.css";
 import "./App.css";
 
-// PLAN.md section 2 wants this in a config file — capture/prompt.txt already does
-// that for the CLI. E1 owns making it tunable without a rebuild.
-const PROMPT =
-  "What am I looking at? If there's an error or something broken, explain it and the fix. Otherwise explain what matters here.";
-
 /**
  * Dev-only. Every one of these could appear in a model answer, because the model
  * transcribes whatever is on screen — including text engineered to be there.
@@ -249,7 +244,10 @@ function App() {
     const onEvent = stream();
 
     try {
-      await invoke("ask_about_screen", { prompt: PROMPT, model: null, onEvent });
+      // Both null on purpose: Rust fills them from the shared config, which is
+      // the single source of truth for the prompt and the model. This used to
+      // pass a copy of the prompt string that lived here in the frontend.
+      await invoke("ask_about_screen", { prompt: null, model: null, onEvent });
     } catch (e) {
       setError(String(e));
       setStatus("");

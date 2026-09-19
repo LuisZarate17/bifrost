@@ -4,4 +4,3 @@
 # core.autocrlf would rewrite the blank line inside brief.txt on checkout, so
 # these must never be line-ending converted.
 evals/prompts/*.txt -text
-crates/odin-cli/prompt.txt  -text

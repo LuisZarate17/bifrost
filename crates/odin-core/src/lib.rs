@@ -7,5 +7,6 @@
 //!
 //! Nothing here prints or panics. Callers format, and a tray has no stdout.
 
+pub mod config;
 pub mod ollama;
 pub mod vram;

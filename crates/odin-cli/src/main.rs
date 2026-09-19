@@ -17,14 +17,18 @@ use windows_capture::settings::{
 
 mod power;
 
-use odin_core::ollama;
+use odin_core::{config, ollama};
 
-const DEFAULT_MODEL: &str = "qwen3-vl:8b-instruct-q4_K_M";
+// DEFAULT_MODEL and NUM_CTX moved to odin-core::config at Before-G0 step 3.
+// They were duplicated here and in Warden, and the num_ctx copies had already
+// drifted apart - this one said 8192 while Warden said 32768, so `odin warm`
+// loaded a runner the hotkey then threw away. Measured 2026-09-19: switching
+// context cost a 3.09s reload every time.
 
-/// A 1080p screen costs ~2,042 image tokens (measured at A2). The Ollama default
-/// is derived from VRAM and lands at 4k on this card, which would silently
-/// truncate the screenshot — so it is always set explicitly.
-const NUM_CTX: u32 = 8192;
+// The reason it must be set at all still holds, and now lives with the constant
+// in odin-core::config: a 1080p screen costs ~2,042 image tokens (A2), and
+// Ollama derives its own default from VRAM, landing at 4k on this card — which
+// would silently truncate the screenshot.
 
 /// One captured frame, as owned data. No borrows, so it can leave the callback.
 struct Shot {
@@ -125,13 +129,16 @@ fn capture_screen() -> Shot {
 }
 
 const USAGE: &str = "\
-capture — ask a local vision model about your screen
+odin — ask a local vision model about your screen
 
-  capture [SECONDS] [--model TAG]   capture the screen and ask about it
-  capture warm      [--model TAG]   load the model and pin it in VRAM
-  capture off       [--model TAG]   release it and give the card its memory back
-  capture status    [--model TAG]   what is loaded, per Ollama and per the card
-  capture help                      this text
+  odin [SECONDS] [--model TAG]   capture the screen and ask about it
+  odin warm      [--model TAG]   load the model and pin it in VRAM
+  odin off       [--model TAG]   release it and give the card its memory back
+  odin status    [--model TAG]   what is loaded, per Ollama and per the card
+  odin help                      this text
+
+The model, the prompt and num_ctx come from %APPDATA%\\odin\\config.json.
+Delete it and the built-in defaults apply — a missing config is a normal state.
 ";
 
 enum Command {
@@ -147,9 +154,9 @@ enum Command {
 /// The old loop silently ignored anything it did not recognise, so `capture warm`
 /// took a screenshot and a typo cost nine seconds of GPU. Unknown tokens are now
 /// an error — which is also what makes a mistyped subcommand fail loudly.
-fn parse_flags(args: &[String]) -> Result<(u64, String), String> {
+fn parse_flags(args: &[String], cfg: &config::Config) -> Result<(u64, String), String> {
     let mut delay_secs: u64 = 0;
-    let mut model = DEFAULT_MODEL.to_string();
+    let mut model = cfg.model.clone();
 
     let mut i = 0;
     while i < args.len() {
@@ -172,7 +179,7 @@ fn parse_flags(args: &[String]) -> Result<(u64, String), String> {
     Ok((delay_secs, model))
 }
 
-fn parse_args(args: &[String]) -> Result<Command, String> {
+fn parse_args(args: &[String], cfg: &config::Config) -> Result<Command, String> {
     // The subcommand, if any, is the first token — matched before the flag loop
     // so it can never be mistaken for a delay or swallowed as an unknown.
     let (word, rest) = match args.split_first() {
@@ -182,7 +189,7 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
 
     match word {
         "warm" | "off" | "status" => {
-            let (_, model) = parse_flags(rest)?;
+            let (_, model) = parse_flags(rest, cfg)?;
             Ok(match word {
                 "warm" => Command::Warm { model },
                 "off" => Command::Off { model },
@@ -192,7 +199,7 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
         "help" | "--help" | "-h" => Ok(Command::Help),
         // No subcommand: the whole slice is capture's own arguments.
         _ => {
-            let (delay_secs, model) = parse_flags(args)?;
+            let (delay_secs, model) = parse_flags(args, cfg)?;
             Ok(Command::Capture { delay_secs, model })
         }
     }
@@ -201,7 +208,11 @@ fn parse_args(args: &[String]) -> Result<Command, String> {
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let command = match parse_args(&args) {
+    // Read once, here, rather than in each function that wants a field. Three
+    // scattered load() calls would be three chances to disagree inside one run.
+    let cfg = config::load();
+
+    let command = match parse_args(&args, &cfg) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("error: {e}\n\n{USAGE}");
@@ -214,11 +225,11 @@ fn main() -> std::process::ExitCode {
             print!("{USAGE}");
             Ok(())
         }
-        Command::Warm { model } => power::warm(&model, NUM_CTX),
+        Command::Warm { model } => power::warm(&model, cfg.num_ctx),
         Command::Off { model } => power::off(&model),
         Command::Status { model } => power::status(&model),
         Command::Capture { delay_secs, model } => {
-            capture_and_ask(delay_secs, &model);
+            capture_and_ask(delay_secs, &model, &cfg);
             Ok(())
         }
     };
@@ -232,16 +243,13 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn capture_and_ask(delay_secs: u64, model: &str) {
-    let prompt = std::fs::read_to_string("prompt.txt")
-        .unwrap_or_else(|_| {
-            eprintln!("warning: prompt.txt not found, using built-in default");
-            "What am I looking at? If there's an error or something broken, explain it \
-             and the fix. Otherwise explain what matters here."
-                .to_string()
-        })
-        .trim()
-        .to_string();
+fn capture_and_ask(delay_secs: u64, model: &str, cfg: &config::Config) {
+    // Was `read_to_string("prompt.txt")` with an inline copy of the prompt as the
+    // fallback. Two problems, both fixed by reading the shared config instead:
+    // the path was relative, so running the binary from anywhere but its own
+    // directory silently fell back without saying so; and the fallback was itself
+    // a fourth copy of the same words that nothing kept in step.
+    let prompt = cfg.prompt.trim();
 
     if delay_secs > 0 {
         println!("capturing in {delay_secs}s...");
@@ -270,7 +278,7 @@ fn capture_and_ask(delay_secs: u64, model: &str) {
         "prompt": prompt,
         "images": [BASE64_STANDARD.encode(&png)],
         "stream": true,
-        "options": { "num_ctx": NUM_CTX },
+        "options": { "num_ctx": cfg.num_ctx },
     });
 
     let started = Instant::now();

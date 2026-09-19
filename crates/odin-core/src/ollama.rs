@@ -303,14 +303,11 @@ pub fn generate_measured(
     Ok(m)
 }
 
-/// The prompt the app ships with.
-///
-/// Lives here so the benchmark measures the same words the product uses. A2 found
-/// the prompt moved answer quality more than the choice between a 4B and an 8B
-/// model did, so treating it as a constant would be measuring the wrong thing.
-pub const DEFAULT_PROMPT: &str =
-    "What am I looking at? If there's an error or something broken, explain it \
-     and the fix. Otherwise explain what matters here.";
+// The prompt the app ships with moved to `config::DEFAULT_PROMPT` at Before-G0
+// step 3, when the shared config gained somewhere better to keep it. The reason
+// it belonged in this crate at all is unchanged: the benchmark has to measure the
+// same words the product uses, and A2 found the prompt moved answer quality more
+// than the choice between a 4B and an 8B model did.
 
 /// How long to wait for a freshly started Ollama to answer.
 ///

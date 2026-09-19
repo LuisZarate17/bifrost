@@ -26,10 +26,14 @@ use std::io::Write;
 use std::time::Duration;
 
 use base64::prelude::*;
-use odin_core::{ollama, vram};
+use odin_core::{config, ollama, vram};
 
 mod report;
 
+// Deliberately NOT read from the shared config. This is a measurement harness:
+// changing its context would make F1’s saved runs incomparable to new ones, and
+// comparability is the entire point of keeping it. Warden and the CLI both use
+// config::DEFAULT_NUM_CTX instead.
 const NUM_CTX: u32 = 8192;
 const GENERATE_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -182,8 +186,8 @@ fn run(args: &Args) -> Result<(), String> {
     let prompts: Vec<(String, String, String)> = if args.prompt_files.is_empty() {
         vec![(
             "(built-in)".to_string(),
-            ollama::DEFAULT_PROMPT.to_string(),
-            report::sha256_hex(ollama::DEFAULT_PROMPT.as_bytes()),
+            config::DEFAULT_PROMPT.to_string(),
+            report::sha256_hex(config::DEFAULT_PROMPT.as_bytes()),
         )]
     } else {
         args.prompt_files
