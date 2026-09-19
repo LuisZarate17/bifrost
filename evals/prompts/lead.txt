@@ -1,0 +1,3 @@
+What am I looking at? If there's an error or something broken, explain it and the fix. Otherwise explain what matters here.
+
+Begin with a single line starting "**Short answer:**" that states the conclusion. Then explain in full as you normally would.

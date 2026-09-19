@@ -1,0 +1,3 @@
+What am I looking at? If there's an error or something broken, explain it and the fix. Otherwise explain what matters here.
+
+Start with one sentence saying what this is and whether anything is wrong. Then the detail behind it. Be specific rather than lengthy: name the exact file, line and symbol you mean, and do not make the same point twice.

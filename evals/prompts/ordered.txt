@@ -1,0 +1,3 @@
+What am I looking at? If there's an error or something broken, explain it and the fix. Otherwise explain what matters here.
+
+Answer in this order: what it is and whether it is broken, in one sentence; then the cause, citing the exact line and symbol; then the fix. Prefer naming the specific thing over describing it at length.
