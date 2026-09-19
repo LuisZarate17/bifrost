@@ -11,7 +11,7 @@
     "app": "npm run app -w apps/warden",
     "dev": "npm run dev -w apps/warden",
     "build": "npm run build -w apps/warden",
-    "check:inert": "npm run check:inert -w apps/warden",
+    "check:inert": "npm run check:inert -w packages/ui",
     "check:fixes": "node evals/fixcheck.mjs"
   }
 }

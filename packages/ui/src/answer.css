@@ -1,0 +1,157 @@
+/* Styles for <Answer> and <CodeBlock>, split out of Warden's App.css at
+   Before-G0 step 1e. Moved verbatim — this chunk changes no appearance.
+
+   Consumers import this themselves (`import "@odin/ui/answer.css"`) rather than
+   the component importing it, because `npm run check:inert` SSR-builds Answer
+   and runs the output under plain node, where a CSS import would fail.
+
+   What deliberately stayed behind in App.css: `.answer > .copy-pick`, and the
+   two `.content.collapsed .answer…` rules. They select .answer descendants but
+   encode Warden-only behaviour — the pick-and-copy overlay and the collapse — so
+   they belong to the app, not the renderer. */
+
+.answer {
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+/* Headings carry hierarchy without eating vertical space. `###` and `####` are
+   what the model actually emits — 77 and 30 across the saved answers — so those
+   two matter most. Separated by weight and colour rather than by scale, because
+   scale costs height this panel doesn't have. */
+.answer h1,
+.answer h2,
+.answer h3,
+.answer h4,
+.answer h5,
+.answer h6 {
+  margin: 13px 0 5px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.005em;
+  color: #fff;
+}
+.answer h1 {
+  font-size: 15px;
+}
+.answer h2 {
+  font-size: 14px;
+}
+.answer h3 {
+  font-size: 13px;
+}
+.answer h4,
+.answer h5,
+.answer h6 {
+  font-size: 12.5px;
+  opacity: 0.82;
+}
+.answer > :first-child {
+  margin-top: 0;
+}
+
+.answer p {
+  margin: 0 0 8px;
+}
+.answer strong {
+  font-weight: 600;
+  color: #fff;
+}
+.answer em {
+  font-style: italic;
+  opacity: 0.9;
+}
+
+.answer ul,
+.answer ol {
+  margin: 0 0 8px;
+  padding-left: 18px;
+}
+.answer li {
+  margin: 2px 0;
+}
+.answer li::marker {
+  color: rgba(255, 255, 255, 0.35);
+}
+
+/* The model emits 77 of these. At full strength, a rule every few paragraphs
+   would chop the panel into slices — so it reads as a faint breath instead. */
+.answer hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  margin: 12px 0;
+}
+
+.answer blockquote {
+  margin: 0 0 8px;
+  padding-left: 9px;
+  border-left: 2px solid rgba(255, 255, 255, 0.16);
+  opacity: 0.85;
+}
+
+.inline-code {
+  font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
+  font-size: 0.92em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  white-space: nowrap;
+}
+
+/* Code blocks scroll sideways rather than wrapping. A wrapped stack trace is
+   unreadable, and this reads a screen that is mostly code and terminals. */
+.code {
+  margin: 0 0 9px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.38);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  overflow-x: auto;
+  max-height: 260px;
+  overflow-y: auto;
+  font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.code pre,
+.code code {
+  margin: 0;
+  padding: 0;
+  background: none !important;
+  font: inherit;
+  white-space: pre;
+}
+.code::-webkit-scrollbar {
+  height: 6px;
+  width: 6px;
+}
+.code::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
+}
+
+/* Links render as plain text — the component refuses navigation, so this only
+   stops them looking clickable. */
+.link-text {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  opacity: 0.8;
+}
+
+.answer table {
+  border-collapse: collapse;
+  margin: 0 0 9px;
+  font-size: 11.5px;
+  display: block;
+  overflow-x: auto;
+}
+.answer th,
+.answer td {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 3px 7px;
+  text-align: left;
+}
+.answer th {
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.05);
+}

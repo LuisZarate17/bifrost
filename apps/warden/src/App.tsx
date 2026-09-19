@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Answer } from "./Answer";
+import { Answer } from "@odin/ui";
+// The renderer's own styles. @odin/ui does not import them itself, so that
+// `npm run check:inert` can SSR-build Answer and run it under plain node.
+import "@odin/ui/answer.css";
 import "./App.css";
 
 // PLAN.md section 2 wants this in a config file — capture/prompt.txt already does

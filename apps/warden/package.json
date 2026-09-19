@@ -8,8 +8,6 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "check:inert": "vite build --ssr src/Answer.inert-check.tsx --outDir node_modules/.cache/inert --logLevel error && node node_modules/.cache/inert/Answer.inert-check.js",
-    "check:fixes": "node evals/fixcheck.mjs",
     "app": "tauri build --debug --no-bundle"
   },
   "dependencies": {

@@ -1,0 +1,27 @@
+{
+  "name": "@odin/ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./answer.css": "./src/answer.css"
+  },
+  "scripts": {
+    "check:inert": "vite build --ssr src/Answer.inert-check.tsx --outDir node_modules/.cache/inert --logLevel error && node node_modules/.cache/inert/Answer.inert-check.js"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "remend": "^1.3.1",
+    "shiki": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.8",
+    "@vitejs/plugin-react": "^6.0.2",
+    "react-dom": "^19.1.0",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16"
+  }
+}
