@@ -422,6 +422,40 @@ pub fn show(tag: &str) -> Result<ModelDetail, String> {
     })
 }
 
+/// [`show`], remembered per tag.
+///
+/// **A model's capabilities do not change between calls**, and Warden asks on
+/// every summon — where the popup's whole appeal is that it is instant, and an
+/// extra round trip before the screenshot even goes out is exactly the wrong
+/// place to spend one.
+///
+/// Never expires inside a process. Re-pulling a tag while an app is running
+/// could in principle change what it reports; that is rare enough, and cheap
+/// enough to fix by restarting, that an invalidation story would cost more than
+/// it is worth.
+///
+/// **Failures are not cached.** Ollama being down is temporary, and remembering
+/// "unknown" would outlive the outage that caused it.
+pub fn show_cached(tag: &str) -> Result<ModelDetail, String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<HashMap<String, ModelDetail>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Ok(map) = cache.lock() {
+        if let Some(hit) = map.get(tag) {
+            return Ok(hit.clone());
+        }
+    }
+
+    let detail = show(tag)?;
+    if let Ok(mut map) = cache.lock() {
+        map.insert(tag.to_string(), detail.clone());
+    }
+    Ok(detail)
+}
+
 /// Every model installed, newest-sorted by Ollama itself.
 ///
 /// `/api/tags` was already being pinged as a liveness check in [`is_running`];

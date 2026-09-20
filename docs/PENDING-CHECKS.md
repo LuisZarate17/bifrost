@@ -18,6 +18,31 @@ working copy change together rather than drifting apart mid-restructure.
 - [ ] **`gh repo rename odin`**, then update `origin`. GitHub redirects the old URL, so a stale
       clone keeps working.
 
+## Open — G3, Warden follows the app, 2026-09-19
+
+**This is the chunk that answers the original question**, and its checks are the ones that matter
+most in Stage G — two of them are about whether a new app broke a finished one.
+
+**Already proven mechanically.** `show_cached` reports `vision=true` for `qwen3-vl:8b` and
+**`vision=false` for `llama3.1:8b`**, so the refusal path has a real trigger. The cache turns a
+3.02 ms round trip into a **4.10 µs** lookup — about 700× — which is what keeps the popup instant.
+With no config file present, `config::load()` still yields `qwen3-vl:8b-instruct-q4_K_M` at 32,768.
+
+- [ ] **Switch the model in Citadel, then press `Ctrl+Alt+W` — without restarting Warden.**
+      The popup should answer using the new model. Warden re-reads the config on every summon, so
+      there is no IPC, no file watching and no daemon; it simply looks when it wakes up.
+- [ ] **Pick `llama3.1:8b` in Citadel and press the hotkey.** The popup must say
+      **`cannot see images`** in the header and name the model, *instead of* capturing and
+      answering. Ollama does not refuse a screenshot sent to a text-only model — it drops the image
+      and answers anyway, which is a fluent, confident description of nothing. That is worse than
+      an error, because nothing about it looks wrong.
+- [ ] **The tray follows too.** After switching, use the tray's Warm — it should load the model you
+      chose, not the one Warden started with. Confirm with `odin status` in a terminal.
+- [ ] **⭐ Delete `%APPDATA%\odin\config.json` entirely and press the hotkey.** The popup must
+      answer normally on its built-in default, **with no error and no stall**. This is decision #5
+      and the single most important check in the stage: it is the one that says **a new app did not
+      break the finished one**. Warden must work on a machine where Citadel was never installed.
+
 ## Open — G2, the switchboard, 2026-09-19
 
 **Already proven mechanically.** All five models' capabilities read correctly — `llama3.1:8b`

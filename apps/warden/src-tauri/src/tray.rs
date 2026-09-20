@@ -82,7 +82,6 @@ pub struct TrayItems<R: Runtime> {
 /// the others on a lock just to ask what the state is.
 pub struct Power {
     state: AtomicU8,
-    model: String,
     num_ctx: u32,
     /// Set while a load we issued is in flight — this is what makes Warming
     /// observable at all.
@@ -100,10 +99,9 @@ pub struct Power {
 }
 
 impl Power {
-    pub fn new(model: String, num_ctx: u32) -> Self {
+    pub fn new(num_ctx: u32) -> Self {
         Self {
             state: AtomicU8::new(State::Off.code()),
-            model,
             num_ctx,
             warming_since: Mutex::new(None),
             idle_mib: Mutex::new(None),
@@ -118,8 +116,18 @@ impl Power {
         self.state.store(s.code(), Ordering::Relaxed);
     }
 
-    pub fn model(&self) -> &str {
-        &self.model
+    /// The model the shared config names, read fresh each time.
+    ///
+    /// **Not stored at construction.** Citadel writes the current model to the
+    /// config, and a tray holding the tag it saw at startup would warm, release
+    /// and report on a model nobody had chosen since - silently, because every
+    /// one of those operations succeeds against the wrong tag.
+    ///
+    /// Returns an owned String rather than a borrow, because there is no longer
+    /// a field to lend out. The read is a small local file; the tray does this
+    /// on a menu action or a refresh, not in a loop.
+    pub fn model(&self) -> String {
+        odin_core::config::load().model
     }
 
     fn begin_warming(&self) {
@@ -156,7 +164,7 @@ pub fn warm<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) {
         // do"; the tray previously just called load, which returned in 0.0s and
         // looked from the outside like the click had done nothing at all.
         let already = ollama::ps()
-            .map(|m| ollama::find(&m, power.model()).is_some())
+            .map(|m| ollama::find(&m, &power.model()).is_some())
             .unwrap_or(false);
         if already {
             power.end_warming();
@@ -166,7 +174,7 @@ pub fn warm<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) {
             return;
         }
 
-        let result = ollama::load(power.model(), power.num_ctx);
+        let result = ollama::load(&power.model(), power.num_ctx);
         power.end_warming();
         match result {
             Ok(elapsed) => {
@@ -185,7 +193,7 @@ pub fn warm<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) {
 pub fn off<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) {
     let app = app.clone();
     std::thread::spawn(move || {
-        match ollama::unload(power.model()) {
+        match ollama::unload(&power.model()) {
             Ok(true) => println!("[warden] released"),
             Ok(false) => eprintln!("[warden] Ollama still lists the model after 30s"),
             Err(e) => eprintln!("[warden] off failed: {e}"),
@@ -220,7 +228,7 @@ fn observe(power: &Power) -> (State, String, String, String) {
     }
 
     let loaded = match ollama::ps() {
-        Ok(models) => ollama::find(&models, power.model()).is_some(),
+        Ok(models) => ollama::find(&models, &power.model()).is_some(),
         // Ollama being unreachable is not the same as the model being off, and
         // both places should say which it is.
         Err(_) => {
@@ -255,7 +263,7 @@ fn observe(power: &Power) -> (State, String, String, String) {
         // Better than showing nothing, worth not trusting.
         _ => ollama::ps()
             .ok()
-            .and_then(|m| ollama::find(&m, power.model()).and_then(|e| e.size_vram_mib())),
+            .and_then(|m| ollama::find(&m, &power.model()).and_then(|e| e.size_vram_mib())),
     };
 
     let gb = |mib: u64| mib as f64 / 1024.0;

@@ -30,6 +30,7 @@ type StreamEvent =
   | { event: "captured"; data: { width: number; height: number; pngBytes: number } }
   | { event: "startingOllama" }
   | { event: "warming" }
+  | { event: "noVision"; data: { model: string } }
   | { event: "token"; data: { text: string } }
   | {
       event: "done";
@@ -42,6 +43,10 @@ function App() {
   const [stats, setStats] = useState("");
   const [error, setError] = useState("");
   const [hotkey, setHotkey] = useState<string | null>(null);
+  // Set when the chosen model cannot be sent images. Not an error - nothing
+  // went wrong - and not an answer, so it gets its own state rather than being
+  // squeezed into either.
+  const [noVision, setNoVision] = useState<string | null>(null);
   const [probe, setProbe] = useState("");
 
   const busy = useRef(false);
@@ -138,6 +143,11 @@ function App() {
       } else if (message.event === "warming") {
         // Naming the wait is the difference between "slow" and "broken".
         setStatus("Warming the model…");
+      } else if (message.event === "noVision") {
+        // Nothing was captured and nothing will be asked. Say which model, so
+        // the fix — switch it in Citadel — is obvious rather than a guess.
+        setStatus("");
+        setNoVision(message.data.model);
       } else if (message.event === "token") {
         setStatus("");
         // Functional update: several tokens can land in one React tick.
@@ -162,6 +172,7 @@ function App() {
     busy.current = true;
 
     setAnswer("");
+    setNoVision(null);
     setStats("");
     setError("");
     setStatus("Adding this screen…");
@@ -195,6 +206,7 @@ function App() {
       busy.current = true;
 
       setAnswer("");
+    setNoVision(null);
       setStats("");
       setError("");
       setStatus("Asking again…");
@@ -229,6 +241,7 @@ function App() {
     busy.current = true;
 
     setAnswer("");
+    setNoVision(null);
     setStats("");
     setError("");
     setStatus("Capturing…");
@@ -561,7 +574,9 @@ function App() {
             answer — and only otherwise the key you just pressed to get here.
             `pickRef` is safe to read during render because `pickTick` is what
             triggered it. */}
-        {copied ? (
+        {noVision ? (
+          <span className="hint warn">cannot see images</span>
+        ) : copied ? (
           <span className="hint ok">copied</span>
         ) : pickRef.current !== null ? (
           <span className="hint ok">Ctrl+Alt+wheel to pick · Z to copy</span>
@@ -625,7 +640,15 @@ function App() {
 
       {stats && <p className="stats">{stats}</p>}
 
-      {!status && !answer && !error && (
+      {noVision && (
+        <p className="idle">
+          <strong>{noVision}</strong> cannot be sent images, so nothing was captured.
+          <br />
+          Pick a model with the <em>vision</em> badge in Citadel, then press the hotkey again.
+        </p>
+      )}
+
+      {!status && !answer && !error && !noVision && (
         <p className="idle">
           Press {hotkey ?? "your hotkey"} anywhere to ask about your screen.
           <br />

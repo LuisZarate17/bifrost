@@ -26,7 +26,10 @@ Chunk-by-chunk detail is in [`../stages/STAGE-G.md`](../stages/STAGE-G.md); this
 | **Step 2** | ✅ | Five false claims corrected across the docs |
 | **Step 3** | ✅ | Shared config at `%APPDATA%\odin\config.json`; six duplicated constants removed |
 | **G0** | ✅ | Tool-call probe. **[G0-results.md](G0-results.md)** — `qwen3-vl:8b` 10/10, `llama3.1:8b` 6/10 |
-| **G1** | ☐ | **Next** — the spine: one window, one conversation, `/api/chat` streamed |
+| **G1** | ✅ | **Citadel** — one window, one conversation, `/api/chat` streamed over a `Channel`, rendered with `@odin/ui` |
+| **G2** | ✅ | The switchboard — capability-labelled picker, load/unload, choice written to the shared config |
+| **G3** | ✅ | Warden reads the config on every summon and refuses cleanly when the model has no `vision` |
+| **G4** | ☐ | **Next** — persistence: conversations survive a restart |
 
 **What the groundwork actually found**, none of which a build would have caught:
 

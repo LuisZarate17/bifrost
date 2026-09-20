@@ -92,6 +92,14 @@ enum StreamEvent {
     /// there for an extra few seconds with no explanation. Saying so is the
     /// whole point: an unexplained stall reads as broken.
     Warming,
+    /// The chosen model cannot be sent images, so nothing was captured.
+    ///
+    /// Warden's entire question is "what is on my screen", and a model without
+    /// `vision` cannot be asked it. Ollama does not refuse — it drops the image
+    /// and answers the prompt anyway, which produces a fluent, confident answer
+    /// about a screenshot it never saw. **That is worse than an error**, because
+    /// nothing about it looks wrong.
+    NoVision { model: String },
     /// One token of the answer.
     Token { text: String },
     /// The final object, carrying Ollama's own metrics.
@@ -240,6 +248,28 @@ async fn ask_about_screen(
 ) -> Result<(), String> {
     let cfg = defaults().await;
     let model = model.unwrap_or(cfg.model);
+
+    // Can this model see at all? Asked before the capture, because a model
+    // without `vision` never receives the screenshot — it receives a prompt
+    // about an image that is not there, and answers with a confident guess.
+    // Saying so is strictly better than a plausible answer about nothing.
+    //
+    // Cached per tag in odin-core, so this costs a round trip once per model
+    // rather than once per summon. `llama3.1:8b` is the case that proves it:
+    // `/api/show` reports `completion, tools` and no `vision`.
+    //
+    // An unreachable check does **not** block the request. Capabilities are a
+    // label; refusing to answer because a secondary lookup failed would be a
+    // worse failure than the one it is guarding against.
+    let tag = model.clone();
+    if let Ok(Ok(detail)) =
+        tauri::async_runtime::spawn_blocking(move || odin_core::ollama::show_cached(&tag)).await
+    {
+        if !detail.has("vision") {
+            let _ = on_event.send(StreamEvent::NoVision { model: model.clone() });
+            return Ok(());
+        }
+    }
 
     // Before the capture, not after. Ollama takes the longest of the three
     // waits - 12.6s measured on a busy card - and reporting it second meant the
@@ -1917,7 +1947,7 @@ pub fn run() {
             // at the same num_ctx the popup asks with, so the two no longer evict
             // each other — measured 2026-09-19 at a 3.09s reload every switch.
             let cfg = odin_core::config::load();
-            let power = std::sync::Arc::new(tray::Power::new(cfg.model, cfg.num_ctx));
+            let power = std::sync::Arc::new(tray::Power::new(cfg.num_ctx));
             app.manage(power.clone());
             if let Err(e) = tray::install(app.handle(), power) {
                 eprintln!("[warden] WARNING: tray unavailable: {e}");
