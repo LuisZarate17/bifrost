@@ -31,7 +31,7 @@ header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 14px;
+  padding: 9px 18px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   flex: none;
 }
@@ -73,10 +73,10 @@ button.ghost {
   /* Chromium, so WebView2 honours it — keeps the viewport stable as content
      grows above the scroll position while streaming. */
   overflow-anchor: auto;
-  padding: 16px 14px;
+  padding: 20px 18px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
 .idle {
@@ -131,12 +131,15 @@ button.ghost {
 
 /* ── composer ───────────────────────────────────────────────────────────── */
 
+/* A column: attachment chips stack above the input row, and .composer-row does
+   the horizontal layout. This was a row until G5 nested another row inside it,
+   which left the inner row content-sized and the textarea unable to grow. */
 .composer {
   flex: none;
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  align-items: flex-end;
-  padding: 10px 14px;
+  padding: 10px 18px 12px;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
@@ -169,7 +172,7 @@ footer {
   display: flex;
   justify-content: space-between;
   gap: 14px;
-  padding: 5px 14px 8px;
+  padding: 5px 18px 9px;
   font-size: 11px;
   opacity: 0.55;
   font-variant-numeric: tabular-nums;
@@ -494,6 +497,7 @@ button.danger:hover:not(:disabled) {
   display: flex;
   gap: 8px;
   align-items: flex-end;
+  width: 100%;
 }
 
 .attach {
@@ -515,7 +519,6 @@ button.danger:hover:not(:disabled) {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding-bottom: 8px;
 }
 
 .chip {
