@@ -18,6 +18,30 @@ working copy change together rather than drifting apart mid-restructure.
 - [ ] **`gh repo rename odin`**, then update `origin`. GitHub redirects the old URL, so a stale
       clone keeps working.
 
+## Open — G2, the switchboard, 2026-09-19
+
+**Already proven mechanically.** All five models' capabilities read correctly — `llama3.1:8b`
+reports `vision=false`, which is exactly the negative case G3 needs. Load moved the card from 469
+to 11,830 MiB, and a conversation straight afterwards reported **`load_duration 0.00s`**: the
+switchboard's warm survived, because `load_model` goes through `ollama::load` at the config's
+`num_ctx` rather than rolling its own call. That is the packet's "watch for", closed.
+
+What is open is the panel itself.
+
+- [ ] **Open the model panel** — the button in the header showing the current tag. Every installed
+      model should be listed with its size, quantization, `vision`/`tools` badges, and whether it
+      is resident.
+- [ ] **Pick a different model.** The radio writes the choice to `%APPDATA%\odin\config.json`, so
+      `odin status` in a terminal should immediately report the new tag. **That is the switchboard
+      working** — one source of truth, followed by the CLI without being told.
+- [ ] **Load and Unload.** The card figure in the footer should move to match within a few seconds.
+      Note Ollama and the card disagree by ~2,100 MiB (9,737 vs 11,830 measured); **the card is the
+      truth**, which is why the footer shows it.
+- [ ] **`llama3.1:8b` shows `tools` but no `vision` badge.** The one model whose labels differ, and
+      the reason G3 can refuse a screenshot cleanly instead of guessing at an image it never got.
+- [ ] **16 GB will not hold two 8B models.** Load one while another is resident and watch them take
+      turns — worth seeing once so the constraint is familiar rather than surprising.
+
 ## Open — G1, 2026-09-19
 
 Citadel builds, launches, and shows a window titled **Citadel** alongside a running Warden. What no

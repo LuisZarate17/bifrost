@@ -348,6 +348,80 @@ pub struct ModelDetails {
     pub quantization_level: String,
 }
 
+/// What `/api/show` says about one model.
+#[derive(Debug, Clone, Default)]
+pub struct ModelDetail {
+    /// Typically some of `completion`, `vision`, `tools`, `embedding`,
+    /// `thinking`. **Declared, not demonstrated** — G0 measured `llama3.1:8b`
+    /// reporting `tools` and then firing a spurious call on every negative case.
+    /// Good enough to label a picker and to refuse cleanly; not evidence of
+    /// competence.
+    pub capabilities: Vec<String>,
+    /// The largest context the model itself supports, which is usually far more
+    /// than is affordable: `qwen3-vl:8b` reports 262,144 against the 32,768 that
+    /// fits on this card. Useful for telling "this model cannot do that" apart
+    /// from "this card cannot afford it".
+    pub max_context: Option<u64>,
+    pub family: String,
+    pub parameter_size: String,
+    pub quantization_level: String,
+}
+
+impl ModelDetail {
+    pub fn has(&self, capability: &str) -> bool {
+        self.capabilities.iter().any(|c| c == capability)
+    }
+}
+
+/// Ask Ollama what a model can do.
+///
+/// One round trip per model, so a caller listing several pays for each. **Cache
+/// it per tag where that matters** — a model's capabilities do not change between
+/// calls, and G3 needs the answer on every summon without spending a round trip
+/// on it.
+pub fn show(tag: &str) -> Result<ModelDetail, String> {
+    #[derive(Deserialize)]
+    struct Shown {
+        #[serde(default)]
+        capabilities: Vec<String>,
+        #[serde(default)]
+        details: ModelDetails,
+        #[serde(default)]
+        model_info: serde_json::Map<String, serde_json::Value>,
+    }
+
+    let response = client(SHORT_TIMEOUT)?
+        .post(url("/api/show"))
+        .json(&serde_json::json!({ "model": tag }))
+        .send()
+        .map_err(unreachable)?;
+
+    if !response.status().is_success() {
+        return Err(format!("/api/show returned {} for {tag}", response.status()));
+    }
+
+    let shown: Shown = response
+        .json()
+        .map_err(|e| format!("parsing /api/show for {tag}: {e}"))?;
+
+    // The context key is namespaced by architecture — `qwen3vl.context_length`,
+    // `llama.context_length` — so it is found by suffix rather than by name.
+    // Hard-coding one family would silently return None for every other model.
+    let max_context = shown
+        .model_info
+        .iter()
+        .find(|(k, _)| k.ends_with(".context_length"))
+        .and_then(|(_, v)| v.as_u64());
+
+    Ok(ModelDetail {
+        capabilities: shown.capabilities,
+        max_context,
+        family: shown.details.family,
+        parameter_size: shown.details.parameter_size,
+        quantization_level: shown.details.quantization_level,
+    })
+}
+
 /// Every model installed, newest-sorted by Ollama itself.
 ///
 /// `/api/tags` was already being pinged as a liveness check in [`is_running`];

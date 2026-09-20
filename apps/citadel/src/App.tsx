@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { Answer } from "@odin/ui";
+import { Switchboard, type ModelInfo } from "./Switchboard";
 // The renderer's styles. @odin/ui does not import them itself, so that
 // `npm run check:inert` can SSR-build Answer and run it under plain node.
 import "@odin/ui/answer.css";
@@ -20,14 +21,6 @@ type StreamEvent =
         loadMs: number;
       };
     };
-
-type ModelInfo = {
-  name: string;
-  size: number;
-  parameterSize: string;
-  quantization: string;
-  isDefault: boolean;
-};
 
 type CardState = {
   usedMib: number;
@@ -72,6 +65,8 @@ function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [model, setModel] = useState<string | null>(null);
   const [card, setCard] = useState<CardState | null>(null);
+  const [showModels, setShowModels] = useState(false);
+  const [loadingModels, setLoadingModels] = useState(false);
   /** Ollama's own count from the last reply — the honest number. */
   const [spent, setSpent] = useState(0);
 
@@ -81,15 +76,22 @@ function App() {
   // to re-read something, and resume on the next answer.
   const pinned = useRef(true);
 
-  useEffect(() => {
+  const refreshModels = useCallback(() => {
+    setLoadingModels(true);
     invoke<ModelInfo[]>("models")
       .then((list) => {
         setModels(list);
-        setModel((m) => m ?? list.find((x) => x.isDefault)?.name ?? list[0]?.name ?? null);
+        // Follow the config unless the user has already picked in this session.
+        setModel((m) => m ?? list.find((x) => x.isCurrent)?.name ?? list[0]?.name ?? null);
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoadingModels(false));
     invoke<CardState>("card").then(setCard).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    refreshModels();
+  }, [refreshModels]);
 
   // The card's figure moves while a model loads or is released, so it is worth
   // re-reading rather than showing once at startup and going stale.
@@ -210,23 +212,20 @@ function App() {
 
   const limit = card?.numCtx ?? 32768;
   const pct = Math.min(100, Math.round((spent / limit) * 100));
+  const current = models.find((m) => m.name === model);
 
   return (
     <div className="app">
       <header>
         <span className="mark">Citadel</span>
-        <select
-          value={model ?? ""}
-          onChange={(e) => setModel(e.target.value)}
-          disabled={streaming || models.length === 0}
-          title="Changes this session only — writing the choice to the shared config is G2"
+        <button
+          className={showModels ? "" : "ghost"}
+          onClick={() => setShowModels((v) => !v)}
+          title="Choose, load and release the resident model"
         >
-          {models.map((m) => (
-            <option key={m.name} value={m.name}>
-              {m.name} · {m.parameterSize} {m.quantization}
-            </option>
-          ))}
-        </select>
+          {model ?? "no model"}
+          {current?.isResident ? " ●" : " ○"}
+        </button>
         <button
           className="ghost"
           onClick={() => {
@@ -240,6 +239,16 @@ function App() {
           New
         </button>
       </header>
+
+      {showModels && (
+        <Switchboard
+          models={models}
+          current={model}
+          onPick={setModel}
+          onRefresh={refreshModels}
+          busy={streaming || loadingModels}
+        />
+      )}
 
       <div className="thread" ref={threadRef} onScroll={onScroll}>
         {entries.length === 0 && (

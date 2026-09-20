@@ -139,30 +139,107 @@ struct ModelInfo {
     parameter_size: String,
     quantization: String,
     /// Whether this is the tag the shared config currently names.
-    is_default: bool,
+    is_current: bool,
+    /// Whether Ollama has a runner for it in memory right now.
+    is_resident: bool,
+    /// Resident size per Ollama, which is **not** the card's figure — the two
+    /// disagreed by ~2,500 MiB at C4a. The status bar shows the card.
+    resident_mib: u64,
+    /// Declared by `/api/show`: some of `completion`, `vision`, `tools`.
+    capabilities: Vec<String>,
+    /// The most the model itself supports, usually far above what fits.
+    max_context: Option<u64>,
+    /// Set when `/api/show` could not be reached for this tag. The model is
+    /// still listed and still selectable — an unreachable capability check
+    /// should not hide a model that is plainly installed.
+    error: Option<String>,
 }
 
-/// What is installed, for the picker.
+/// What is installed, what it can do, and what is loaded.
 ///
-/// **No capabilities here.** Whether a model can see images or call tools comes
-/// from `/api/show`, one round trip per model, and belongs to G2's labelled
-/// picker rather than to this list.
+/// One `/api/tags` plus one `/api/show` per model, and one `/api/ps` — all on a
+/// single blocking hop rather than a round trip per field.
+///
+/// **A failed `/api/show` does not drop the model from the list.** Capabilities
+/// are a label; being installed is a fact. Losing the second because the first
+/// failed would make the picker lie about what you have.
 #[tauri::command]
 async fn models() -> Result<Vec<ModelInfo>, String> {
-    let (installed, cfg) = tauri::async_runtime::spawn_blocking(|| (ollama::tags(), config::load()))
-        .await
-        .map_err(|e| format!("listing models failed: {e}"))?;
+    tauri::async_runtime::spawn_blocking(|| {
+        let cfg = config::load();
+        let installed = ollama::tags()?;
+        let loaded = ollama::ps().unwrap_or_default();
 
-    Ok(installed?
-        .into_iter()
-        .map(|m| ModelInfo {
-            is_default: m.name == cfg.model,
-            name: m.name,
-            size: m.size,
-            parameter_size: m.details.parameter_size,
-            quantization: m.details.quantization_level,
-        })
-        .collect())
+        Ok(installed
+            .into_iter()
+            .map(|m| {
+                let resident = ollama::find(&loaded, &m.name);
+                let (detail, error) = match ollama::show(&m.name) {
+                    Ok(d) => (Some(d), None),
+                    Err(e) => (None, Some(e)),
+                };
+                ModelInfo {
+                    is_current: m.name == cfg.model,
+                    is_resident: resident.is_some(),
+                    resident_mib: resident
+                        .and_then(|r| r.size_vram)
+                        .map(|b| b / 1_048_576)
+                        .unwrap_or(0),
+                    capabilities: detail.as_ref().map(|d| d.capabilities.clone()).unwrap_or_default(),
+                    max_context: detail.as_ref().and_then(|d| d.max_context),
+                    name: m.name,
+                    size: m.size,
+                    parameter_size: m.details.parameter_size,
+                    quantization: m.details.quantization_level,
+                    error,
+                }
+            })
+            .collect())
+    })
+    .await
+    .map_err(|e| format!("listing models failed: {e}"))?
+}
+
+/// Pin a model in VRAM.
+///
+/// **Loads at the config's `num_ctx`, and that is the whole point.** Ollama keys
+/// a runner by the model *and* its context, so loading at one value and asking at
+/// another tears the runner down and rebuilds it — measured 2026-09-19 at ~3s in
+/// both directions, which is exactly the bug the shared config closed. Going
+/// through `ollama::load` rather than rolling a fresh call is what keeps them
+/// agreeing.
+#[tauri::command]
+async fn load_model(tag: String) -> Result<f64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = config::load();
+        ollama::load(&tag, cfg.num_ctx).map(|d| d.as_secs_f64())
+    })
+    .await
+    .map_err(|e| format!("load failed: {e}"))?
+}
+
+/// Release a model and give the card its memory back.
+#[tauri::command]
+async fn unload_model(tag: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || ollama::unload(&tag))
+        .await
+        .map_err(|e| format!("unload failed: {e}"))?
+}
+
+/// Write the chosen model to the shared config.
+///
+/// **This is the switchboard part.** The config is the single source of truth for
+/// "current model", so writing it here is what lets the CLI and (from G3) Warden
+/// follow the choice without being told separately.
+#[tauri::command]
+async fn set_model(tag: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cfg = config::load();
+        cfg.model = tag;
+        config::save(&cfg)
+    })
+    .await
+    .map_err(|e| format!("saving the model choice failed: {e}"))?
 }
 
 #[derive(Serialize)]
@@ -202,7 +279,14 @@ async fn card() -> Result<CardState, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![send, models, card])
+        .invoke_handler(tauri::generate_handler![
+            send,
+            models,
+            card,
+            load_model,
+            unload_model,
+            set_model
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Citadel");
 }
