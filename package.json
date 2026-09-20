@@ -12,6 +12,8 @@
     "dev": "npm run dev -w apps/warden",
     "build": "npm run build -w apps/warden",
     "check:inert": "npm run check:inert -w packages/ui",
-    "check:fixes": "node evals/fixcheck.mjs"
+    "check:fixes": "node evals/fixcheck.mjs",
+    "app:citadel": "npm run app -w apps/citadel",
+    "dev:citadel": "npm run dev -w apps/citadel"
   }
 }

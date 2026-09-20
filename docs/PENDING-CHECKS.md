@@ -18,6 +18,36 @@ working copy change together rather than drifting apart mid-restructure.
 - [ ] **`gh repo rename odin`**, then update `origin`. GitHub redirects the old URL, so a stale
       clone keeps working.
 
+## Open — G1, 2026-09-19
+
+Citadel builds, launches, and shows a window titled **Citadel** alongside a running Warden. What no
+tool call can do is type in it.
+
+**Already proven mechanically**, so only the wiring is open: a three-message conversation through
+`odin_core::chat::stream` correctly recalled both facts from turn one — *"Your dog is called
+Bramble, and you mentioned the colour vermilion."* The stream delivers separate fragments (8 for a
+count to eight), Warden still compiles and runs, and both guards pass.
+
+- [ ] **Hold a real conversation.** Launch `target\debug\citadel.exe`, ask something, then ask a
+      follow-up that only makes sense given the first — "what did I just ask you?". **This is the
+      chunk's done-when.**
+- [ ] **Watch it stream.** Tokens should appear progressively, *not* all at once. Arriving whole is
+      the tell for returning the answer as the command's `Result` instead of through the `Channel`.
+- [ ] **Markdown renders through `@odin/ui`** — ask for a Rust snippet and confirm the code block
+      highlights, inline code gets its pill, headings scale. *(This also settles 1e's open visual
+      check from the other direction: same renderer, different app.)*
+- [ ] **Switch model mid-conversation** in the header picker; the next turn uses the new one.
+      Changing it affects this session only — writing the choice to the shared config is G2.
+- [ ] **The status bar moves.** VRAM figure tracks the card as a model loads or is released, and
+      the `n / 32,768 ctx` figure appears after the first reply.
+- [ ] **Fill the context** — paste something long, repeatedly — and confirm
+      `⋯ n earlier turns dropped to make room` appears in the thread rather than the conversation
+      quietly going strange.
+- [ ] **Warden is undisturbed.** `Ctrl+Alt+W` still answers with Citadel open.
+
+> **Expect Smart App Control to refuse `citadel.exe` at some point.** It did not on the first
+> launch, but a new binary is a fresh verdict; a rebuild for a new hash clears it (PLAN.md §3).
+
 ## Open — Before G0 step 3, 2026-09-19
 
 The config was verified end to end **through the CLI**: no file at all gives working defaults and

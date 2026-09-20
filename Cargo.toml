@@ -14,6 +14,7 @@ members = [
     "crates/odin-cli",
     "crates/bench",
     "apps/warden/src-tauri",
+    "apps/citadel/src-tauri",
 ]
 
 # evals/fixtures/frametest is the E0502 fixture that C1b and fixcheck.mjs are built
