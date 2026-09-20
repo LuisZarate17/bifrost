@@ -29,7 +29,8 @@ Chunk-by-chunk detail is in [`../stages/STAGE-G.md`](../stages/STAGE-G.md); this
 | **G1** | ✅ | **Citadel** — one window, one conversation, `/api/chat` streamed over a `Channel`, rendered with `@odin/ui` |
 | **G2** | ✅ | The switchboard — capability-labelled picker, load/unload, choice written to the shared config |
 | **G3** | ✅ | Warden reads the config on every summon and refuses cleanly when the model has no `vision` |
-| **G4** | ☐ | **Next** — persistence: conversations survive a restart |
+| **G4** | ✅ | Persistence — one JSON file per conversation; list, rename, delete |
+| **G5** | ☐ | **Next** — attachments: images into a message |
 
 **What the groundwork actually found**, none of which a build would have caught:
 

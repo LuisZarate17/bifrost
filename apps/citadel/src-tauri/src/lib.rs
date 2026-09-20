@@ -19,7 +19,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 
 use odin_core::chat::{self, Message, Options, StreamChunk};
-use odin_core::{config, ollama, vram};
+use odin_core::{config, ollama, store, vram};
 
 /// One message pushed up to the UI.
 ///
@@ -276,6 +276,62 @@ async fn card() -> Result<CardState, String> {
     .map_err(|e| format!("reading the card failed: {e}"))?
 }
 
+// ── conversations ───────────────────────────────────────────────────────────
+//
+// Storage lives in odin_core::store, one JSON file per conversation beside
+// config.json. These commands are a thin pass-through: the frontend still owns
+// the thread while it is being written, and hands the whole thing back to be
+// saved. That keeps the trimming decision in one place, which is the same
+// reason `send` takes every turn.
+
+#[tauri::command]
+async fn conversations() -> Result<Vec<store::Summary>, String> {
+    tauri::async_runtime::spawn_blocking(store::list)
+        .await
+        .map_err(|e| format!("listing conversations failed: {e}"))?
+}
+
+#[tauri::command]
+async fn open_conversation(id: String) -> Result<store::Conversation, String> {
+    tauri::async_runtime::spawn_blocking(move || store::load(&id))
+        .await
+        .map_err(|e| format!("opening the conversation failed: {e}"))?
+}
+
+/// Save, and hand back what was written.
+///
+/// Returns the conversation because the id and the derived title are decided
+/// here — a new conversation arrives without an id, and the caller needs the one
+/// it was given in order to keep saving to the same file.
+#[tauri::command]
+async fn save_conversation(conversation: store::Conversation) -> Result<store::Conversation, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut c = conversation;
+        if c.id.is_empty() {
+            c = store::Conversation { id: store::Conversation::new().id, ..c };
+        }
+        c.updated_at = store::stamp();
+        store::save(&c)?;
+        Ok(c)
+    })
+    .await
+    .map_err(|e| format!("saving the conversation failed: {e}"))?
+}
+
+#[tauri::command]
+async fn rename_conversation(id: String, title: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || store::rename(&id, &title))
+        .await
+        .map_err(|e| format!("renaming failed: {e}"))?
+}
+
+#[tauri::command]
+async fn delete_conversation(id: String) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || store::delete(&id))
+        .await
+        .map_err(|e| format!("deleting failed: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -283,6 +339,11 @@ pub fn run() {
             send,
             models,
             card,
+            conversations,
+            open_conversation,
+            save_conversation,
+            rename_conversation,
+            delete_conversation,
             load_model,
             unload_model,
             set_model

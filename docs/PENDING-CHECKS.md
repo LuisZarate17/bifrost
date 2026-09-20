@@ -18,6 +18,31 @@ working copy change together rather than drifting apart mid-restructure.
 - [ ] **`gh repo rename odin`**, then update `origin`. GitHub redirects the old URL, so a stale
       clone keeps working.
 
+## Open — G4, persistence, 2026-09-19
+
+Conversations are one JSON file each in `%APPDATA%\odin\conversations\`, beside `config.json`. No
+database: G4 needs save, list, rename and delete, and none of that needs a query. What a plain file
+buys is that you can read it in an editor, back it up by copying it, and delete one conversation by
+deleting one file.
+
+**Already proven mechanically.** Save → reload is byte-identical, the list sorts newest first,
+rename and delete work, deleting something already gone returns `false` rather than erroring, and
+a record written without the G5/G6 fields still parses. 12 tests cover the record shape, the title
+derivation, the date arithmetic and the path-traversal refusal.
+
+- [ ] **⭐ Close Citadel, reopen it, and continue a conversation.** Ask something, quit, relaunch,
+      hit **History**, open the thread, and ask a follow-up that depends on what was said before.
+      **That is the chunk's done-when.**
+- [ ] **Titles derive from the first question.** A list of conversations all called "New
+      conversation" is a list you cannot use, so the first line of the first question becomes the
+      title until you set one.
+- [ ] **Rename** by double-clicking a row. Enter commits, Escape cancels.
+- [ ] **Delete** with the `×`, which arms an in-place Delete/Keep rather than opening a dialog —
+      one click to arm, one to confirm, and nothing that can be dismissed into deleting by accident.
+      Deleting the conversation that is currently open should clear the thread.
+- [ ] **Look at a file.** `%APPDATA%\odin\conversations\` — it should be readable JSON, with
+      `model` recorded on assistant turns and `images`/`tool_calls` absent until G5 and G6 fill them.
+
 ## Open — G3, Warden follows the app, 2026-09-19
 
 **This is the chunk that answers the original question**, and its checks are the ones that matter

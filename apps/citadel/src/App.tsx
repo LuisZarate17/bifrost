@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { Answer } from "@odin/ui";
 import { Switchboard, type ModelInfo } from "./Switchboard";
+import { Conversations, type Summary } from "./Conversations";
 // The renderer's styles. @odin/ui does not import them itself, so that
 // `npm run check:inert` can SSR-build Answer and run it under plain node.
 import "@odin/ui/answer.css";
@@ -28,6 +29,25 @@ type CardState = {
   name: string;
   model: string;
   numCtx: number;
+};
+
+/** What odin_core::store writes. The unused fields are decision #2: adding
+ *  them later would mean migrating files already holding real conversations. */
+type StoredMessage = {
+  role: string;
+  content: string;
+  images?: string[];
+  tool_calls?: unknown[];
+  model?: string;
+  created_at?: string;
+};
+
+type Conversation = {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages: StoredMessage[];
 };
 
 /** A turn, or a marker where turns were removed. */
@@ -66,6 +86,11 @@ function App() {
   const [model, setModel] = useState<string | null>(null);
   const [card, setCard] = useState<CardState | null>(null);
   const [showModels, setShowModels] = useState(false);
+  const [showConvos, setShowConvos] = useState(false);
+  const [convos, setConvos] = useState<Summary[]>([]);
+  // The file this thread belongs to. Null until the first exchange is saved -
+  // an empty conversation is not worth a file.
+  const [convoId, setConvoId] = useState<string | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   /** Ollama's own count from the last reply — the honest number. */
   const [spent, setSpent] = useState(0);
@@ -92,6 +117,86 @@ function App() {
   useEffect(() => {
     refreshModels();
   }, [refreshModels]);
+
+  const refreshConvos = useCallback(() => {
+    invoke<Summary[]>("conversations").then(setConvos).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshConvos();
+  }, [refreshConvos]);
+
+  /**
+   * Save the thread, and remember which file it went to.
+   *
+   * Called after each completed exchange rather than on every token: a save is
+   * a whole-file rewrite, and rewriting it once per token would be both wasteful
+   * and a way to persist half an answer.
+   *
+   * Only the turns are stored. A dropped-marker is a note to the reader about
+   * what this session sent, not part of the conversation.
+   */
+  const persist = useCallback(
+    async (all: Entry[], id: string | null, usedModel: string | null) => {
+      const messages: StoredMessage[] = all
+        .filter((e): e is Extract<Entry, { kind: "turn" }> => e.kind === "turn")
+        .map((t) => ({
+          role: t.role,
+          content: t.content,
+          ...(t.role === "assistant" && usedModel ? { model: usedModel } : {}),
+        }));
+      if (messages.length === 0) return;
+
+      try {
+        const saved = await invoke<Conversation>("save_conversation", {
+          conversation: {
+            id: id ?? "",
+            title: "",
+            created_at: "",
+            updated_at: "",
+            messages,
+          },
+        });
+        setConvoId(saved.id);
+        refreshConvos();
+      } catch (e) {
+        // A failed save must not eat the conversation that is on screen.
+        setError(`could not save: ${e}`);
+      }
+    },
+    [refreshConvos],
+  );
+
+  const openConvo = useCallback(
+    async (id: string) => {
+      try {
+        const c = await invoke<Conversation>("open_conversation", { id });
+        setEntries(
+          c.messages.map((m) => ({
+            kind: "turn" as const,
+            role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
+            content: m.content,
+          })),
+        );
+        setConvoId(c.id);
+        setSpent(0);
+        setStats("");
+        setError("");
+        pinned.current = true;
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [],
+  );
+
+  const newConvo = useCallback(() => {
+    setEntries([]);
+    setConvoId(null);
+    setSpent(0);
+    setStats("");
+    setError("");
+  }, []);
 
   // The card's figure moves while a model loads or is released, so it is worth
   // re-reading rather than showing once at startup and going stale.
@@ -207,6 +312,12 @@ function App() {
     } finally {
       setStreaming(false);
       composerRef.current?.focus();
+      // Read the thread as it ended up, including the streamed answer, rather
+      // than the copy this closure captured before the stream ran.
+      setEntries((final) => {
+        void persist(final, convoId, model);
+        return final;
+      });
     }
   }, [draft, streaming, entries, model, card, fit]);
 
@@ -227,16 +338,11 @@ function App() {
           {current?.isResident ? " ●" : " ○"}
         </button>
         <button
-          className="ghost"
-          onClick={() => {
-            setEntries([]);
-            setSpent(0);
-            setStats("");
-            setError("");
-          }}
-          disabled={streaming || entries.length === 0}
+          className={showConvos ? "" : "ghost"}
+          onClick={() => setShowConvos((v) => !v)}
+          title="Saved conversations"
         >
-          New
+          History
         </button>
       </header>
 
@@ -247,6 +353,24 @@ function App() {
           onPick={setModel}
           onRefresh={refreshModels}
           busy={streaming || loadingModels}
+        />
+      )}
+
+      <div className="body">
+      {showConvos && (
+        <Conversations
+          items={convos}
+          currentId={convoId}
+          onOpen={(id) => void openConvo(id)}
+          onNew={newConvo}
+          onChanged={() => {
+            refreshConvos();
+            // The open conversation may be the one just deleted.
+            invoke<Summary[]>("conversations").then((list) => {
+              if (convoId && !list.some((c) => c.id === convoId)) newConvo();
+            }).catch(() => {});
+          }}
+          busy={streaming}
         />
       )}
 
@@ -271,6 +395,7 @@ function App() {
             </div>
           ),
         )}
+      </div>
       </div>
 
       {error && <p className="error">{error}</p>}

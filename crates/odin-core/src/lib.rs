@@ -11,10 +11,14 @@
 //! - [`chat`] — `/api/chat`: messages with roles, and the tool calls that ride
 //!   on them. Added at G0, because everything Stage G builds is a field on a
 //!   message and `/api/generate` has nowhere to put one
+//! - [`store`] — conversations on disk. A file format, kept deliberately
+//!   separate from `chat`'s wire format so a change to one is not silently a
+//!   migration of the other
 //!
 //! Nothing here prints or panics. Callers format, and a tray has no stdout.
 
 pub mod chat;
 pub mod config;
 pub mod ollama;
+pub mod store;
 pub mod vram;
