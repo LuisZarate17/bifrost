@@ -31,7 +31,11 @@ Chunk-by-chunk detail is in [`../stages/STAGE-G.md`](../stages/STAGE-G.md); this
 | **G3** | ✅ | Warden reads the config on every summon and refuses cleanly when the model has no `vision` |
 | **G4** | ✅ | Persistence — one JSON file per conversation; list, rename, delete |
 | **G5** | ✅ | Attachments — images as base64 on the message, bytes in their own files; text files folded in |
-| **G6** | ☐ | **Next** — the tool loop G0 cleared |
+| **G6** | ✅ | The tool loop — one hardcoded tool, off by default, every call approved individually |
+
+**Stage G is built.** What remains is the testing round in PENDING-CHECKS.md, and the repo-root
+rename. G5 and G6 close the packet: the bar it sets is *you keep it open, and reach for it instead
+of a browser tab*, which only using it can settle.
 
 **What the groundwork actually found**, none of which a build would have caught:
 

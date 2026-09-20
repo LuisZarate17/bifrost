@@ -18,6 +18,37 @@ working copy change together rather than drifting apart mid-restructure.
 - [ ] **`gh repo rename odin`**, then update `origin`. GitHub redirects the old URL, so a stale
       clone keeps working.
 
+## Open — G6, the tool loop, 2026-09-19
+
+Gated on G0, which cleared it: `qwen3-vl:8b` scored 10/10 including four cases where calling a tool
+would have been wrong. One tool, hardcoded, no MCP — MCP is a transport over this loop, and a loop
+that already works is far easier to debug than one arriving with a protocol attached.
+
+**The safety design is the chunk, not a detail of it.** Tools are **off by default**. There is no
+allowlist, no remembered folder and no "always allow": every read shows the exact path and waits.
+That is deliberately the most annoying design that is still usable, because the alternative is a
+model reading whatever it names and nobody noticing.
+
+**Already proven mechanically.** Given a temp file containing a fact it could not know, the model
+asked for `read_file`, the tool returned the contents, and the next turn answered *"The launch code
+for project Bramble is **7731-VERMILION**"*. 18 tests, including that an unknown tool name is
+refused outright and that a directory is rejected clearly.
+
+- [ ] **Turn Tools on** (header), then ask about a file on this machine — something like
+      *"read C:\\…\\something.txt and summarise it"*. **The approval card must appear with the exact
+      path, and nothing may be read until you click Allow once.** That is the chunk's done-when.
+- [ ] **Click Deny on one.** The call should be marked denied and the model told, rather than left
+      waiting on something that silently never happened.
+- [ ] **Expand a completed call.** The result is in the thread, so what ran is recorded where the
+      conversation is rather than in a log.
+- [ ] **Ask for a file that does not exist.** The tool returns an error *as text* and the model
+      continues — a tool that cannot answer is a normal conversational event, not a failed turn.
+- [ ] **Try with tools on and `llama3.1:8b` selected.** It reports `tools`, so it is allowed — but
+      G0 measured it firing a spurious call on every negative case, so expect it to reach for
+      `read_file` when it should just answer. Worth seeing once.
+- [ ] **Turn Tools off and ask the same thing.** It should answer in prose without ever offering
+      to read anything.
+
 ## Open — G5, attachments, 2026-09-19
 
 Images ride as base64 on the message; the bytes live in `%APPDATA%\odin\attachments\` and the

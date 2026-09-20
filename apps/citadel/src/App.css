@@ -572,3 +572,84 @@ button.danger:hover:not(:disabled) {
   margin-bottom: 5px;
   font-variant-numeric: tabular-nums;
 }
+
+/* ── tool calls ─────────────────────────────────────────────────────────── */
+
+/* Every tool is code the model chose to run, so what it wants sits in the
+   thread where the conversation is — not in a log nobody opens. */
+
+.toolcall {
+  align-self: stretch;
+  max-width: 72ch;
+  border: 1px solid rgba(255, 200, 120, 0.3);
+  background: rgba(255, 200, 120, 0.07);
+  border-radius: 8px;
+  padding: 9px 11px;
+  font-size: 12px;
+}
+/* Waiting on a decision, so it should be the loudest thing on screen. */
+.toolcall.pending {
+  border-color: rgba(255, 200, 120, 0.7);
+  background: rgba(255, 200, 120, 0.13);
+}
+.toolcall.denied {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  opacity: 0.65;
+}
+.toolcall.ran {
+  border-color: rgba(140, 220, 180, 0.3);
+  background: rgba(140, 220, 180, 0.07);
+}
+
+.tc-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin-bottom: 6px;
+}
+.tc-path {
+  font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
+  font-size: 11px;
+  opacity: 0.85;
+  word-break: break-all;
+  user-select: text;
+}
+
+.tc-ask {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  opacity: 0.9;
+}
+.tc-buttons {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.tc-buttons button {
+  font-size: 11px;
+  padding: 4px 11px;
+}
+
+.tc-note {
+  font-size: 11px;
+  opacity: 0.6;
+}
+.tc-note summary {
+  cursor: pointer;
+}
+.tc-result {
+  margin: 7px 0 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.35);
+  font-family: "Cascadia Code", Consolas, ui-monospace, monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  user-select: text;
+}

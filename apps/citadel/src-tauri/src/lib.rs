@@ -20,7 +20,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 
 use odin_core::chat::{self, Message, Options, StreamChunk};
-use odin_core::{config, ollama, store, vram};
+use odin_core::{config, ollama, store, tools, vram};
 
 /// One message pushed up to the UI.
 ///
@@ -333,6 +333,84 @@ async fn delete_conversation(id: String) -> Result<bool, String> {
         .map_err(|e| format!("deleting failed: {e}"))?
 }
 
+// ── tools ───────────────────────────────────────────────────────────────────
+
+/// What the model asked to run, for the UI to show before anything happens.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PendingCall {
+    name: String,
+    path: String,
+}
+
+/// Ask the model, offering the one tool, and report back what it wants.
+///
+/// **This does not run anything.** It returns either an answer or a request,
+/// and the request is shown to the user with the exact path before a single
+/// byte is read. Every tool is code the model chose to run, so the approval is
+/// the point of the chunk rather than a detail of it.
+#[tauri::command]
+async fn ask_with_tools(
+    messages: Vec<Message>,
+    model: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let cfg = tauri::async_runtime::spawn_blocking(config::load)
+        .await
+        .unwrap_or_default();
+    let model = model.unwrap_or(cfg.model);
+
+    // Offering tools to a model that cannot carry them wastes a round trip and
+    // produces a confusing prose answer instead of a call. Better to say so.
+    let tag = model.clone();
+    let can = tauri::async_runtime::spawn_blocking(move || odin_core::ollama::show_cached(&tag))
+        .await
+        .map_err(|e| format!("capability check failed: {e}"))?;
+    if let Ok(detail) = can {
+        if !detail.has("tools") {
+            return Err(format!("{model} cannot call tools — pick one with the tools badge"));
+        }
+    }
+
+    let num_ctx = cfg.num_ctx;
+    let reply = tauri::async_runtime::spawn_blocking(move || {
+        chat::chat(&model, &messages, &tools::available(), Options::new(num_ctx))
+    })
+    .await
+    .map_err(|e| format!("tool turn failed: {e}"))??;
+
+    // The first call only. A model that asks for several at once is handled one
+    // at a time, because each one needs its own approval.
+    if let Some(call) = reply.tool_calls().first() {
+        let requested = tools::interpret(call)?;
+        return Ok(serde_json::json!({
+            "kind": "call",
+            "call": PendingCall { name: requested.name, path: requested.path },
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "kind": "answer",
+        "content": reply.message.content,
+        "promptEvalCount": reply.prompt_eval_count,
+        "evalCount": reply.eval_count,
+    }))
+}
+
+/// Run a call the user has just approved, and return what the tool produced.
+///
+/// Takes the path the UI displayed rather than re-reading the model's request,
+/// so what was approved is exactly what runs. Anything else would make the
+/// confirmation a formality.
+#[tauri::command]
+async fn run_tool(name: String, path: String) -> Result<String, String> {
+    if name != "read_file" {
+        return Err(format!("no such tool: {name}"));
+    }
+    tauri::async_runtime::spawn_blocking(move || tools::run_read_file(&path))
+        .await
+        .map_err(|e| format!("running the tool failed: {e}"))
+}
+
 // ── attachments ─────────────────────────────────────────────────────────────
 
 /// Store an attachment and return the name to reference it by.
@@ -377,6 +455,8 @@ pub fn run() {
             delete_conversation,
             put_attachment,
             get_attachment,
+            ask_with_tools,
+            run_tool,
             load_model,
             unload_model,
             set_model

@@ -63,7 +63,16 @@ type Entry =
       /** Stored attachment names, not bytes. Loaded on demand. */
       images?: string[];
     }
-  | { kind: "dropped"; count: number };
+  | { kind: "dropped"; count: number }
+  /** A tool the model asked for, and what happened. Shown in the thread so the
+   *  record of what ran is where the conversation is, not in a log. */
+  | {
+      kind: "tool";
+      name: string;
+      path: string;
+      state: "pending" | "ran" | "denied";
+      result?: string;
+    };
 
 /**
  * Leave this much of the context for the answer.
@@ -89,6 +98,9 @@ function App() {
   const [draft, setDraft] = useState("");
   const [staged, setStaged] = useState<Attachment[]>([]);
   const [dragging, setDragging] = useState(false);
+  // Off by default. A tool is code the model chose to run, so turning it on is
+  // a decision rather than the state you happen to find the app in.
+  const [toolsOn, setToolsOn] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -112,6 +124,8 @@ function App() {
   // Follow the bottom while streaming, but stop the moment the reader scrolls up
   // to re-read something, and resume on the next answer.
   const pinned = useRef(true);
+  /** Resolved by the Allow/Deny buttons; the tool loop awaits it. */
+  const pendingDecision = useRef<((ok: boolean) => void) | null>(null);
 
   const refreshModels = useCallback(() => {
     setLoadingModels(true);
@@ -267,6 +281,77 @@ function App() {
     [],
   );
 
+  /**
+   * The tool loop: ask, show what was requested, wait, run, continue.
+   *
+   * Deliberately **not** streamed. A tool call arrives whole or not at all —
+   * you cannot act on half of one — and the loop needs the complete `tool_calls`
+   * array before it can do anything. The conversational turns still stream.
+   */
+  const askWithTools = useCallback(
+    async (history: { role: string; content: string }[]) => {
+      let convo = [...history];
+
+      // A bound, not a timeout. Without one, a model that keeps asking for the
+      // same file loops forever and the only symptom is the app getting warm.
+      for (let step = 0; step < 4; step++) {
+        const out = await invoke<
+          | { kind: "answer"; content: string; promptEvalCount: number; evalCount: number }
+          | { kind: "call"; call: { name: string; path: string } }
+        >("ask_with_tools", { messages: convo, model });
+
+        if (out.kind === "answer") {
+          setEntries((prev) => [
+            ...prev,
+            { kind: "turn", role: "assistant", content: out.content },
+          ]);
+          setSpent(out.promptEvalCount);
+          setStats(`${out.promptEvalCount} in · ${out.evalCount} out · tool turn`);
+          return;
+        }
+
+        // Show the exact path and stop. This is the whole point of the chunk:
+        // nothing is read until it is approved, and what is approved is what
+        // was shown.
+        const { name, path } = out.call;
+        setEntries((prev) => [...prev, { kind: "tool", name, path, state: "pending" }]);
+
+        const approved = await new Promise<boolean>((resolve) => {
+          pendingDecision.current = resolve;
+        });
+        pendingDecision.current = null;
+
+        if (!approved) {
+          setEntries((prev) =>
+            prev.map((e, i) =>
+              i === prev.length - 1 && e.kind === "tool" ? { ...e, state: "denied" } : e,
+            ),
+          );
+          // The model is told, rather than left waiting on a call that silently
+          // never happened.
+          convo = [
+            ...convo,
+            { role: "tool", content: `The user declined to let you read ${path}.` },
+          ];
+          continue;
+        }
+
+        const result = await invoke<string>("run_tool", { name, path });
+        setEntries((prev) =>
+          prev.map((e, i) =>
+            i === prev.length - 1 && e.kind === "tool"
+              ? { ...e, state: "ran", result }
+              : e,
+          ),
+        );
+        convo = [...convo, { role: "tool", content: result }];
+      }
+
+      setError("the model kept asking for tools; stopped after 4 rounds");
+    },
+    [model],
+  );
+
   const send = useCallback(async () => {
     const text = draft.trim();
     if (!text || streaming) return;
@@ -301,7 +386,28 @@ function App() {
     const trimmed = fit(withUser, limit);
     // The assistant turn is appended empty and filled by the stream, so the
     // answer appears token by token in place rather than arriving whole.
-    setEntries([...trimmed, { kind: "turn", role: "assistant", content: "" }]);
+    setEntries(toolsOn ? trimmed : [...trimmed, { kind: "turn", role: "assistant", content: "" }]);
+
+    if (toolsOn) {
+      // The tool path is its own turn: not streamed, because a call arrives
+      // whole and half of one cannot be acted on.
+      try {
+        const history = trimmed
+          .filter((e): e is Extract<Entry, { kind: "turn" }> => e.kind === "turn")
+          .map((t) => ({ role: t.role, content: t.content }));
+        await askWithTools(history);
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setStreaming(false);
+        composerRef.current?.focus();
+        setEntries((final) => {
+          void persist(final, convoId, model);
+          return final;
+        });
+      }
+      return;
+    }
 
     const onEvent = new Channel<StreamEvent>();
     onEvent.onmessage = (message) => {
@@ -364,7 +470,7 @@ function App() {
         return final;
       });
     }
-  }, [draft, streaming, entries, model, card, fit, staged, persist, convoId]);
+  }, [draft, streaming, entries, model, card, fit, staged, persist, convoId, toolsOn, askWithTools]);
 
   const take = useCallback(async (files: FileList | File[]) => {
     const { attachments, rejected } = await readFiles(files);
@@ -401,6 +507,13 @@ function App() {
           title="Saved conversations"
         >
           History
+        </button>
+        <button
+          className={toolsOn ? "" : "ghost"}
+          onClick={() => setToolsOn((v) => !v)}
+          title="Let the model ask to read files. Every read is approved individually."
+        >
+          Tools {toolsOn ? "on" : "off"}
         </button>
       </header>
 
@@ -439,7 +552,38 @@ function App() {
           </p>
         )}
         {entries.map((entry, i) =>
-          entry.kind === "dropped" ? (
+          entry.kind === "tool" ? (
+            <div key={"t" + i} className={"toolcall " + entry.state}>
+              <div className="tc-head">
+                <strong>{entry.name}</strong>
+                <code className="tc-path">{entry.path}</code>
+              </div>
+              {entry.state === "pending" && (
+                <div className="tc-ask">
+                  <span>The model wants to read this file. Nothing has been read yet.</span>
+                  <span className="tc-buttons">
+                    <button onClick={() => pendingDecision.current?.(true)}>Allow once</button>
+                    <button className="ghost" onClick={() => pendingDecision.current?.(false)}>
+                      Deny
+                    </button>
+                  </span>
+                </div>
+              )}
+              {entry.state === "denied" && (
+                <div className="tc-note">Denied. The model was told.</div>
+              )}
+              {entry.state === "ran" && (
+                <details className="tc-note">
+                  <summary>
+                    {entry.result?.startsWith("error:")
+                      ? "The read failed — expand for why"
+                      : "Read " + (entry.result?.length ?? 0) + " characters"}
+                  </summary>
+                  <pre className="tc-result">{entry.result?.slice(0, 4000)}</pre>
+                </details>
+              )}
+            </div>
+          ) : entry.kind === "dropped" ? (
             <p key={`d${i}`} className="dropped">
               ⋯ {entry.count} earlier {entry.count === 1 ? "turn" : "turns"} dropped to make room
             </p>

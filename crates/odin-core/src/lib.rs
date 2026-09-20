@@ -14,6 +14,8 @@
 //! - [`store`] — conversations on disk. A file format, kept deliberately
 //!   separate from `chat`'s wire format so a change to one is not silently a
 //!   migration of the other
+//! - [`tools`] — the one local tool the model may ask for, and the rule that
+//!   nothing runs without an explicit per-call approval
 //!
 //! Nothing here prints or panics. Callers format, and a tray has no stdout.
 
@@ -21,4 +23,5 @@ pub mod chat;
 pub mod config;
 pub mod ollama;
 pub mod store;
+pub mod tools;
 pub mod vram;
