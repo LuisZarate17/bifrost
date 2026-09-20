@@ -5,7 +5,7 @@ import { Switchboard, type ModelInfo } from "./Switchboard";
 import { Conversations, type Summary } from "./Conversations";
 import {
   readFiles, storeImages, loadImages, foldText, attachmentTokens, humanBytes,
-  type Attachment,
+  IMAGE_TOKENS, type Attachment,
 } from "./attach";
 // The renderer's styles. @odin/ui does not import them itself, so that
 // `npm run check:inert` can SSR-build Answer and run it under plain node.
@@ -54,7 +54,7 @@ type Conversation = {
   messages: StoredMessage[];
 };
 
-/** A turn, or a marker where turns were removed. */
+/** One thing in the thread: a turn, or a tool the model asked to run. */
 type Entry =
   | {
       kind: "turn";
@@ -62,8 +62,10 @@ type Entry =
       content: string;
       /** Stored attachment names, not bytes. Loaded on demand. */
       images?: string[];
+      /** Which model produced this turn. Set when the answer completes, so a
+       *  thread spanning a model switch keeps its per-turn provenance. */
+      model?: string;
     }
-  | { kind: "dropped"; count: number }
   /** A tool the model asked for, and what happened. Shown in the thread so the
    *  record of what ran is where the conversation is, not in a log. */
   | {
@@ -115,6 +117,9 @@ function App() {
   // The file this thread belongs to. Null until the first exchange is saved -
   // an empty conversation is not worth a file.
   const [convoId, setConvoId] = useState<string | null>(null);
+  // How many turns the last request left out. Display only - the thread and the
+  // file still hold everything.
+  const [dropped, setDropped] = useState(0);
   const [loadingModels, setLoadingModels] = useState(false);
   /** Ollama's own count from the last reply — the honest number. */
   const [spent, setSpent] = useState(0);
@@ -126,6 +131,13 @@ function App() {
   const pinned = useRef(true);
   /** Resolved by the Allow/Deny buttons; the tool loop awaits it. */
   const pendingDecision = useRef<((ok: boolean) => void) | null>(null);
+  /** The live thread, for saving after a turn completes.
+   *
+   *  persist() used to be called from inside a setEntries updater to read the
+   *  final list. Updaters must be pure - React invokes them twice in
+   *  development, which saved the conversation twice and created two files on
+   *  the first save. A ref gives the same value without the side effect. */
+  const entriesRef = useRef<Entry[]>([]);
 
   const refreshModels = useCallback(() => {
     setLoadingModels(true);
@@ -159,19 +171,39 @@ function App() {
    * a whole-file rewrite, and rewriting it once per token would be both wasteful
    * and a way to persist half an answer.
    *
-   * Only the turns are stored. A dropped-marker is a note to the reader about
-   * what this session sent, not part of the conversation.
+   * **The whole thread is stored, including what a request left out.** Trimming
+   * decides what one request can afford; it is not a decision about what
+   * happened. Tool exchanges are stored too, so reopening shows what was read
+   * rather than an answer with no visible source.
    */
   const persist = useCallback(
-    async (all: Entry[], id: string | null, usedModel: string | null) => {
-      const messages: StoredMessage[] = all
-        .filter((e): e is Extract<Entry, { kind: "turn" }> => e.kind === "turn")
-        .map((t) => ({
-          role: t.role,
-          content: t.content,
-          ...(t.images?.length ? { images: t.images } : {}),
-          ...(t.role === "assistant" && usedModel ? { model: usedModel } : {}),
-        }));
+    async (all: Entry[], id: string | null) => {
+      const messages: StoredMessage[] = all.flatMap((e): StoredMessage[] => {
+        if (e.kind === "tool") {
+          // Only a call that actually ran is worth recording; a denial is a
+          // decision about this session, not part of the conversation.
+          if (e.state !== "ran") return [];
+          return [
+            {
+              role: "tool",
+              content: e.result ?? "",
+              tool_calls: [{ function: { name: e.name, arguments: { path: e.path } } }],
+            },
+          ];
+        }
+        if (e.kind !== "turn") return [];
+        return [
+          {
+            role: e.role,
+            content: e.content,
+            ...(e.images?.length ? { images: e.images } : {}),
+            // The model this turn was answered by, not whichever is selected
+            // now. Stamping the current one over every historical turn destroys
+            // exactly the provenance the field exists for.
+            ...(e.model ? { model: e.model } : {}),
+          },
+        ];
+      });
       if (messages.length === 0) return;
 
       try {
@@ -199,13 +231,29 @@ function App() {
       try {
         const c = await invoke<Conversation>("open_conversation", { id });
         setEntries(
-          c.messages.map((m) => ({
-            kind: "turn" as const,
-            role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
-            content: m.content,
-            images: m.images ?? [],
-          })),
+          c.messages.map((m): Entry => {
+            if (m.role === "tool") {
+              const call = (m.tool_calls?.[0] ?? {}) as {
+                function?: { name?: string; arguments?: { path?: string } };
+              };
+              return {
+                kind: "tool",
+                name: call.function?.name ?? "read_file",
+                path: call.function?.arguments?.path ?? "",
+                state: "ran",
+                result: m.content,
+              };
+            }
+            return {
+              kind: "turn",
+              role: m.role === "assistant" ? "assistant" : "user",
+              content: m.content,
+              images: m.images ?? [],
+              ...(m.model ? { model: m.model } : {}),
+            };
+          }),
         );
+        setDropped(0);
         setConvoId(c.id);
         setSpent(0);
         setStats("");
@@ -221,6 +269,7 @@ function App() {
   const newConvo = useCallback(() => {
     setEntries([]);
     setConvoId(null);
+    setDropped(0);
     setSpent(0);
     setStats("");
     setError("");
@@ -234,6 +283,10 @@ function App() {
     }, 4000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    entriesRef.current = entries;
+  }, [entries]);
 
   useEffect(() => {
     if (pinned.current && threadRef.current) {
@@ -256,27 +309,79 @@ function App() {
    * — but the principle that carries is **degrade visibly, never silently**. An
    * unannounced drop is exactly what "it got strange after a while" looks like.
    */
-  const fit = useCallback(
-    (all: Entry[], limit: number): Entry[] => {
-      const turns = all.filter((e): e is Extract<Entry, { kind: "turn" }> => e.kind === "turn");
-      const alreadyDropped = all
-        .filter((e): e is Extract<Entry, { kind: "dropped" }> => e.kind === "dropped")
-        .reduce((n, e) => n + e.count, 0);
+  /** What one entry costs the context, images included. */
+  const costOf = useCallback((e: Entry): number => {
+    if (e.kind === "tool") return estimate(e.result ?? "");
+    // An image is ~2,042 tokens whatever it shows. Counting only the words meant
+    // an image-heavy thread never trimmed at all, and Ollama silently truncated
+    // the prompt instead — which looks exactly like the model losing the plot.
+    return estimate(e.content) + (e.images?.length ?? 0) * IMAGE_TOKENS;
+  }, []);
 
+  /**
+   * Decide how much of the thread to send. **Does not change the thread.**
+   *
+   * This used to return a trimmed list which then became `entries` — so the
+   * turns it dropped were also dropped from what got saved, permanently
+   * deleting history from disk and orphaning its attachment files. Trimming is
+   * about what one request can afford, not about what happened.
+   *
+   * Returns the index to send from, and how many turns that leaves out.
+   */
+  const planSend = useCallback(
+    (all: Entry[], limit: number): { from: number; dropped: number } => {
       const cap = Math.floor(limit * BUDGET);
-      let cost = turns.reduce((n, t) => n + estimate(t.content), 0);
-      let cut = 0;
+      let cost = 0;
+      let from = all.length;
 
-      // Always keep the newest exchange: trimming the question being asked right
-      // now would be worse than answering with less history.
-      while (cost > cap && turns.length - cut > 2) {
-        cost -= estimate(turns[cut].content);
-        cut += 1;
+      // Backwards from the newest, keeping what fits. The last exchange always
+      // goes, even alone — answering with less history beats not answering.
+      for (let i = all.length - 1; i >= 0; i--) {
+        const c = costOf(all[i]);
+        if (cost + c > cap && all.length - i > 2) break;
+        cost += c;
+        from = i;
       }
-      if (cut === 0) return all;
 
-      const kept: Entry[] = turns.slice(cut);
-      return [{ kind: "dropped", count: alreadyDropped + cut }, ...kept];
+      const dropped = all.slice(0, from).filter((e) => e.kind === "turn").length;
+      return { from, dropped };
+    },
+    [costOf],
+  );
+
+  /**
+   * Turn thread entries into what Ollama wants.
+   *
+   * Shared by both paths on purpose. The tools branch used to build its own
+   * `{role, content}` list and silently dropped every image — so turning tools
+   * on quietly made the model blind, which nothing would have reported.
+   *
+   * Images are re-read from disk each send, so a reopened conversation carries
+   * its pictures rather than only its words.
+   */
+  const toWire = useCallback(
+    async (slice: Entry[]): Promise<Array<Record<string, unknown>>> => {
+      const out: Array<Record<string, unknown>> = [];
+      for (const e of slice) {
+        if (e.kind === "tool") {
+          if (e.state !== "ran") continue;
+          out.push({
+            role: "assistant",
+            content: "",
+            tool_calls: [{ function: { name: e.name, arguments: { path: e.path } } }],
+          });
+          out.push({ role: "tool", content: e.result ?? "", tool_name: e.name });
+          continue;
+        }
+        if (e.kind !== "turn") continue;
+        const b64 = e.images?.length ? await loadImages(e.images) : [];
+        out.push({
+          role: e.role,
+          content: e.content,
+          ...(b64.length ? { images: b64 } : {}),
+        });
+      }
+      return out;
     },
     [],
   );
@@ -289,7 +394,7 @@ function App() {
    * array before it can do anything. The conversational turns still stream.
    */
   const askWithTools = useCallback(
-    async (history: { role: string; content: string }[]) => {
+    async (history: Array<Record<string, unknown>>) => {
       let convo = [...history];
 
       // A bound, not a timeout. Without one, a model that keeps asking for the
@@ -297,14 +402,27 @@ function App() {
       for (let step = 0; step < 4; step++) {
         const out = await invoke<
           | { kind: "answer"; content: string; promptEvalCount: number; evalCount: number }
-          | { kind: "call"; call: { name: string; path: string } }
+          | {
+              kind: "call";
+              call: { name: string; path: string };
+              rawCall: Record<string, unknown>;
+            }
         >("ask_with_tools", { messages: convo, model });
 
         if (out.kind === "answer") {
-          setEntries((prev) => [
-            ...prev,
-            { kind: "turn", role: "assistant", content: out.content },
-          ]);
+          setEntries((prev) => {
+            const next: Entry[] = [
+              ...prev,
+              {
+                kind: "turn",
+                role: "assistant",
+                content: out.content,
+                ...(model ? { model } : {}),
+              },
+            ];
+            entriesRef.current = next;
+            return next;
+          });
           setSpent(out.promptEvalCount);
           setStats(`${out.promptEvalCount} in · ${out.evalCount} out · tool turn`);
           return;
@@ -314,7 +432,11 @@ function App() {
         // nothing is read until it is approved, and what is approved is what
         // was shown.
         const { name, path } = out.call;
-        setEntries((prev) => [...prev, { kind: "tool", name, path, state: "pending" }]);
+        setEntries((prev) => {
+          const next: Entry[] = [...prev, { kind: "tool", name, path, state: "pending" }];
+          entriesRef.current = next;
+          return next;
+        });
 
         const approved = await new Promise<boolean>((resolve) => {
           pendingDecision.current = resolve;
@@ -329,22 +451,39 @@ function App() {
           );
           // The model is told, rather than left waiting on a call that silently
           // never happened.
+          // The assistant turn that asked has to go back too, or the refusal
+          // answers a question the model cannot see itself having asked.
           convo = [
             ...convo,
-            { role: "tool", content: `The user declined to let you read ${path}.` },
+            out.rawCall
+              ? { role: "assistant", content: "", tool_calls: [out.rawCall] }
+              : { role: "assistant", content: "" },
+            { role: "tool", content: `The user declined to let you read ${path}.`, tool_name: name },
           ];
           continue;
         }
 
         const result = await invoke<string>("run_tool", { name, path });
-        setEntries((prev) =>
-          prev.map((e, i) =>
-            i === prev.length - 1 && e.kind === "tool"
-              ? { ...e, state: "ran", result }
-              : e,
-          ),
-        );
-        convo = [...convo, { role: "tool", content: result }];
+        setEntries((prev) => {
+          const next = prev.map((e, i) =>
+            i === prev.length - 1 && e.kind === "tool" ? { ...e, state: "ran" as const, result } : e,
+          );
+          entriesRef.current = next;
+          return next;
+        });
+
+        // assistant(tool_calls) then tool(result) - the pair Ollama expects.
+        // Sending only the result left the model looking at an answer to a
+        // question it could not see itself having asked, so it asked again
+        // until the round bound tripped. The G6 probe did this correctly; the
+        // app did not, which is exactly the gap a probe can hide.
+        convo = [
+          ...convo,
+          out.rawCall
+            ? { role: "assistant", content: "", tool_calls: [out.rawCall] }
+            : { role: "assistant", content: "" },
+          { role: "tool", content: result, tool_name: name },
+        ];
       }
 
       setError("the model kept asking for tools; stopped after 4 rounds");
@@ -354,7 +493,10 @@ function App() {
 
   const send = useCallback(async () => {
     const text = draft.trim();
-    if (!text || streaming) return;
+    // Attachments alone are a valid message - "what is this?" with a screenshot
+    // is the common case. The Send button already allowed it while this bailed,
+    // so the button simply did nothing.
+    if ((!text && staged.length === 0) || streaming) return;
 
     setError("");
     setStats("");
@@ -383,28 +525,30 @@ function App() {
       ...entries,
       { kind: "turn", role: "user", content, images: names },
     ];
-    const trimmed = fit(withUser, limit);
+    // What this request can afford. The thread itself keeps everything.
+    const { from, dropped: leftOut } = planSend(withUser, limit);
+    setDropped(leftOut);
+    const sendable = withUser.slice(from);
+
     // The assistant turn is appended empty and filled by the stream, so the
     // answer appears token by token in place rather than arriving whole.
-    setEntries(toolsOn ? trimmed : [...trimmed, { kind: "turn", role: "assistant", content: "" }]);
+    const next: Entry[] = toolsOn
+      ? withUser
+      : [...withUser, { kind: "turn", role: "assistant", content: "" }];
+    setEntries(next);
+    entriesRef.current = next;
 
     if (toolsOn) {
       // The tool path is its own turn: not streamed, because a call arrives
       // whole and half of one cannot be acted on.
       try {
-        const history = trimmed
-          .filter((e): e is Extract<Entry, { kind: "turn" }> => e.kind === "turn")
-          .map((t) => ({ role: t.role, content: t.content }));
-        await askWithTools(history);
+        await askWithTools(await toWire(sendable));
       } catch (e) {
         setError(String(e));
       } finally {
         setStreaming(false);
         composerRef.current?.focus();
-        setEntries((final) => {
-          void persist(final, convoId, model);
-          return final;
-        });
+        await persist(entriesRef.current, convoId);
       }
       return;
     }
@@ -441,21 +585,7 @@ function App() {
 
     try {
       // Only the turns go to the model; a dropped-marker is a note to the reader.
-      const turns = trimmed.filter(
-        (e): e is Extract<Entry, { kind: "turn" }> => e.kind === "turn",
-      );
-      const messages = await Promise.all(
-        turns.map(async (t) => {
-          // Images are re-read from disk each send, so a reopened conversation
-          // carries its pictures rather than only its words.
-          const b64 = t.images?.length ? await loadImages(t.images) : [];
-          return {
-            role: t.role,
-            content: t.content,
-            ...(b64.length ? { images: b64 } : {}),
-          };
-        }),
-      );
+      const messages = await toWire(sendable);
       await invoke("send", { messages, model, onEvent });
     } catch (e) {
       setError(String(e));
@@ -463,14 +593,21 @@ function App() {
     } finally {
       setStreaming(false);
       composerRef.current?.focus();
-      // Read the thread as it ended up, including the streamed answer, rather
-      // than the copy this closure captured before the stream ran.
-      setEntries((final) => {
-        void persist(final, convoId, model);
-        return final;
+      // Stamp the model onto the turn it actually answered, then save the whole
+      // thread from the ref - reading it inside a state updater would run the
+      // save twice in development.
+      setEntries((prev) => {
+        const out = [...prev];
+        const last = out[out.length - 1];
+        if (last?.kind === "turn" && last.role === "assistant" && model) {
+          out[out.length - 1] = { ...last, model };
+        }
+        entriesRef.current = out;
+        return out;
       });
+      await persist(entriesRef.current, convoId);
     }
-  }, [draft, streaming, entries, model, card, fit, staged, persist, convoId, toolsOn, askWithTools]);
+  }, [draft, streaming, entries, model, card, planSend, staged, persist, convoId, toolsOn, askWithTools, toWire]);
 
   const take = useCallback(async (files: FileList | File[]) => {
     const { attachments, rejected } = await readFiles(files);
@@ -546,6 +683,13 @@ function App() {
       )}
 
       <div className="thread" ref={threadRef} onScroll={onScroll}>
+        {dropped > 0 && (
+          <p className="dropped">
+            ⋯ the last request left out {dropped} earlier{" "}
+            {dropped === 1 ? "turn" : "turns"} to fit the context — they are still
+            saved
+          </p>
+        )}
         {entries.length === 0 && (
           <p className="idle">
             Ask anything. Every token stays on this machine.
@@ -583,10 +727,6 @@ function App() {
                 </details>
               )}
             </div>
-          ) : entry.kind === "dropped" ? (
-            <p key={`d${i}`} className="dropped">
-              ⋯ {entry.count} earlier {entry.count === 1 ? "turn" : "turns"} dropped to make room
-            </p>
           ) : entry.role === "user" ? (
             <div key={i} className="turn user">
               {entry.images && entry.images.length > 0 && (

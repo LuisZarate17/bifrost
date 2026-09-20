@@ -156,7 +156,12 @@ impl Default for Conversation {
 
 /// A row in the conversation list — enough to render it without reading every
 /// message of every file.
+///
+/// `camelCase` on the wire because a frontend reads it. Missing this is silent:
+/// serde emits `updated_at`, the TypeScript asks for `updatedAt`, and the row
+/// renders a blank date and "undefined messages" with nothing logged anywhere.
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Summary {
     pub id: String,
     pub title: String,

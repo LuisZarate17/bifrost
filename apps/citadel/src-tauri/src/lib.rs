@@ -311,6 +311,24 @@ async fn save_conversation(conversation: store::Conversation) -> Result<store::C
         if c.id.is_empty() {
             c = store::Conversation { id: store::Conversation::new().id, ..c };
         }
+
+        // **Merge, never overwrite blindly.** The caller sends the messages it
+        // has; the title and creation time belong to the file. Writing the
+        // caller's empty strings straight through meant every new message
+        // silently erased a conversation the user had renamed — and reset the
+        // date the list sorts by.
+        if let Ok(existing) = store::load(&c.id) {
+            if c.title.trim().is_empty() {
+                c.title = existing.title;
+            }
+            if c.created_at.is_empty() {
+                c.created_at = existing.created_at;
+            }
+        }
+        if c.created_at.is_empty() {
+            c.created_at = store::stamp();
+        }
+
         c.updated_at = store::stamp();
         store::save(&c)?;
         Ok(c)
@@ -385,6 +403,16 @@ async fn ask_with_tools(
         return Ok(serde_json::json!({
             "kind": "call",
             "call": PendingCall { name: requested.name, path: requested.path },
+            // The raw call, so the caller can put the assistant turn that asked
+            // for it back into the conversation before the tool result.
+            //
+            // **Without it the loop does not close.** Ollama expects
+            // assistant(tool_calls) → tool(result); a tool message with no call
+            // in front of it is an answer to a question the model never sees
+            // itself having asked, so it simply asks again. The G6 probe did
+            // this correctly and the app did not, which is exactly the gap a
+            // probe can hide.
+            "rawCall": call,
         }));
     }
 
