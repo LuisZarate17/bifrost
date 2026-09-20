@@ -4,8 +4,25 @@ import { png } from "./gen.mjs";
 import { shield, render, DESIGNS } from "./art.mjs";
 import { ico } from "./ico.mjs";
 
+//   node tools/icon/install.mjs <out-dir> [design]
+//
+// The design defaults to Warden's. Citadel passes `phantom` — the same shield,
+// a different palette. PLAN.md decision #5 wants a variant from the same family
+// rather than the same image: two identical icons on the Desktop is worse than
+// no icon at all, and two *unrelated* ones stop reading as one project.
 const out = process.argv[2];
-const grid = shield(DESIGNS.sentinel);
+const design = process.argv[3] ?? "sentinel";
+
+if (!out) {
+  console.error("usage: node tools/icon/install.mjs <out-dir> [design]");
+  process.exit(2);
+}
+if (!DESIGNS[design]) {
+  console.error(`unknown design: ${design}\navailable: ${Object.keys(DESIGNS).join(", ")}`);
+  process.exit(2);
+}
+
+const grid = shield(DESIGNS[design]);
 const at = (s) => ({ size: s, rgba: render(grid, s), png: png(s, s, render(grid, s)) });
 
 // The set tauri.conf.json names, plus the Store logos already in the folder.
@@ -21,4 +38,4 @@ for (const [name, size] of Object.entries(files)) {
 }
 
 fs.writeFileSync(path.join(out, "icon.ico"), ico([16, 24, 32, 48, 64, 128, 256].map(at)));
-console.log("wrote", Object.keys(files).length + 1, "files into", out);
+console.log(`wrote ${Object.keys(files).length + 1} ${design} icons into ${out}`);

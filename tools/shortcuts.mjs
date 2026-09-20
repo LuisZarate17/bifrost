@@ -23,12 +23,27 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Every app that gets a shortcut. Citadel joins this list at G1. */
+/**
+ * Every app that gets a shortcut.
+ *
+ * **Launching one must never launch the other** (PLAN.md decision #5). They are
+ * two processes that happen to share a model, and either alone is fully usable —
+ * so they get two shortcuts rather than one launcher with a menu.
+ *
+ * Their icons come from the same shield in `tools/icon/`, in different palettes:
+ * Warden is `sentinel`, Citadel is `phantom`. Same family, different mark, which
+ * is the point — two identical icons on the Desktop is worse than no icon at all.
+ */
 const APPS = [
   {
     name: "Warden",
     exe: path.join(repoRoot, "target", "debug", "warden.exe"),
     description: "Press a hotkey, get an answer about whatever is on screen.",
+  },
+  {
+    name: "Citadel",
+    exe: path.join(repoRoot, "target", "debug", "citadel.exe"),
+    description: "A local chat app. Every token stays on this machine.",
   },
 ];
 
