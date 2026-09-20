@@ -441,8 +441,54 @@ async fn get_attachment(name: String) -> Result<String, String> {
     .map_err(|e| format!("reading the attachment failed: {e}"))?
 }
 
+/// Send `println!` and `eprintln!` to a file, since there is no console.
+///
+/// `main.rs` sets `windows_subsystem = "windows"`, so this process has no stdout
+/// to write to — without this, everything printed vanishes. Warden's `lib.rs`
+/// has the twin of this function writing `warden.log`, for the same reason.
+///
+/// **Two copies of twenty lines, deliberately.** It is app-level plumbing: each
+/// app picks its own filename and its own answer to whether it is windowless at
+/// all. `odin-core`'s stated rule is that nothing in it prints, and giving it a
+/// Win32 console dependency to serve something only apps need would cost more
+/// than the duplication. **If a third app wants this, that is the signal to
+/// extract it.**
+#[cfg(windows)]
+fn redirect_log_to_file() -> Option<std::path::PathBuf> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
+
+    let path = std::env::temp_dir().join("citadel.log");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()?;
+
+    let handle = HANDLE(file.as_raw_handle());
+    // SAFETY: a valid handle to a file this process just opened.
+    unsafe {
+        let _ = SetStdHandle(STD_OUTPUT_HANDLE, handle);
+        let _ = SetStdHandle(STD_ERROR_HANDLE, handle);
+    }
+    // Deliberately leaked: the handles outlive this scope and are used for the
+    // life of the process.
+    std::mem::forget(file);
+    Some(path)
+}
+
+#[cfg(not(windows))]
+fn redirect_log_to_file() -> Option<std::path::PathBuf> {
+    None
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Some(log) = redirect_log_to_file() {
+        println!("[citadel] log: {}", log.display());
+    }
+
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             send,

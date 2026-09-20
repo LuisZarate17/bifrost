@@ -26,3 +26,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Attachments arrive from the webview already base64-encoded.
 base64 = "0.22"
+
+# Only for suppressing the console and pointing stdout at a file. Deliberately
+# two features, not Warden’s eight - none of the capture, hook or window
+# machinery belongs in an ordinary window.
+[target."cfg(windows)".dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
