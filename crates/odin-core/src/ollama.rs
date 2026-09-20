@@ -323,6 +323,59 @@ pub fn is_running() -> bool {
         .unwrap_or(false)
 }
 
+/// A model on disk, whether or not it is loaded.
+///
+/// Distinct from [`LoadedModel`], which is what `/api/ps` reports about the
+/// runners currently in memory. This is the catalogue; that is the inventory.
+#[derive(Debug, Clone, Deserialize)]
+pub struct InstalledModel {
+    pub name: String,
+    /// Bytes on disk. Not what it costs resident — the same model is 6,233 MiB
+    /// at `num_ctx` 8192 and 9,737 MiB at 32768 (measured 2026-09-19).
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub details: ModelDetails,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ModelDetails {
+    #[serde(default)]
+    pub family: String,
+    #[serde(default)]
+    pub parameter_size: String,
+    #[serde(default)]
+    pub quantization_level: String,
+}
+
+/// Every model installed, newest-sorted by Ollama itself.
+///
+/// `/api/tags` was already being pinged as a liveness check in [`is_running`];
+/// this actually reads what it returns. **It reports nothing about capability** —
+/// whether a model can see images or call tools comes from `/api/show`, which is
+/// a separate round trip per model and belongs to the labelled picker at G2.
+pub fn tags() -> Result<Vec<InstalledModel>, String> {
+    #[derive(Deserialize)]
+    struct Tags {
+        #[serde(default)]
+        models: Vec<InstalledModel>,
+    }
+
+    let response = client(SHORT_TIMEOUT)?
+        .get(url("/api/tags"))
+        .send()
+        .map_err(unreachable)?;
+
+    if !response.status().is_success() {
+        return Err(format!("/api/tags returned {}", response.status()));
+    }
+
+    response
+        .json::<Tags>()
+        .map(|t| t.models)
+        .map_err(|e| format!("parsing /api/tags: {e}"))
+}
+
 /// Start Ollama if it is not already up, and wait until it answers.
 ///
 /// Returns how long the start took, or `None` if it was already running.

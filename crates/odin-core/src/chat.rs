@@ -187,6 +187,9 @@ pub struct ChatReply {
     /// usually because `num_ctx` did not match what it was loaded with.
     pub load: Duration,
     pub total: Duration,
+    /// Time to the first fragment. `None` from [`chat`], which waits for the
+    /// whole reply and so has no first token to time.
+    pub ttft: Option<Duration>,
     pub prompt_eval_count: u32,
     pub eval_count: u32,
 }
@@ -269,9 +272,141 @@ pub fn chat(
         message: raw.message,
         load: Duration::from_nanos(raw.load_duration),
         total: Duration::from_nanos(raw.total_duration),
+        // Nothing to time: this waited for the whole reply.
+        ttft: None,
         prompt_eval_count: raw.prompt_eval_count,
         eval_count: raw.eval_count,
     })
+}
+
+/// One thing that arrived while the model was answering.
+pub enum StreamChunk<'a> {
+    /// A fragment of the answer. Not a word or a line — whatever Ollama sent.
+    Token(&'a str),
+    /// The final object, with the metrics that only arrive at the end.
+    Done(&'a ChatReply),
+}
+
+/// Stream a reply, handing each fragment to `on` as it lands.
+///
+/// **Blocking, and deliberately so**, like everything else in this crate — the
+/// caller drives it from a thread of its own, and Tauri callers already go
+/// through `spawn_blocking` as a standing rule. That buys two things: no async
+/// dependencies (this crate carries `reqwest`'s `blocking` feature only), and a
+/// much simpler loop. `reqwest::blocking::Response` implements [`std::io::Read`],
+/// so `BufReader::lines()` does the NDJSON splitting; the async version in
+/// Warden has to keep a remainder buffer because a network chunk can end
+/// mid-line.
+///
+/// Returning `on`'s error stops the stream — that is how a caller cancels, and
+/// how a dead IPC channel stops a request nobody is listening to any more.
+///
+/// The accumulated text is on the returned [`ChatReply`]'s message. **Append it
+/// to the conversation**: the model has to be told what it already said, or the
+/// next turn is a first question again.
+pub fn stream(
+    model: &str,
+    messages: &[Message],
+    tools: &[Tool],
+    options: Options,
+    mut on: impl FnMut(StreamChunk) -> Result<(), String>,
+) -> Result<ChatReply, String> {
+    use std::io::{BufRead, BufReader};
+
+    let mut opts = serde_json::json!({ "num_ctx": options.num_ctx });
+    if let Some(t) = options.temperature {
+        opts["temperature"] = serde_json::json!(t);
+    }
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": true,
+        "options": opts,
+    });
+    if !tools.is_empty() {
+        body["tools"] = serde_json::to_value(tools).map_err(|e| format!("encoding tools: {e}"))?;
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(CHAT_TIMEOUT)
+        .build()
+        .map_err(|e| format!("building client: {e}"))?;
+
+    // Before `send`, not after. A blocking `send` does not return until the
+    // response has started, and a cold model spends seconds loading first — so
+    // timing from after it would report microseconds and mean nothing. This is
+    // what makes the figure comparable to A4's measured 1.19s to first token.
+    let started = std::time::Instant::now();
+
+    let response = client
+        .post(ollama::url("/api/chat"))
+        .json(&body)
+        .send()
+        .map_err(|e| format!("POST /api/chat: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let detail = response.text().unwrap_or_default();
+        return Err(format!("/api/chat returned {status}: {}", detail.trim()));
+    }
+
+    let mut text = String::new();
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
+    let mut ttft: Option<Duration> = None;
+    let mut reply = ChatReply {
+        message: Message::plain("assistant", ""),
+        load: Duration::ZERO,
+        total: Duration::ZERO,
+        ttft: None,
+        prompt_eval_count: 0,
+        eval_count: 0,
+    };
+
+    for line in BufReader::new(response).lines() {
+        let line = line.map_err(|e| format!("reading /api/chat stream: {e}"))?;
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        let v: serde_json::Value =
+            serde_json::from_str(line).map_err(|e| format!("bad JSON from Ollama: {e}"))?;
+
+        // `/api/chat` puts the text under `message.content`; `/api/generate` used
+        // `response`. Reading the wrong one streams nothing, silently.
+        if let Some(fragment) = v["message"]["content"].as_str() {
+            if !fragment.is_empty() {
+                if ttft.is_none() {
+                    ttft = Some(started.elapsed());
+                }
+                text.push_str(fragment);
+                on(StreamChunk::Token(fragment))?;
+            }
+        }
+
+        // Tool calls arrive whole rather than a fragment at a time, but they can
+        // land on any object in the stream, not only the last one.
+        if let Some(calls) = v["message"]["tool_calls"].as_array() {
+            for call in calls {
+                if let Ok(parsed) = serde_json::from_value::<ToolCall>(call.clone()) {
+                    tool_calls.push(parsed);
+                }
+            }
+        }
+
+        if v["done"].as_bool().unwrap_or(false) {
+            reply.load = Duration::from_nanos(v["load_duration"].as_u64().unwrap_or(0));
+            reply.total = Duration::from_nanos(v["total_duration"].as_u64().unwrap_or(0));
+            reply.prompt_eval_count = v["prompt_eval_count"].as_u64().unwrap_or(0) as u32;
+            reply.eval_count = v["eval_count"].as_u64().unwrap_or(0) as u32;
+        }
+    }
+
+    reply.ttft = ttft;
+    reply.message.content = text;
+    reply.message.tool_calls = (!tool_calls.is_empty()).then_some(tool_calls);
+    on(StreamChunk::Done(&reply))?;
+    Ok(reply)
 }
 
 #[cfg(test)]
@@ -305,6 +440,7 @@ mod tests {
             message: Message::user("hi"),
             load: Duration::ZERO,
             total: Duration::ZERO,
+            ttft: None,
             prompt_eval_count: 0,
             eval_count: 0,
         };
