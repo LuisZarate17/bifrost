@@ -627,6 +627,7 @@ dependencies = [
 name = "citadel"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "odin-core",
  "serde",
  "serde_json",

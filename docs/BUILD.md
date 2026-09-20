@@ -30,7 +30,8 @@ Chunk-by-chunk detail is in [`../stages/STAGE-G.md`](../stages/STAGE-G.md); this
 | **G2** | ✅ | The switchboard — capability-labelled picker, load/unload, choice written to the shared config |
 | **G3** | ✅ | Warden reads the config on every summon and refuses cleanly when the model has no `vision` |
 | **G4** | ✅ | Persistence — one JSON file per conversation; list, rename, delete |
-| **G5** | ☐ | **Next** — attachments: images into a message |
+| **G5** | ✅ | Attachments — images as base64 on the message, bytes in their own files; text files folded in |
+| **G6** | ☐ | **Next** — the tool loop G0 cleared |
 
 **What the groundwork actually found**, none of which a build would have caught:
 

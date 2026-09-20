@@ -241,10 +241,83 @@ pub fn save(conversation: &Conversation) -> Result<(), String> {
 
 pub fn delete(id: &str) -> Result<bool, String> {
     let p = path_for(id).ok_or_else(|| format!("bad conversation id: {id}"))?;
+    // Take the attachments with it, or they accumulate forever with nothing
+    // left pointing at them.
+    if let Ok(c) = load(id) {
+        drop_attachments_of(&c);
+    }
     match std::fs::remove_file(&p) {
         Ok(()) => Ok(true),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(format!("deleting {}: {e}", p.display())),
+    }
+}
+
+// ── attachments ─────────────────────────────────────────────────────────────
+//
+// Bytes live in their own files and conversations reference them by name. A
+// 1080p screenshot is ~790 KB once base64-encoded; inlining that would turn a
+// 20 KB conversation into a multi-megabyte file rewritten on every turn.
+
+/// `%APPDATA%\odin\attachments\`.
+pub fn attachments_dir() -> Option<PathBuf> {
+    let appdata = std::env::var_os("APPDATA")?;
+    Some(PathBuf::from(appdata).join("odin").join("attachments"))
+}
+
+fn attachment_path(name: &str) -> Option<PathBuf> {
+    // Same reasoning as `path_for`: names are generated here, so a separator
+    // should be impossible — which is why it is worth refusing rather than
+    // trusting. Exactly one dot, for the extension.
+    if name.is_empty()
+        || name.contains(['/', '\\', ':'])
+        || name.starts_with('.')
+        || name.matches('.').count() != 1
+    {
+        return None;
+    }
+    Some(attachments_dir()?.join(name))
+}
+
+/// Store raw bytes and return the name a conversation should reference.
+///
+/// `ext` is taken from the file that was dropped and sanitised to alphanumerics
+/// — it only ever decides the stored name, never how the bytes are read.
+pub fn put_attachment(bytes: &[u8], ext: &str) -> Result<String, String> {
+    let ext: String = ext
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect::<String>()
+        .to_lowercase();
+    let ext = if ext.is_empty() { "bin".to_string() } else { ext };
+
+    let name = format!("{}.{ext}", new_id());
+    let p = attachment_path(&name).ok_or_else(|| format!("bad attachment name: {name}"))?;
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(|e| format!("creating {}: {e}", d.display()))?;
+    }
+    std::fs::write(&p, bytes).map_err(|e| format!("writing {}: {e}", p.display()))?;
+    Ok(name)
+}
+
+pub fn get_attachment(name: &str) -> Result<Vec<u8>, String> {
+    let p = attachment_path(name).ok_or_else(|| format!("bad attachment name: {name}"))?;
+    std::fs::read(&p).map_err(|e| format!("reading {}: {e}", p.display()))
+}
+
+/// Delete the files a conversation referenced.
+///
+/// **Best effort, and deliberately so.** An attachment that will not delete
+/// should not stop the conversation being deleted — the alternative is a
+/// conversation you cannot remove because of a file you no longer care about.
+pub fn drop_attachments_of(conversation: &Conversation) {
+    for m in &conversation.messages {
+        for name in &m.images {
+            if let Some(p) = attachment_path(name) {
+                let _ = std::fs::remove_file(p);
+            }
+        }
     }
 }
 
@@ -362,6 +435,16 @@ mod tests {
         assert!(path_for("a/b").is_none());
         assert!(path_for("").is_none());
         assert!(path_for("1a2b3c").is_some());
+    }
+
+    #[test]
+    fn attachment_names_with_separators_are_refused() {
+        assert!(attachment_path("../config.json").is_none());
+        assert!(attachment_path("a/b.png").is_none());
+        assert!(attachment_path(".hidden").is_none());
+        assert!(attachment_path("no-extension").is_none());
+        assert!(attachment_path("two.dots.png").is_none());
+        assert!(attachment_path("18d6eaeb.png").is_some());
     }
 
     #[test]

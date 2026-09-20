@@ -18,6 +18,29 @@ working copy change together rather than drifting apart mid-restructure.
 - [ ] **`gh repo rename odin`**, then update `origin`. GitHub redirects the old URL, so a stale
       clone keeps working.
 
+## Open — G5, attachments, 2026-09-19
+
+Images ride as base64 on the message; the bytes live in `%APPDATA%\odin\attachments\` and the
+conversation records the filename. Text files are folded into the question as a labelled code
+fence instead, so a model with no `vision` can still read them.
+
+**Already proven mechanically.** A 51 KB PNG stored and read back byte-identical, then sent to the
+model, which answered *"Rust compilation error message"* at **2,065 prompt tokens** — about 2,042
+of those being the image, matching A2. Deleting a conversation takes its attachments with it.
+
+- [ ] **Drop a screenshot onto the composer and ask about it.** The composer highlights while you
+      drag. **This is the chunk's done-when.**
+- [ ] **The `+` button** picks files too, for when dragging is awkward.
+- [ ] **The chip shows the cost before you send** — file size and `~2,042 tok`. An image costs
+      roughly that whatever it shows, so two of them plus a little history is most of the budget.
+      Worth seeing early rather than discovering.
+- [ ] **Drop a `.rs` or `.md` file.** It folds into the question as a fenced block rather than
+      riding as an image, so it works on any model.
+- [ ] **Drop something unsupported** — a `.zip`, say. It should be refused **with a reason**, not
+      silently ignored and not read as garbage text.
+- [ ] **Reopen a conversation that had an image.** The turn should still say how many were
+      attached, and a follow-up should re-send them.
+
 ## Open — G4, persistence, 2026-09-19
 
 Conversations are one JSON file each in `%APPDATA%\odin\conversations\`, beside `config.json`. No

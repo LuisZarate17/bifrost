@@ -3,6 +3,10 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { Answer } from "@odin/ui";
 import { Switchboard, type ModelInfo } from "./Switchboard";
 import { Conversations, type Summary } from "./Conversations";
+import {
+  readFiles, storeImages, loadImages, foldText, attachmentTokens, humanBytes,
+  type Attachment,
+} from "./attach";
 // The renderer's styles. @odin/ui does not import them itself, so that
 // `npm run check:inert` can SSR-build Answer and run it under plain node.
 import "@odin/ui/answer.css";
@@ -52,7 +56,13 @@ type Conversation = {
 
 /** A turn, or a marker where turns were removed. */
 type Entry =
-  | { kind: "turn"; role: "user" | "assistant"; content: string }
+  | {
+      kind: "turn";
+      role: "user" | "assistant";
+      content: string;
+      /** Stored attachment names, not bytes. Loaded on demand. */
+      images?: string[];
+    }
   | { kind: "dropped"; count: number };
 
 /**
@@ -77,6 +87,8 @@ const estimate = (text: string) => Math.ceil(text.length / 4);
 function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [draft, setDraft] = useState("");
+  const [staged, setStaged] = useState<Attachment[]>([]);
+  const [dragging, setDragging] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -143,6 +155,7 @@ function App() {
         .map((t) => ({
           role: t.role,
           content: t.content,
+          ...(t.images?.length ? { images: t.images } : {}),
           ...(t.role === "assistant" && usedModel ? { model: usedModel } : {}),
         }));
       if (messages.length === 0) return;
@@ -176,6 +189,7 @@ function App() {
             kind: "turn" as const,
             role: m.role === "assistant" ? ("assistant" as const) : ("user" as const),
             content: m.content,
+            images: m.images ?? [],
           })),
         );
         setConvoId(c.id);
@@ -264,7 +278,26 @@ function App() {
     pinned.current = true;
 
     const limit = card?.numCtx ?? 32768;
-    const withUser: Entry[] = [...entries, { kind: "turn", role: "user", content: text }];
+    // Text files fold into the question; images ride as base64 on the message.
+    // A model with no vision never sees an image, but it can always read words.
+    const content = foldText(text, staged);
+    const sending = staged;
+    setStaged([]);
+
+    // Bytes go to their own files and the turn records the names. A 1080p
+    // screenshot is ~790 KB encoded, and inlining that would rewrite a
+    // multi-megabyte conversation on every turn.
+    let names: string[] = [];
+    try {
+      names = await storeImages(sending);
+    } catch (e) {
+      setError(String(e));
+    }
+
+    const withUser: Entry[] = [
+      ...entries,
+      { kind: "turn", role: "user", content, images: names },
+    ];
     const trimmed = fit(withUser, limit);
     // The assistant turn is appended empty and filled by the stream, so the
     // answer appears token by token in place rather than arriving whole.
@@ -302,9 +335,21 @@ function App() {
 
     try {
       // Only the turns go to the model; a dropped-marker is a note to the reader.
-      const messages = trimmed
-        .filter((e): e is Extract<Entry, { kind: "turn" }> => e.kind === "turn")
-        .map((t) => ({ role: t.role, content: t.content }));
+      const turns = trimmed.filter(
+        (e): e is Extract<Entry, { kind: "turn" }> => e.kind === "turn",
+      );
+      const messages = await Promise.all(
+        turns.map(async (t) => {
+          // Images are re-read from disk each send, so a reopened conversation
+          // carries its pictures rather than only its words.
+          const b64 = t.images?.length ? await loadImages(t.images) : [];
+          return {
+            role: t.role,
+            content: t.content,
+            ...(b64.length ? { images: b64 } : {}),
+          };
+        }),
+      );
       await invoke("send", { messages, model, onEvent });
     } catch (e) {
       setError(String(e));
@@ -319,10 +364,23 @@ function App() {
         return final;
       });
     }
-  }, [draft, streaming, entries, model, card, fit]);
+  }, [draft, streaming, entries, model, card, fit, staged, persist, convoId]);
+
+  const take = useCallback(async (files: FileList | File[]) => {
+    const { attachments, rejected } = await readFiles(files);
+    if (attachments.length) setStaged((prev) => [...prev, ...attachments]);
+    // Refused with a reason rather than guessed at: reading an arbitrary binary
+    // as text produces a wall of replacement characters that silently eats the
+    // context budget, which is worse than being told no.
+    setError(rejected.length ? rejected.join("\n") : "");
+  }, []);
 
   const limit = card?.numCtx ?? 32768;
   const pct = Math.min(100, Math.round((spent / limit) * 100));
+  // What the staged attachments will cost before anything is sent. An image is
+  // ~2,042 tokens whatever it shows, so two of them plus a few turns of history
+  // is most of the budget - which is the thing worth seeing early.
+  const stagedTokens = staged.reduce((n, a) => n + attachmentTokens(a), 0);
   const current = models.find((m) => m.name === model);
 
   return (
@@ -387,6 +445,13 @@ function App() {
             </p>
           ) : entry.role === "user" ? (
             <div key={i} className="turn user">
+              {entry.images && entry.images.length > 0 && (
+                <span className="turn-images">
+                  {entry.images.length} image{entry.images.length === 1 ? "" : "s"} attached
+                  {" · ~"}
+                  {(entry.images.length * 2042).toLocaleString()} tok
+                </span>
+              )}
               {entry.content}
             </div>
           ) : (
@@ -400,7 +465,58 @@ function App() {
 
       {error && <p className="error">{error}</p>}
 
-      <div className="composer">
+      <div
+        className={dragging ? "composer dragging" : "composer"}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          if (e.dataTransfer?.files?.length) void take(e.dataTransfer.files);
+        }}
+      >
+        {staged.length > 0 && (
+          <div className="chips">
+            {staged.map((a, i) => (
+              <span key={i} className={a.kind === "image" ? "chip image" : "chip"}>
+                <span className="chip-name" title={a.name}>
+                  {a.kind === "image" ? "🖼 " : "📄 "}
+                  {a.name}
+                </span>
+                <span className="chip-cost">
+                  {humanBytes(a.bytes)} · ~{attachmentTokens(a).toLocaleString()} tok
+                </span>
+                <button
+                  className="chip-x"
+                  onClick={() => setStaged((prev) => prev.filter((_, j) => j !== i))}
+                  title="Remove"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <span className="chips-total">
+              ~{stagedTokens.toLocaleString()} of {limit.toLocaleString()} tokens
+            </span>
+          </div>
+        )}
+
+        <div className="composer-row">
+        <label className="attach ghost" title="Attach images or text files">
+          +
+          <input
+            type="file"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => {
+              if (e.target.files?.length) void take(e.target.files);
+              e.target.value = "";
+            }}
+          />
+        </label>
         <textarea
           ref={composerRef}
           value={draft}
@@ -418,9 +534,13 @@ function App() {
           disabled={streaming}
           autoFocus
         />
-        <button onClick={() => void send()} disabled={streaming || !draft.trim()}>
+        <button
+          onClick={() => void send()}
+          disabled={streaming || (!draft.trim() && staged.length === 0)}
+        >
           Send
         </button>
+        </div>
       </div>
 
       <footer>

@@ -480,3 +480,95 @@ button.danger {
 button.danger:hover:not(:disabled) {
   background: rgba(255, 90, 90, 0.32);
 }
+
+/* ── attachments ────────────────────────────────────────────────────────── */
+
+/* The whole composer is the drop target, not a separate zone — you drop where
+   you are about to type. */
+.composer.dragging {
+  background: rgba(120, 170, 255, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(140, 185, 255, 0.5);
+}
+
+.composer-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.attach {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  font-size: 17px;
+  line-height: 1;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-bottom: 8px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 320px;
+  font-size: 11px;
+  padding: 4px 4px 4px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+.chip.image {
+  border-color: rgba(140, 220, 180, 0.3);
+  background: rgba(140, 220, 180, 0.1);
+}
+.chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* What it costs, before it is sent. An image is ~2,042 tokens whatever it
+   shows, so two of them plus a little history is most of the budget. */
+.chip-cost {
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chip-x {
+  padding: 0 5px;
+  font-size: 13px;
+  line-height: 1;
+  background: none;
+  border: none;
+  opacity: 0.5;
+}
+.chip-x:hover {
+  opacity: 1;
+  background: none;
+}
+
+.chips-total {
+  font-size: 11px;
+  opacity: 0.45;
+  font-variant-numeric: tabular-nums;
+}
+
+/* On a sent turn: the pictures are stored, so this says what went with it. */
+.turn-images {
+  display: block;
+  font-size: 10.5px;
+  opacity: 0.6;
+  margin-bottom: 5px;
+  font-variant-numeric: tabular-nums;
+}

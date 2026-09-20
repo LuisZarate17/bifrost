@@ -15,6 +15,7 @@
 //! Warden's popup is stateless between summons, while this window owns its thread.
 //! G4 is what moves storage into Rust properly.
 
+use base64::prelude::*;
 use serde::Serialize;
 use tauri::ipc::Channel;
 
@@ -332,6 +333,36 @@ async fn delete_conversation(id: String) -> Result<bool, String> {
         .map_err(|e| format!("deleting failed: {e}"))?
 }
 
+// ── attachments ─────────────────────────────────────────────────────────────
+
+/// Store an attachment and return the name to reference it by.
+///
+/// Takes base64 because that is what the webview already has: the window sets
+/// `dragDropEnabled: false`, so a dropped file arrives as a browser `File` and
+/// is read with `FileReader`. That keeps path handling out of Rust entirely -
+/// nothing here ever sees, or trusts, a path from outside.
+#[tauri::command]
+async fn put_attachment(data: String, ext: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let bytes = BASE64_STANDARD
+            .decode(data.as_bytes())
+            .map_err(|e| format!("decoding attachment: {e}"))?;
+        store::put_attachment(&bytes, &ext)
+    })
+    .await
+    .map_err(|e| format!("saving the attachment failed: {e}"))?
+}
+
+/// Read a stored attachment back as base64, for redisplay and for re-sending.
+#[tauri::command]
+async fn get_attachment(name: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        store::get_attachment(&name).map(|b| BASE64_STANDARD.encode(b))
+    })
+    .await
+    .map_err(|e| format!("reading the attachment failed: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -344,6 +375,8 @@ pub fn run() {
             save_conversation,
             rename_conversation,
             delete_conversation,
+            put_attachment,
+            get_attachment,
             load_model,
             unload_model,
             set_model
