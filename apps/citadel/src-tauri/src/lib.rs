@@ -359,6 +359,65 @@ async fn delete_conversation(id: String) -> Result<bool, String> {
 struct PendingCall {
     name: String,
     path: String,
+    /// A single-use ticket for exactly this call.
+    ///
+    /// **Without it `run_tool` is a filesystem read that takes a path.** The
+    /// approval would live entirely in the frontend, and `tools.rs` would be
+    /// promising a guarantee Rust could not enforce — anything reaching the IPC
+    /// boundary could read any file by asking. The renderer is hardened, so this
+    /// is not exploitable today; it is the difference between "nothing else can
+    /// reach this" and "nothing else *may*".
+    token: String,
+}
+
+/// The one call currently awaiting approval.
+///
+/// One slot, not a set: the UI shows a single approval card and waits, so a
+/// second pending call would mean a bug rather than a queue. Issuing a new
+/// ticket invalidates the previous one.
+static PENDING: std::sync::OnceLock<std::sync::Mutex<Option<(String, String, String)>>> =
+    std::sync::OnceLock::new();
+
+fn pending() -> &'static std::sync::Mutex<Option<(String, String, String)>> {
+    PENDING.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// Issue a ticket for a call, replacing any outstanding one.
+fn arm(name: &str, path: &str) -> String {
+    let token = format!(
+        "{:x}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default()
+    );
+    if let Ok(mut slot) = pending().lock() {
+        *slot = Some((token.clone(), name.to_string(), path.to_string()));
+    }
+    token
+}
+
+/// The decision, without the global slot — so it is testable without one.
+///
+/// **The slot is taken either way.** A mismatched attempt burns the ticket
+/// rather than leaving it for a second try, so a caller cannot guess repeatedly
+/// against a standing approval.
+fn redeem_in(
+    slot: &mut Option<(String, String, String)>,
+    token: &str,
+    name: &str,
+    path: &str,
+) -> Result<(), String> {
+    match slot.take() {
+        Some((t, n, p)) if t == token && n == name && p == path => Ok(()),
+        _ => Err("this call was not approved".to_string()),
+    }
+}
+
+/// Spend a ticket. Fails unless it matches the exact call that was approved.
+fn redeem(token: &str, name: &str, path: &str) -> Result<(), String> {
+    let mut slot = pending().lock().map_err(|_| "approval state poisoned")?;
+    redeem_in(&mut slot, token, name, path)
 }
 
 /// Ask the model, offering the one tool, and report back what it wants.
@@ -402,7 +461,11 @@ async fn ask_with_tools(
         let requested = tools::interpret(call)?;
         return Ok(serde_json::json!({
             "kind": "call",
-            "call": PendingCall { name: requested.name, path: requested.path },
+            "call": PendingCall {
+                token: arm(&requested.name, &requested.path),
+                name: requested.name,
+                path: requested.path,
+            },
             // The raw call, so the caller can put the assistant turn that asked
             // for it back into the conversation before the tool result.
             //
@@ -430,10 +493,14 @@ async fn ask_with_tools(
 /// so what was approved is exactly what runs. Anything else would make the
 /// confirmation a formality.
 #[tauri::command]
-async fn run_tool(name: String, path: String) -> Result<String, String> {
+async fn run_tool(name: String, path: String, token: String) -> Result<String, String> {
     if name != "read_file" {
         return Err(format!("no such tool: {name}"));
     }
+    // Before anything touches the disk. The ticket was issued when the UI was
+    // shown this exact name and path, and is spent here - so what runs is what
+    // was approved, and it runs once.
+    redeem(&token, &name, &path)?;
     tauri::async_runtime::spawn_blocking(move || tools::run_read_file(&path))
         .await
         .map_err(|e| format!("running the tool failed: {e}"))
@@ -537,4 +604,68 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Citadel");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The approval boundary. These are the only tests in this crate on purpose:
+    /// everything else here is a thin `spawn_blocking` wrapper over `odin-core`,
+    /// which has its own. This is the one place Citadel enforces a rule of its
+    /// own, and a rule that is not tested is a comment.
+    ///
+    /// They drive `redeem_in` with a local slot rather than the process-wide
+    /// one, because tests run in parallel and a shared static would make them
+    /// interfere with each other instead of with the thing under test.
+    fn armed(name: &str, path: &str) -> (Option<(String, String, String)>, String) {
+        let token = "ticket-1".to_string();
+        (
+            Some((token.clone(), name.to_string(), path.to_string())),
+            token,
+        )
+    }
+
+    #[test]
+    fn a_ticket_only_works_for_the_call_it_was_issued_for() {
+        let (mut slot, t) = armed("read_file", "C:/a.txt");
+        assert!(redeem_in(&mut slot, &t, "read_file", "C:/somewhere-else.txt").is_err());
+    }
+
+    #[test]
+    fn a_ticket_is_rejected_for_another_tool() {
+        let (mut slot, t) = armed("read_file", "C:/a.txt");
+        assert!(redeem_in(&mut slot, &t, "delete_file", "C:/a.txt").is_err());
+    }
+
+    #[test]
+    fn a_matching_ticket_is_accepted_once() {
+        let (mut slot, t) = armed("read_file", "C:/a.txt");
+        assert!(redeem_in(&mut slot, &t, "read_file", "C:/a.txt").is_ok());
+        // A replay must not read the file a second time on one approval.
+        assert!(redeem_in(&mut slot, &t, "read_file", "C:/a.txt").is_err());
+    }
+
+    #[test]
+    fn a_wrong_ticket_burns_the_real_one() {
+        let (mut slot, t) = armed("read_file", "C:/a.txt");
+        assert!(redeem_in(&mut slot, "guessed", "read_file", "C:/a.txt").is_err());
+        assert!(redeem_in(&mut slot, &t, "read_file", "C:/a.txt").is_err());
+    }
+
+    #[test]
+    fn nothing_is_approved_by_default() {
+        let mut slot = None;
+        assert!(redeem_in(&mut slot, "anything", "read_file", "C:/a.txt").is_err());
+    }
+
+    #[test]
+    fn arming_issues_a_ticket_for_exactly_that_call() {
+        let token = arm("read_file", "C:/from-arm.txt");
+        assert!(!token.is_empty());
+        // Whatever was outstanding is replaced, so only the newest call stands.
+        let slot = pending().lock().unwrap();
+        let (t, n, p) = slot.as_ref().expect("a call should be armed");
+        assert_eq!((t.as_str(), n.as_str(), p.as_str()), (token.as_str(), "read_file", "C:/from-arm.txt"));
+    }
 }

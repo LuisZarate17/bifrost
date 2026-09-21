@@ -374,15 +374,14 @@ pub fn stream(
 
         // `/api/chat` puts the text under `message.content`; `/api/generate` used
         // `response`. Reading the wrong one streams nothing, silently.
-        if let Some(fragment) = v["message"]["content"].as_str() {
-            if !fragment.is_empty() {
+        if let Some(fragment) = v["message"]["content"].as_str()
+            && !fragment.is_empty() {
                 if ttft.is_none() {
                     ttft = Some(started.elapsed());
                 }
                 text.push_str(fragment);
                 on(StreamChunk::Token(fragment))?;
             }
-        }
 
         // Tool calls arrive whole rather than a fragment at a time, but they can
         // land on any object in the stream, not only the last one.

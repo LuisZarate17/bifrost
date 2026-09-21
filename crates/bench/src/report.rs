@@ -227,23 +227,23 @@ fn write_file(dir: &Path, name: &str, body: &str) -> Result<(), String> {
 
 pub fn write_manifest(dir: &Path, m: &Manifest) -> Result<(), String> {
     let mut s = String::from("{\n");
-    let _ = write!(s, "  \"started\": \"{}\",\n", json_escape(&m.started));
-    let _ = write!(s, "  \"card\": \"{}\",\n", json_escape(&m.card));
-    let _ = write!(s, "  \"num_ctx\": {},\n", m.num_ctx);
-    let _ = write!(s, "  \"reps\": {},\n", m.reps);
+    let _ = writeln!(s, "  \"started\": \"{}\",", json_escape(&m.started));
+    let _ = writeln!(s, "  \"card\": \"{}\",", json_escape(&m.card));
+    let _ = writeln!(s, "  \"num_ctx\": {},", m.num_ctx);
+    let _ = writeln!(s, "  \"reps\": {},", m.reps);
 
     let models: Vec<String> = m
         .models
         .iter()
         .map(|x| format!("\"{}\"", json_escape(x)))
         .collect();
-    let _ = write!(s, "  \"models\": [{}],\n", models.join(", "));
+    let _ = writeln!(s, "  \"models\": [{}],", models.join(", "));
 
     s.push_str("  \"images\": [\n");
     for (i, (name, path, bytes, sha)) in m.images.iter().enumerate() {
-        let _ = write!(
+        let _ = writeln!(
             s,
-            "    {{ \"name\": \"{}\", \"path\": \"{}\", \"bytes\": {}, \"sha256\": \"{}\" }}{}\n",
+            "    {{ \"name\": \"{}\", \"path\": \"{}\", \"bytes\": {}, \"sha256\": \"{}\" }}{}",
             json_escape(name),
             json_escape(path),
             bytes,
@@ -257,9 +257,9 @@ pub fn write_manifest(dir: &Path, m: &Manifest) -> Result<(), String> {
     // verdict, so the name alone identifies nothing.
     s.push_str("  \"prompts\": [\n");
     for (i, (name, sha, text)) in m.prompts.iter().enumerate() {
-        let _ = write!(
+        let _ = writeln!(
             s,
-            "    {{ \"name\": \"{}\", \"sha256\": \"{}\", \"text\": \"{}\" }}{}\n",
+            "    {{ \"name\": \"{}\", \"sha256\": \"{}\", \"text\": \"{}\" }}{}",
             json_escape(name),
             sha,
             json_escape(text),
@@ -274,44 +274,44 @@ pub fn write_manifest(dir: &Path, m: &Manifest) -> Result<(), String> {
 pub fn write_run(dir: &Path, r: &Run) -> Result<(), String> {
     let m = &r.measured;
     let mut s = String::from("{\n");
-    let _ = write!(s, "  \"model\": \"{}\",\n", json_escape(&r.model));
-    let _ = write!(s, "  \"image\": \"{}\",\n", json_escape(&r.image));
-    let _ = write!(s, "  \"prompt\": \"{}\",\n", json_escape(&r.prompt));
-    let _ = write!(s, "  \"rep\": {},\n", r.rep);
-    let _ = write!(s, "  \"ttft_ms\": {:.1},\n", m.ttft.as_secs_f64() * 1000.0);
-    let _ = write!(
+    let _ = writeln!(s, "  \"model\": \"{}\",", json_escape(&r.model));
+    let _ = writeln!(s, "  \"image\": \"{}\",", json_escape(&r.image));
+    let _ = writeln!(s, "  \"prompt\": \"{}\",", json_escape(&r.prompt));
+    let _ = writeln!(s, "  \"rep\": {},", r.rep);
+    let _ = writeln!(s, "  \"ttft_ms\": {:.1},", m.ttft.as_secs_f64() * 1000.0);
+    let _ = writeln!(
         s,
-        "  \"prefill_ms\": {:.1},\n",
+        "  \"prefill_ms\": {:.1},",
         (m.ttft.as_secs_f64() - m.load_ns as f64 / 1e9).max(0.0) * 1000.0
     );
-    let _ = write!(s, "  \"total_s\": {:.3},\n", m.total.as_secs_f64());
-    let _ = write!(s, "  \"decode_tps\": {:.1},\n", m.decode_tps());
-    let _ = write!(s, "  \"prompt_eval_count\": {},\n", m.prompt_eval_count);
-    let _ = write!(s, "  \"eval_count\": {},\n", m.eval_count);
-    let _ = write!(s, "  \"load_ns\": {},\n", m.load_ns);
-    let _ = write!(s, "  \"done_reason\": \"{}\",\n", json_escape(&m.done_reason));
-    let _ = write!(
+    let _ = writeln!(s, "  \"total_s\": {:.3},", m.total.as_secs_f64());
+    let _ = writeln!(s, "  \"decode_tps\": {:.1},", m.decode_tps());
+    let _ = writeln!(s, "  \"prompt_eval_count\": {},", m.prompt_eval_count);
+    let _ = writeln!(s, "  \"eval_count\": {},", m.eval_count);
+    let _ = writeln!(s, "  \"load_ns\": {},", m.load_ns);
+    let _ = writeln!(s, "  \"done_reason\": \"{}\",", json_escape(&m.done_reason));
+    let _ = writeln!(
         s,
-        "  \"baseline_mib\": {},\n",
+        "  \"baseline_mib\": {},",
         r.baseline_mib.map(|v| v.to_string()).unwrap_or("null".into())
     );
-    let _ = write!(
+    let _ = writeln!(
         s,
-        "  \"loaded_mib\": {},\n",
+        "  \"loaded_mib\": {},",
         r.loaded_mib.map(|v| v.to_string()).unwrap_or("null".into())
     );
-    let _ = write!(
+    let _ = writeln!(
         s,
-        "  \"delta_mib\": {},\n",
+        "  \"delta_mib\": {},",
         match (r.baseline_mib, r.loaded_mib) {
             (Some(b), Some(l)) => l.saturating_sub(b).to_string(),
             _ => "null".into(),
         }
     );
-    let _ = write!(s, "  \"answer_chars\": {},\n", m.answer.len());
-    let _ = write!(
+    let _ = writeln!(s, "  \"answer_chars\": {},", m.answer.len());
+    let _ = writeln!(
         s,
-        "  \"answer_sha256\": \"{}\",\n",
+        "  \"answer_sha256\": \"{}\",",
         sha256_hex(m.answer.as_bytes())
     );
     let _ = write!(s, "  \"answer\": \"{}\"\n}}\n", json_escape(&m.answer));
@@ -376,14 +376,14 @@ pub fn write_answers(
                 .all(|r| r.measured.answer == first.measured.answer);
 
             let _ = write!(md, "### Model {lbl}\n\n");
-            let _ = write!(md, "- reps: {}\n", reps.len());
-            let _ = write!(md, "- output_chars: {}\n", first.measured.answer.len());
+            let _ = writeln!(md, "- reps: {}", reps.len());
+            let _ = writeln!(md, "- output_chars: {}", first.measured.answer.len());
             if reps.len() > 1 {
                 // A model that answers differently run to run is telling you its
                 // verdict is not stable, which matters more than the verdict.
-                let _ = write!(
+                let _ = writeln!(
                     md,
-                    "- identical across reps: {}\n",
+                    "- identical across reps: {}",
                     if identical { "yes" } else { "**NO**" }
                 );
             }
@@ -399,17 +399,17 @@ pub fn write_answers(
 
     let mut j = String::from("{\n");
     for (i, (image, labels)) in key.iter().enumerate() {
-        let _ = write!(j, "  \"{}\": {{\n", json_escape(image));
+        let _ = writeln!(j, "  \"{}\": {{", json_escape(image));
         for (n, (lbl, model)) in labels.iter().enumerate() {
-            let _ = write!(
+            let _ = writeln!(
                 j,
-                "    \"{}\": \"{}\"{}\n",
+                "    \"{}\": \"{}\"{}",
                 json_escape(lbl),
                 json_escape(model),
                 if n + 1 < labels.len() { "," } else { "" }
             );
         }
-        let _ = write!(j, "  }}{}\n", if i + 1 < key.len() { "," } else { "" });
+        let _ = writeln!(j, "  }}{}", if i + 1 < key.len() { "," } else { "" });
     }
     j.push_str("}\n");
     write_file(dir, "blind-key.json", &j)?;

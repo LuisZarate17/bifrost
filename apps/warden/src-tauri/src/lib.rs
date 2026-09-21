@@ -1305,7 +1305,7 @@ fn take_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
     unsafe {
         let previous = GetForegroundWindow();
         *PREVIOUS_FOREGROUND.lock().map_err(|_| "focus store poisoned")? =
-            (!previous.is_invalid()).then(|| previous.0 as isize);
+            (!previous.is_invalid()).then_some(previous.0 as isize);
 
         let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style & !(WS_EX_NOACTIVATE.0 as isize));
@@ -1546,7 +1546,7 @@ unsafe extern "system" fn mouse_hook(
         // MSLLHOOKSTRUCT valid for the duration of this call.
         let info = unsafe { &*(lparam.0 as *const MSLLHOOKSTRUCT) };
         // Which of the two side buttons it was lives in the high word.
-        let which = (info.mouseData >> 16) as u32;
+        let which = info.mouseData >> 16;
 
         if summon != 0 && which == summon {
             if message == WM_XBUTTONDOWN {

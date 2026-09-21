@@ -443,11 +443,10 @@ pub fn show_cached(tag: &str) -> Result<ModelDetail, String> {
     static CACHE: OnceLock<Mutex<HashMap<String, ModelDetail>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
-    if let Ok(map) = cache.lock() {
-        if let Some(hit) = map.get(tag) {
+    if let Ok(map) = cache.lock()
+        && let Some(hit) = map.get(tag) {
             return Ok(hit.clone());
         }
-    }
 
     let detail = show(tag)?;
     if let Ok(mut map) = cache.lock() {

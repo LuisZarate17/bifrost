@@ -404,7 +404,7 @@ function App() {
           | { kind: "answer"; content: string; promptEvalCount: number; evalCount: number }
           | {
               kind: "call";
-              call: { name: string; path: string };
+              call: { name: string; path: string; token: string };
               rawCall: Record<string, unknown>;
             }
         >("ask_with_tools", { messages: convo, model });
@@ -431,7 +431,7 @@ function App() {
         // Show the exact path and stop. This is the whole point of the chunk:
         // nothing is read until it is approved, and what is approved is what
         // was shown.
-        const { name, path } = out.call;
+        const { name, path, token } = out.call;
         setEntries((prev) => {
           const next: Entry[] = [...prev, { kind: "tool", name, path, state: "pending" }];
           entriesRef.current = next;
@@ -463,7 +463,7 @@ function App() {
           continue;
         }
 
-        const result = await invoke<string>("run_tool", { name, path });
+        const result = await invoke<string>("run_tool", { name, path, token });
         setEntries((prev) => {
           const next = prev.map((e, i) =>
             i === prev.length - 1 && e.kind === "tool" ? { ...e, state: "ran" as const, result } : e,

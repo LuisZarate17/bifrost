@@ -96,6 +96,9 @@ pub struct Power {
     /// reason: the idle figure moves all day, so it has to be sampled, never
     /// assumed.
     idle_mib: Mutex<Option<u64>>,
+    /// The config's model tag and the file stamp it was read at. See [`Power::model`].
+    #[allow(clippy::type_complexity)]
+    model_cache: Mutex<Option<(Option<std::time::SystemTime>, String)>>,
 }
 
 impl Power {
@@ -105,6 +108,7 @@ impl Power {
             num_ctx,
             warming_since: Mutex::new(None),
             idle_mib: Mutex::new(None),
+            model_cache: Mutex::new(None),
         }
     }
 
@@ -116,18 +120,40 @@ impl Power {
         self.state.store(s.code(), Ordering::Relaxed);
     }
 
-    /// The model the shared config names, read fresh each time.
+    /// The model the shared config names, re-read when the file changes.
     ///
     /// **Not stored at construction.** Citadel writes the current model to the
     /// config, and a tray holding the tag it saw at startup would warm, release
     /// and report on a model nobody had chosen since - silently, because every
     /// one of those operations succeeds against the wrong tag.
     ///
-    /// Returns an owned String rather than a borrow, because there is no longer
-    /// a field to lend out. The read is a small local file; the tray does this
-    /// on a menu action or a refresh, not in a loop.
+    /// **Cached on the file's modified time**, because `refresh` *is* a loop:
+    /// it runs every `POLL` for as long as Warden is open, and calls this twice
+    /// a tick. An earlier version of this comment claimed the tray read the
+    /// config "on a menu action or a refresh, not in a loop", which was simply
+    /// wrong - it was two file reads every five seconds, forever, against the
+    /// same argument `POLL` itself is justified by.
+    ///
+    /// A `stat` is far cheaper than a read-and-parse, and the config changes
+    /// when someone picks a model - rarely, and never behind your back.
     pub fn model(&self) -> String {
-        odin_core::config::load().model
+        let stamp = odin_core::config::path()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok());
+
+        if let Ok(cache) = self.model_cache.lock() {
+            if let Some((cached_stamp, tag)) = cache.as_ref() {
+                if *cached_stamp == stamp {
+                    return tag.clone();
+                }
+            }
+        }
+
+        let tag = odin_core::config::load().model;
+        if let Ok(mut cache) = self.model_cache.lock() {
+            *cache = Some((stamp, tag.clone()));
+        }
+        tag
     }
 
     fn begin_warming(&self) {

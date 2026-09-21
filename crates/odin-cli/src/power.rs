@@ -92,16 +92,14 @@ pub fn status(tag: &str) -> Result<(), String> {
     // Ollama's figure counts only its own runner; the card counts everything.
     // So the card should always read higher — never equal. Measured live during
     // planning: 9,116 MiB on the card against Ollama's 6,233 MiB claim.
-    if let (Some(m), Some(s)) = (found, sample) {
-        if let Some(claim) = m.size_vram_mib() {
-            if s.used_mib < claim {
+    if let (Some(m), Some(s)) = (found, sample)
+        && let Some(claim) = m.size_vram_mib()
+            && s.used_mib < claim {
                 println!(
                     "note    card reads below Ollama's claim ({} < {claim}) — unexpected",
                     s.used_mib
                 );
             }
-        }
-    }
 
     if card.is_err() {
         // Still exit 0: the question was answered, just with one source missing.
