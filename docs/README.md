@@ -43,7 +43,7 @@ records of what happened.
 - **[STAGE-A.md](../stages/STAGE-A.md)** — foundations, no GUI. Complete.
 - **[STAGE-B.md](../stages/STAGE-B.md)** — the app shell. Complete.
 - **[STAGE-G.md](../stages/STAGE-G.md)** — **Citadel**, the local chat app sharing Warden's
-  model. In progress — its groundwork restructured this repo.
+  model. Built through G6; the testing round is open.
 
 ---
 
@@ -170,8 +170,19 @@ Finished chunks: what was built, what was measured, what the measurement changed
 
 **Stage G — Citadel, the local chat app**
 
-- **[G0](G0-results.md)** — the tool-call probe. **qwen3-vl:8b 10/10, llama3.1:8b 6/10** with a
+- **[G0](results/G0-results.md)** — the tool-call probe. **qwen3-vl:8b 10/10, llama3.1:8b 6/10** with a
   spurious call on every negative case. G6 is worth building, on the model Warden already uses.
+- **[G1](results/G1-results.md)** — the spine. A conversation that remembers, streamed in fragments.
+  **`ttft` measured 85.3µs until the clock was started before `.send()`** — then 150ms warm, 3.77s cold
+- **[G2](results/G2-results.md)** — the switchboard. **`load_duration 0.00s`** is the proof the warm
+  model survived a model switch; a runner is keyed by model *and* `num_ctx`
+- **[G3](results/G3-results.md)** — Warden follows the config.
+  **A model without `vision` does not refuse a screenshot** — it describes a screen it never saw
+- **[G4](results/G4-results.md)** — conversations survive a restart. One JSON file each, no database
+- **[G5](results/G5-results.md)** — attachments. **An image costs ~2,042 tokens whatever it shows**,
+  because the model tiles it — so two images and a little history is most of 32k
+- **[G6](results/G6-results.md)** — the tool loop. Off by default, no allowlist, no “always allow”;
+  approval is a one-shot ticket redeemed in Rust against the exact path that was shown
 
 **Stage F — keep testing models**
 

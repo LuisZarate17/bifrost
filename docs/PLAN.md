@@ -9,7 +9,7 @@ captures the screen and streams an answer into the popup. Model chosen at A2:
 (BUILD.md D1/D2), not a feature.
 
 **Next: Stage G** — **Citadel**, a local chat app sharing Warden's model.
-See [`../stages/STAGE-G.md`](../stages/STAGE-G.md); its groundwork is in progress.
+See [`../stages/STAGE-G.md`](../stages/STAGE-G.md); built through G6 and in testing.
 
 **Repo root:** `C:\Users\you\source\repos\warden` *(being renamed to `odin` — see
 PENDING-CHECKS.md)*

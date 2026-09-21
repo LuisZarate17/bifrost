@@ -5,13 +5,14 @@ Local AI tools that share one model and one machine. Nothing leaves the computer
 | | |
 |---|---|
 | **`odin`** | The same pipeline from the command line, plus `warm` / `off` / `status` power control |
-| **Citadel** | A local chat app sharing Warden's model and deciding which one is loaded. **Being built** — [stages/STAGE-G.md](stages/STAGE-G.md) |
+| **Citadel** | A local chat app sharing Warden's model and deciding which one is loaded. **Built, in testing** — [stages/STAGE-G.md](stages/STAGE-G.md) |
 
 Things with an icon get a name; things you type get a description (PLAN.md §0b).
 
 **Status.** Stages A–C are complete — `Ctrl+Alt+W` anywhere captures the screen and streams an
 answer into the popup. What is left of the original plan is one afternoon of testing, see
-[docs/BUILD.md](docs/BUILD.md). Stage G's groundwork is in progress.
+[docs/BUILD.md](docs/BUILD.md). **Stage G is built** — Citadel exists through G6, and what is left
+is the testing round in [docs/PENDING-CHECKS.md](docs/PENDING-CHECKS.md).
 
 ## The app
 

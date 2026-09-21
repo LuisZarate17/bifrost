@@ -10,9 +10,11 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ## Where this stands — 2026-09-19
 
-**Stages A–C complete; Warden is finished and in daily use.** Stage G is under way — the groundwork
-that turns this repo into a workspace two apps can live in, then **Citadel**, the local chat app.
-Chunk-by-chunk detail is in [`../stages/STAGE-G.md`](../stages/STAGE-G.md); this is the summary.
+**Stages A–C complete; Warden is finished and in daily use. Stage G is built** — the groundwork
+that turned this repo into a workspace two apps can live in, and **Citadel**, the local chat app,
+through G6. What remains is the testing round and the repo-root rename, both in
+[PENDING-CHECKS.md](PENDING-CHECKS.md). Chunk-by-chunk detail is in
+[`../stages/STAGE-G.md`](../stages/STAGE-G.md); this is the summary.
 
 ### Stage G so far — 2026-09-19
 
@@ -25,17 +27,16 @@ Chunk-by-chunk detail is in [`../stages/STAGE-G.md`](../stages/STAGE-G.md); this
 | **1h** | ☐ | **Needs a human** — rename the repo root folder to `odin` |
 | **Step 2** | ✅ | Five false claims corrected across the docs |
 | **Step 3** | ✅ | Shared config at `%APPDATA%\odin\config.json`; six duplicated constants removed |
-| **G0** | ✅ | Tool-call probe. **[G0-results.md](G0-results.md)** — `qwen3-vl:8b` 10/10, `llama3.1:8b` 6/10 |
-| **G1** | ✅ | **Citadel** — one window, one conversation, `/api/chat` streamed over a `Channel`, rendered with `@odin/ui` |
-| **G2** | ✅ | The switchboard — capability-labelled picker, load/unload, choice written to the shared config |
-| **G3** | ✅ | Warden reads the config on every summon and refuses cleanly when the model has no `vision` |
-| **G4** | ✅ | Persistence — one JSON file per conversation; list, rename, delete |
-| **G5** | ✅ | Attachments — images as base64 on the message, bytes in their own files; text files folded in |
-| **G6** | ✅ | The tool loop — one hardcoded tool, off by default, every call approved individually |
+| **G0** | ✅ | Tool-call probe. **[G0-results.md](results/G0-results.md)** — `qwen3-vl:8b` 10/10, `llama3.1:8b` 6/10 |
+| **G1** | ✅ | **Citadel** — one window, one conversation, `/api/chat` streamed over a `Channel`, rendered with `@odin/ui`. **[G1-results.md](results/G1-results.md)** — turn two knows turn one; 4 dependencies against Warden’s 12 |
+| **G2** | ✅ | The switchboard — capability-labelled picker, load/unload, choice written to the shared config. **[G2-results.md](results/G2-results.md)** — `load_duration 0.00s` after a switchboard load; the card and `ollama ps` disagree by ~2,100 MiB |
+| **G3** | ✅ | Warden reads the config on every summon and refuses cleanly when the model has no `vision`. **[G3-results.md](results/G3-results.md)** — a model without vision answers anyway; `/api/show` 3.02ms uncached, 4.10µs cached |
+| **G4** | ✅ | Persistence — one JSON file per conversation; list, rename, delete. **[G4-results.md](results/G4-results.md)** — byte-identical round trip; fields carried before they are read |
+| **G5** | ✅ | Attachments — images as base64 on the message, bytes in their own files; text files folded in. **[G5-results.md](results/G5-results.md)** — 51 KB PNG → 68 KB base64; ~2,042 tokens per image whatever it shows |
+| **G6** | ✅ | The tool loop — one hardcoded tool, off by default, every call approved individually. **[G6-results.md](results/G6-results.md)** — approval is a one-shot ticket redeemed in Rust; bounded at 4 rounds |
 
-**Stage G is built.** What remains is the testing round in PENDING-CHECKS.md, and the repo-root
-rename. G5 and G6 close the packet: the bar it sets is *you keep it open, and reach for it instead
-of a browser tab*, which only using it can settle.
+G5 and G6 close the packet. Its bar is *you keep it open, and reach for it instead of a browser
+tab* — which only using it can settle, so **built is not the same as done**.
 
 **What the groundwork actually found**, none of which a build would have caught:
 
