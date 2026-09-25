@@ -87,6 +87,11 @@ pub struct Config {
     pub model: String,
     pub prompt: String,
     pub num_ctx: u32,
+    /// The one folder Citadel may change files in, or `None` for no editing at
+    /// all. Set only through a native folder picker the user operates — there is
+    /// no command that takes a path for it, so nothing reaching the app's IPC can
+    /// widen it. Warden and the CLI ignore it.
+    pub workspace: Option<String>,
 }
 
 impl Default for Config {
@@ -95,6 +100,7 @@ impl Default for Config {
             model: DEFAULT_MODEL.to_string(),
             prompt: DEFAULT_PROMPT.to_string(),
             num_ctx: DEFAULT_NUM_CTX,
+            workspace: None,
         }
     }
 }
@@ -168,6 +174,7 @@ mod tests {
             model: "qwen3-vl:4b-instruct-q8_0".into(),
             prompt: "what is this".into(),
             num_ctx: 4096,
+            workspace: Some(r"C:\work\demo".into()),
         };
         let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(c, back);

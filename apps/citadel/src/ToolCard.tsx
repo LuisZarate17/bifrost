@@ -1,0 +1,208 @@
+import type { DiffView, Entry } from "./App";
+import * as I from "./Icons";
+
+type ToolEntry = Extract<Entry, { kind: "tool" }>;
+
+/**
+ * A change, the way you review it before it is made.
+ *
+ * Rendered from the same plan Rust writes — odin_core::edit — so this is not a
+ * preview of the edit, it *is* the edit. Line numbers on both sides, three lines
+ * of context, and a gap marker between separate changes.
+ */
+export function Diff({ diff }: { diff: DiffView }) {
+  return (
+    <div className="diff" role="table" aria-label="Changes">
+      {diff.hunks.map((h, i) => (
+        <div key={i} className="hunk">
+          {i > 0 && <div className="hunk-gap" aria-hidden="true">⋯</div>}
+          {h.lines.map((l, j) => (
+            <div
+              key={j}
+              role="row"
+              className={"dl " + (l.tag === "+" ? "add" : l.tag === "-" ? "del" : "same")}
+            >
+              <span className="ln">{l.old ?? ""}</span>
+              <span className="ln">{l.new ?? ""}</span>
+              <span className="sign">{l.tag === " " ? "" : l.tag === "-" ? "−" : "+"}</span>
+              <span className="dl-text">{l.text || " "}</span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Why a request went straight back to the model, in words — the full message
+ *  is one click away. */
+function reasonOf(error = ""): string {
+  if (error.includes("was not found")) return "the text it gave isn't in the file";
+  if (/appears \d+ times/.test(error)) return "that text appears in more than one place";
+  if (error.includes("identical")) return "the change would not have changed anything";
+  if (error.includes("outside the project folder")) return "that file is outside the project folder";
+  if (error.includes(".git")) return "files inside .git are never edited";
+  if (error.includes("editing is off")) return "no project folder is chosen";
+  if (error.includes("already exists")) return "that file already exists";
+  if (error.includes("could not be read") || error.includes("valid JSON")) return "the request was malformed";
+  if (error.includes("does not exist")) return "that file doesn't exist";
+  return "it could not be carried out";
+}
+
+const VERB: Record<string, string> = {
+  edit_file: "Couldn't edit",
+  create_file: "Couldn't create",
+  read_file: "Couldn't read",
+};
+
+export function ToolCard({
+  entry,
+  onAllow,
+  onDeny,
+  onUndo,
+}: {
+  entry: ToolEntry;
+  onAllow: () => void;
+  onDeny: () => void;
+  onUndo: () => void;
+}) {
+  const { name, path, state } = entry;
+
+  // Never shown to you for a decision: it could not have worked, so it went
+  // back to the model with the reason. Quiet, but visible — nothing happens
+  // unseen.
+  if (state === "rejected") {
+    return (
+      <details className="tool-rejected">
+        <summary>
+          <I.X width={13} height={13} />
+          <span>
+            {VERB[name] ?? "Couldn't run"} {path ? <code>{path}</code> : null} — {reasonOf(entry.error)}.
+            The model was told.
+          </span>
+        </summary>
+        <pre>{entry.error}</pre>
+      </details>
+    );
+  }
+
+  const edit = name === "edit_file" || name === "create_file";
+
+  if (!edit) {
+    const failed = entry.result?.startsWith("error:");
+    return (
+      <div className={"tool " + state + (failed ? " failed" : "")}>
+        <div className="tool-head">
+          <span className="tool-icon">
+            <I.File />
+          </span>
+          <span className="tool-name">{name === "read_file" ? "Read file" : name}</span>
+          <code className="tool-path" title={path}>
+            {path}
+          </code>
+          <span className="tool-state">
+            {state === "pending"
+              ? "Needs approval"
+              : state === "denied"
+                ? "Denied"
+                : failed
+                  ? "Failed"
+                  : `${(entry.result?.length ?? 0).toLocaleString()} chars`}
+          </span>
+        </div>
+
+        {state === "pending" && (
+          <div className="tool-ask">
+            <p>
+              The model wants to read this file. Nothing has been read yet — its contents go to the
+              model only if you allow it.
+            </p>
+            <div className="tool-buttons">
+              <button className="btn primary sm" onClick={onAllow}>
+                Allow once
+              </button>
+              <button className="btn ghost sm" onClick={onDeny}>
+                Deny
+              </button>
+            </div>
+          </div>
+        )}
+        {state === "denied" && <p className="tool-note">You declined. The model was told.</p>}
+        {state === "ran" && (
+          <details className="tool-result">
+            <summary>{failed ? "Why it failed" : "Show what was read"}</summary>
+            <pre>{entry.result?.slice(0, 4000)}</pre>
+          </details>
+        )}
+      </div>
+    );
+  }
+
+  const create = name === "create_file" || entry.diff?.create;
+  const label =
+    state === "pending"
+      ? "Review"
+      : state === "ran"
+        ? "Applied"
+        : state === "failed"
+          ? "Not written"
+          : state === "undone"
+            ? "Undone"
+            : "Declined";
+
+  return (
+    <div className={"tool edit " + state}>
+      <div className="tool-head">
+        <span className="tool-icon">{create ? <I.Plus /> : <I.Pencil />}</span>
+        <span className="tool-name">{create ? "Create file" : "Edit file"}</span>
+        <code className="tool-path" title={path}>
+          {path}
+        </code>
+        {entry.diff && (
+          <span className="counts" aria-label={`${entry.diff.added} lines added, ${entry.diff.removed} removed`}>
+            <span className="plus">+{entry.diff.added}</span>
+            <span className="minus">−{entry.diff.removed}</span>
+          </span>
+        )}
+        <span className="tool-state">{label}</span>
+        {state === "ran" && entry.undo && (
+          <button className="btn ghost xs" onClick={onUndo} title="Put the file back the way it was">
+            Undo
+          </button>
+        )}
+      </div>
+
+      {state === "pending" && (
+        <>
+          {entry.diff && <Diff diff={entry.diff} />}
+          <div className="tool-ask">
+            <p>
+              Nothing has been changed yet. Applying writes exactly this — and keeps a backup, so
+              it can be undone.
+            </p>
+            <div className="tool-buttons">
+              <button className="btn primary sm" onClick={onAllow}>
+                {create ? "Create file" : "Apply edit"}
+              </button>
+              <button className="btn ghost sm" onClick={onDeny}>
+                Deny
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {(state === "ran" || state === "undone") && entry.diff && (
+        <details className="tool-result">
+          <summary>{state === "undone" ? "Show what was undone" : "Show changes"}</summary>
+          <Diff diff={entry.diff} />
+        </details>
+      )}
+      {state === "undone" && <p className="tool-note">Undone — the file is back as it was.</p>}
+      {state === "denied" && (
+        <p className="tool-note">You declined. Nothing was written, and the model was told.</p>
+      )}
+      {state === "failed" && <p className="tool-note err">{entry.error?.replace(/^error:\s*/, "")}</p>}
+    </div>
+  );
+}

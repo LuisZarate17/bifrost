@@ -1,12 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { Answer } from "@odin/ui";
-import { Switchboard, type ModelInfo } from "./Switchboard";
+import { Switchboard, GpuMeter, splitName, type ModelInfo, type CardState } from "./Switchboard";
 import { Conversations, type Summary } from "./Conversations";
 import {
   readFiles, storeImages, loadImages, foldText, attachmentTokens, humanBytes,
   IMAGE_TOKENS, type Attachment,
 } from "./attach";
+import * as I from "./Icons";
+import { ToolCard } from "./ToolCard";
+// The phantom shield — the same art as Citadel's taskbar icon, so the window and
+// the thing you clicked to open it read as one object. 16×16 pixel art drawn at
+// 8×, shown at 2× or 4× so every cell lands on whole device pixels.
+import markUrl from "../src-tauri/icons/128x128.png";
 // The renderer's styles. @odin/ui does not import them itself, so that
 // `npm run check:inert` can SSR-build Answer and run it under plain node.
 import "@odin/ui/answer.css";
@@ -26,14 +32,6 @@ type StreamEvent =
         loadMs: number;
       };
     };
-
-type CardState = {
-  usedMib: number;
-  totalMib: number;
-  name: string;
-  model: string;
-  numCtx: number;
-};
 
 /** What odin_core::store writes. The unused fields are decision #2: adding
  *  them later would mean migrating files already holding real conversations. */
@@ -55,7 +53,7 @@ type Conversation = {
 };
 
 /** One thing in the thread: a turn, or a tool the model asked to run. */
-type Entry =
+export type Entry =
   | {
       kind: "turn";
       role: "user" | "assistant";
@@ -72,9 +70,30 @@ type Entry =
       kind: "tool";
       name: string;
       path: string;
-      state: "pending" | "ran" | "denied";
+      /** pending: waiting on you. ran: done. denied: you said no. rejected: it
+       *  could never have worked (an edit whose text is not in the file) and
+       *  went straight back to the model. failed: approved, but refused at the
+       *  last moment — the file changed after the diff was shown. undone: an
+       *  edit you reversed. */
+      state: "pending" | "ran" | "denied" | "rejected" | "failed" | "undone";
       result?: string;
+      /** The diff you approve, for an edit. Computed by the same plan that is
+       *  written, so it cannot disagree with what lands on disk. */
+      diff?: DiffView;
+      /** Handle for Undo, once an edit is written. */
+      undo?: string;
+      error?: string;
     };
+
+export type DiffLine = { tag: " " | "-" | "+"; text: string; old: number | null; new: number | null };
+export type DiffView = { hunks: { lines: DiffLine[] }[]; added: number; removed: number; create: boolean };
+type Folder = { path: string; name: string };
+
+/** Matches odin_core::tools::MAX_ROUNDS. G7 measured a two-file change taking
+ *  five rounds, one more than G6's old bound of four allowed. */
+const MAX_ROUNDS = 10;
+
+const isEdit = (name: string) => name === "edit_file" || name === "create_file";
 
 /**
  * Leave this much of the context for the answer.
@@ -95,6 +114,95 @@ const BUDGET = 0.75;
  */
 const estimate = (text: string) => Math.ceil(text.length / 4);
 
+/** The composer grows with what you type, up to this, then scrolls. */
+const COMPOSER_MAX_PX = 280;
+
+function greeting(now = new Date()): string {
+  const h = now.getHours();
+  if (h < 5) return "Working late";
+  if (h < 12) return "Good morning";
+  if (h < 18) return "Good afternoon";
+  return "Good evening";
+}
+
+/**
+ * Put text on the clipboard.
+ *
+ * Citadel is an ordinary focusable window served from `tauri.localhost`, which
+ * Chromium treats as a secure context — so the web clipboard works here, unlike
+ * in Warden's never-focused popup, which has to write it from Rust.
+ */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A copy button that says it worked, briefly, rather than leaving you to guess. */
+function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      className="icon-btn sm"
+      title={done ? "Copied" : label}
+      aria-label={label}
+      onClick={async () => {
+        if (await copyText(text)) {
+          setDone(true);
+          setTimeout(() => setDone(false), 1400);
+        }
+      }}
+    >
+      {done ? <I.Check /> : <I.Copy />}
+    </button>
+  );
+}
+
+/**
+ * The pictures that went with a sent message, read back from disk.
+ *
+ * A stored attachment is the user's own file, not something a model wrote, so
+ * showing it is not the exfiltration risk that makes the renderer refuse `img` —
+ * and a data: URL makes no request at all.
+ */
+function Thumbs({ names }: { names: string[] }) {
+  const [urls, setUrls] = useState<string[]>([]);
+  useEffect(() => {
+    let live = true;
+    loadImages(names).then((b64) => {
+      if (!live) return;
+      setUrls(
+        b64.map((data, i) => {
+          const ext = (names[i]?.split(".").pop() ?? "png").toLowerCase();
+          const mime = ext === "jpg" ? "jpeg" : ext;
+          return `data:image/${mime};base64,${data}`;
+        }),
+      );
+    });
+    return () => {
+      live = false;
+    };
+  }, [names]);
+
+  if (urls.length === 0) {
+    return (
+      <span className="thumbs-missing">
+        <I.Image width={13} height={13} /> {names.length} image{names.length === 1 ? "" : "s"}
+      </span>
+    );
+  }
+  return (
+    <span className="thumbs">
+      {urls.map((u, i) => (
+        <img key={i} src={u} alt={`Attachment ${i + 1}`} className="thumb" />
+      ))}
+    </span>
+  );
+}
+
 function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [draft, setDraft] = useState("");
@@ -103,6 +211,9 @@ function App() {
   // Off by default. A tool is code the model chose to run, so turning it on is
   // a decision rather than the state you happen to find the app in.
   const [toolsOn, setToolsOn] = useState(false);
+  // The one folder edits are confined to. Set only through the system folder
+  // picker, which Rust opens — there is no way to hand it a path from here.
+  const [folder, setFolder] = useState<Folder | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -112,7 +223,9 @@ function App() {
   const [model, setModel] = useState<string | null>(null);
   const [card, setCard] = useState<CardState | null>(null);
   const [showModels, setShowModels] = useState(false);
-  const [showConvos, setShowConvos] = useState(false);
+  // Open by default on a window with room for it; a narrow window starts with
+  // the thread to itself.
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 820);
   const [convos, setConvos] = useState<Summary[]>([]);
   // The file this thread belongs to. Null until the first exchange is saved -
   // an empty conversation is not worth a file.
@@ -164,6 +277,55 @@ function App() {
     refreshConvos();
   }, [refreshConvos]);
 
+  useEffect(() => {
+    // Never overwrites a folder already set — the dev preview seeds one, and a
+    // lookup that resolved after it used to blank it out.
+    invoke<Folder | null>("project_folder")
+      .then((f) => setFolder((prev) => prev ?? f))
+      .catch(() => {});
+  }, []);
+
+  const chooseFolder = useCallback(async () => {
+    try {
+      // Opens the system's own folder picker. Cancelling returns null and leaves
+      // the current folder as it was.
+      const picked = await invoke<Folder | null>("choose_project_folder");
+      if (picked) setFolder(picked);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  const clearFolder = useCallback(async () => {
+    try {
+      await invoke("clear_project_folder");
+      setFolder(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  // Dev-only fixture: `?preview` seeds a thread so the UI can be inspected
+  // without a model. The dynamic import keeps it out of the production bundle.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const mode = new URLSearchParams(location.search).get("preview");
+    if (mode === null) return;
+    import("./preview").then(({ previewThread }) => {
+      const p = previewThread(mode);
+      setEntries(p.entries);
+      entriesRef.current = p.entries;
+      setStatus(p.status);
+      setStats(p.stats);
+      setSpent(3214);
+      setStreaming(mode === "stream");
+      if (mode === "edit") {
+        setToolsOn(true);
+        setFolder({ path: "C:\\Users\\you\\source\\repos\\demo", name: "demo" });
+      }
+    });
+  }, []);
+
   /**
    * Save the thread, and remember which file it went to.
    *
@@ -180,14 +342,28 @@ function App() {
     async (all: Entry[], id: string | null) => {
       const messages: StoredMessage[] = all.flatMap((e): StoredMessage[] => {
         if (e.kind === "tool") {
-          // Only a call that actually ran is worth recording; a denial is a
-          // decision about this session, not part of the conversation.
-          if (e.state !== "ran") return [];
+          // Only a call that actually ran is worth recording; a denial or a
+          // rejection is about this session, not part of the conversation. An
+          // undone edit is kept — with its diff and the fact that it was undone
+          // — so reopening shows what happened rather than a gap.
+          if (e.state !== "ran" && e.state !== "undone") return [];
           return [
             {
               role: "tool",
               content: e.result ?? "",
-              tool_calls: [{ function: { name: e.name, arguments: { path: e.path } } }],
+              tool_calls: [
+                {
+                  function: {
+                    name: e.name,
+                    arguments: {
+                      path: e.path,
+                      ...(e.diff ? { diff: e.diff } : {}),
+                      ...(e.undo ? { undo: e.undo } : {}),
+                      ...(e.state === "undone" ? { undone: true } : {}),
+                    },
+                  },
+                },
+              ],
             },
           ];
         }
@@ -234,14 +410,20 @@ function App() {
           c.messages.map((m): Entry => {
             if (m.role === "tool") {
               const call = (m.tool_calls?.[0] ?? {}) as {
-                function?: { name?: string; arguments?: { path?: string } };
+                function?: {
+                  name?: string;
+                  arguments?: { path?: string; diff?: DiffView; undo?: string; undone?: boolean };
+                };
               };
+              const args = call.function?.arguments ?? {};
               return {
                 kind: "tool",
                 name: call.function?.name ?? "read_file",
-                path: call.function?.arguments?.path ?? "",
-                state: "ran",
+                path: args.path ?? "",
+                state: args.undone ? "undone" : "ran",
                 result: m.content,
+                ...(args.diff ? { diff: args.diff } : {}),
+                ...(args.undo ? { undo: args.undo } : {}),
               };
             }
             return {
@@ -259,6 +441,8 @@ function App() {
         setStats("");
         setError("");
         pinned.current = true;
+        // A narrow window gives the thread the whole width once one is chosen.
+        if (window.innerWidth < 820) setSidebarOpen(false);
       } catch (e) {
         setError(String(e));
       }
@@ -273,6 +457,7 @@ function App() {
     setSpent(0);
     setStats("");
     setError("");
+    composerRef.current?.focus();
   }, []);
 
   // The card's figure moves while a model loads or is released, so it is worth
@@ -299,6 +484,21 @@ function App() {
     if (!el) return;
     pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   }, []);
+
+  // Grow the composer with its text, rather than showing three fixed rows and a
+  // resize grip. Measured after layout so the height is never a frame behind.
+  //
+  // Re-measured when the chat goes from empty to not, too: the empty screen
+  // gives the box a taller minimum, and measuring only on typing left that
+  // height stuck on the box after the first message was sent.
+  const empty = entries.length === 0;
+  useLayoutEffect(() => {
+    const el = composerRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_PX)}px`;
+    el.style.overflowY = el.scrollHeight > COMPOSER_MAX_PX ? "auto" : "hidden";
+  }, [draft, empty]);
 
   /**
    * Drop the oldest exchanges until the conversation fits, and say so.
@@ -364,13 +564,16 @@ function App() {
       const out: Array<Record<string, unknown>> = [];
       for (const e of slice) {
         if (e.kind === "tool") {
-          if (e.state !== "ran") continue;
+          if (e.state !== "ran" && e.state !== "undone") continue;
           out.push({
             role: "assistant",
             content: "",
             tool_calls: [{ function: { name: e.name, arguments: { path: e.path } } }],
           });
-          out.push({ role: "tool", content: e.result ?? "", tool_name: e.name });
+          // The model is told an edit was undone, or it will reason from a file
+          // that is no longer what it thinks.
+          const note = e.state === "undone" ? " The user has since undone this edit, so the file is back as it was." : "";
+          out.push({ role: "tool", content: (e.result ?? "") + note, tool_name: e.name });
           continue;
         }
         if (e.kind !== "turn") continue;
@@ -397,16 +600,18 @@ function App() {
     async (history: Array<Record<string, unknown>>) => {
       let convo = [...history];
 
-      // A bound, not a timeout. Without one, a model that keeps asking for the
-      // same file loops forever and the only symptom is the app getting warm.
-      for (let step = 0; step < 4; step++) {
+      // A bound, not a timeout. Without one, a model that keeps asking loops
+      // forever and the only symptom is the app getting warm.
+      for (let step = 0; step < MAX_ROUNDS; step++) {
         const out = await invoke<
           | { kind: "answer"; content: string; promptEvalCount: number; evalCount: number }
           | {
               kind: "call";
-              call: { name: string; path: string; token: string };
+              call: { name: string; path: string; token: string; diff?: DiffView };
               rawCall: Record<string, unknown>;
             }
+          | { kind: "rejected"; name: string; path: string; error: string; rawCall: Record<string, unknown> }
+          | { kind: "stuck"; error: string }
         >("ask_with_tools", { messages: convo, model });
 
         if (out.kind === "answer") {
@@ -428,12 +633,42 @@ function App() {
           return;
         }
 
-        // Show the exact path and stop. This is the whole point of the chunk:
-        // nothing is read until it is approved, and what is approved is what
-        // was shown.
-        const { name, path, token } = out.call;
+        if (out.kind === "stuck") {
+          // The third identical failure. The file has not changed, so another
+          // try cannot go differently — better to stop and say so.
+          setError(out.error);
+          return;
+        }
+
+        if (out.kind === "rejected") {
+          // It could never have worked — an edit whose text is not in the file,
+          // say. Not your decision to make, so it goes straight back to the
+          // model with the reason, and is shown here so nothing happens unseen.
+          setEntries((prev) => {
+            const next: Entry[] = [
+              ...prev,
+              { kind: "tool", name: out.name, path: out.path, state: "rejected", error: out.error },
+            ];
+            entriesRef.current = next;
+            return next;
+          });
+          convo = [
+            ...convo,
+            { role: "assistant", content: "", tool_calls: [out.rawCall] },
+            { role: "tool", content: out.error, tool_name: out.name },
+          ];
+          continue;
+        }
+
+        // Show exactly what would happen — the path for a read, the diff for an
+        // edit — and stop. Nothing is read or written until it is approved, and
+        // what is approved is what runs: the ticket carries the whole plan.
+        const { name, path, token, diff } = out.call;
         setEntries((prev) => {
-          const next: Entry[] = [...prev, { kind: "tool", name, path, state: "pending" }];
+          const next: Entry[] = [
+            ...prev,
+            { kind: "tool", name, path, state: "pending", ...(diff ? { diff } : {}) },
+          ];
           entriesRef.current = next;
           return next;
         });
@@ -450,23 +685,36 @@ function App() {
             ),
           );
           // The model is told, rather than left waiting on a call that silently
-          // never happened.
-          // The assistant turn that asked has to go back too, or the refusal
-          // answers a question the model cannot see itself having asked.
+          // never happened. The assistant turn that asked has to go back too, or
+          // the refusal answers a question it cannot see itself having asked.
+          const refusal = isEdit(name)
+            ? `The user declined this change to ${path}. Nothing was written.`
+            : `The user declined to let you read ${path}.`;
           convo = [
             ...convo,
             out.rawCall
               ? { role: "assistant", content: "", tool_calls: [out.rawCall] }
               : { role: "assistant", content: "" },
-            { role: "tool", content: `The user declined to let you read ${path}.`, tool_name: name },
+            { role: "tool", content: refusal, tool_name: name },
           ];
           continue;
         }
 
-        const result = await invoke<string>("run_tool", { name, path, token });
+        const ran = await invoke<{ result: string; undo?: string }>("run_tool", { name, path, token });
+        // Refused at the last moment — the file changed after the diff was
+        // shown — comes back as an error for the model, and shows as failed.
+        const failed = isEdit(name) && ran.result.startsWith("error:");
         setEntries((prev) => {
           const next = prev.map((e, i) =>
-            i === prev.length - 1 && e.kind === "tool" ? { ...e, state: "ran" as const, result } : e,
+            i === prev.length - 1 && e.kind === "tool"
+              ? {
+                  ...e,
+                  state: failed ? ("failed" as const) : ("ran" as const),
+                  result: ran.result,
+                  ...(failed ? { error: ran.result } : {}),
+                  ...(ran.undo ? { undo: ran.undo } : {}),
+                }
+              : e,
           );
           entriesRef.current = next;
           return next;
@@ -482,11 +730,11 @@ function App() {
           out.rawCall
             ? { role: "assistant", content: "", tool_calls: [out.rawCall] }
             : { role: "assistant", content: "" },
-          { role: "tool", content: result, tool_name: name },
+          { role: "tool", content: ran.result, tool_name: name },
         ];
       }
 
-      setError("the model kept asking for tools; stopped after 4 rounds");
+      setError(`the model kept asking for tools; stopped after ${MAX_ROUNDS} rounds`);
     },
     [model],
   );
@@ -609,6 +857,34 @@ function App() {
     }
   }, [draft, streaming, entries, model, card, planSend, staged, persist, convoId, toolsOn, askWithTools, toWire]);
 
+  /**
+   * Put a file back the way it was before one edit.
+   *
+   * Rust refuses if the file has changed since — undo restores by overwriting,
+   * and doing that over later work would lose it. The conversation is saved
+   * again afterwards, so it records that the edit was undone.
+   */
+  const undoEdit = useCallback(
+    async (index: number) => {
+      const e = entriesRef.current[index];
+      if (!e || e.kind !== "tool" || !e.undo) return;
+      try {
+        await invoke<string>("undo_edit", { id: e.undo });
+        setEntries((prev) => {
+          const next = prev.map((x, i) =>
+            i === index && x.kind === "tool" ? { ...x, state: "undone" as const } : x,
+          );
+          entriesRef.current = next;
+          return next;
+        });
+        await persist(entriesRef.current, convoId);
+      } catch (err) {
+        setError(String(err));
+      }
+    },
+    [persist, convoId],
+  );
+
   const take = useCallback(async (files: FileList | File[]) => {
     const { attachments, rejected } = await readFiles(files);
     if (attachments.length) setStaged((prev) => [...prev, ...attachments]);
@@ -618,6 +894,24 @@ function App() {
     setError(rejected.length ? rejected.join("\n") : "");
   }, []);
 
+  // Ctrl+N for a new chat and Ctrl+B for the sidebar — the two things reached
+  // for often enough to deserve a key. Escape for the dialog lives on the dialog.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.shiftKey) return;
+      const k = e.key.toLowerCase();
+      if (k === "n") {
+        e.preventDefault();
+        if (!streaming) newConvo();
+      } else if (k === "b") {
+        e.preventDefault();
+        setSidebarOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [streaming, newConvo]);
+
   const limit = card?.numCtx ?? 32768;
   const pct = Math.min(100, Math.round((spent / limit) * 100));
   // What the staged attachments will cost before anything is sent. An image is
@@ -625,223 +919,390 @@ function App() {
   // is most of the budget - which is the thing worth seeing early.
   const stagedTokens = staged.reduce((n, a) => n + attachmentTokens(a), 0);
   const current = models.find((m) => m.name === model);
+  const resident = models.find((m) => m.isResident);
+  const title = convoId ? convos.find((c) => c.id === convoId)?.title.trim() || "Untitled" : "";
+  const lastAssistant = (() => {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i];
+      if (e.kind === "turn" && e.role === "assistant") return i;
+    }
+    return -1;
+  })();
+  const canSend = !streaming && (draft.trim().length > 0 || staged.length > 0);
+  const short = model ? splitName(model) : null;
 
   return (
-    <div className="app">
-      <header>
-        <span className="mark">Citadel</span>
-        <button
-          className={showModels ? "" : "ghost"}
-          onClick={() => setShowModels((v) => !v)}
-          title="Choose, load and release the resident model"
-        >
-          {model ?? "no model"}
-          {current?.isResident ? " ●" : " ○"}
+    <div className={"app" + (sidebarOpen ? " with-sidebar" : "")}>
+      <aside className="sidebar" aria-hidden={!sidebarOpen}>
+        <div className="sb-top">
+          <div className="brand">
+            <img src={markUrl} alt="" className="brand-mark" width={32} height={32} />
+            <span className="brand-name">Citadel</span>
+          </div>
+          <button
+            className="icon-btn"
+            onClick={() => setSidebarOpen(false)}
+            title="Hide sidebar (Ctrl+B)"
+            aria-label="Hide sidebar"
+          >
+            <I.Sidebar />
+          </button>
+        </div>
+
+        <button className="new-chat" onClick={newConvo} disabled={streaming}>
+          <I.Plus />
+          <span>New chat</span>
+          <kbd>Ctrl N</kbd>
         </button>
-        <button
-          className={showConvos ? "" : "ghost"}
-          onClick={() => setShowConvos((v) => !v)}
-          title="Saved conversations"
-        >
-          History
+
+        <div className="sb-scroll">
+          <Conversations
+            items={convos}
+            currentId={convoId}
+            onOpen={(id) => void openConvo(id)}
+            onChanged={() => {
+              refreshConvos();
+              // The open conversation may be the one just deleted.
+              invoke<Summary[]>("conversations").then((list) => {
+                if (convoId && !list.some((c) => c.id === convoId)) newConvo();
+              }).catch(() => {});
+            }}
+            busy={streaming}
+          />
+        </div>
+
+        <button className="sb-foot" onClick={() => setShowModels(true)} title="Models">
+          <span className="sb-resident">
+            <span className={"dot" + (resident ? " on" : "")} />
+            {resident ? (
+              <>
+                <span className="sb-resident-name">{splitName(resident.name).family}</span>
+                <span className="muted">{splitName(resident.name).size} loaded</span>
+              </>
+            ) : (
+              <span className="muted">No model loaded</span>
+            )}
+          </span>
+          <GpuMeter card={card} compact />
         </button>
-        <button
-          className={toolsOn ? "" : "ghost"}
-          onClick={() => setToolsOn((v) => !v)}
-          title="Let the model ask to read files. Every read is approved individually."
-        >
-          Tools {toolsOn ? "on" : "off"}
-        </button>
-      </header>
+      </aside>
+      {/* Only shown on a narrow window, where the sidebar floats over the thread
+          and needs a way to be dismissed by clicking past it. */}
+      <div className="sb-scrim" onClick={() => setSidebarOpen(false)} aria-hidden="true" />
+
+      <main className={"main" + (empty ? " empty" : "")}>
+        <div className="topbar">
+          {!sidebarOpen && (
+            <>
+              <button
+                className="icon-btn"
+                onClick={() => setSidebarOpen(true)}
+                title="Show sidebar (Ctrl+B)"
+                aria-label="Show sidebar"
+              >
+                <I.Sidebar />
+              </button>
+              <button
+                className="icon-btn"
+                onClick={newConvo}
+                disabled={streaming}
+                title="New chat (Ctrl+N)"
+                aria-label="New chat"
+              >
+                <I.Plus />
+              </button>
+            </>
+          )}
+          <span className="topbar-title">{title}</span>
+        </div>
+
+        <div className="thread" ref={threadRef} onScroll={onScroll}>
+          <div className="column">
+            {empty ? (
+              <div className="hero">
+                <img src={markUrl} alt="" className="hero-mark" width={48} height={48} />
+                <h1 className="hero-title">{greeting()}</h1>
+              </div>
+            ) : (
+              <>
+                {dropped > 0 && (
+                  <p className="dropped">
+                    The last request left out {dropped} earlier{" "}
+                    {dropped === 1 ? "turn" : "turns"} to fit the context. They are still saved.
+                  </p>
+                )}
+                {entries.map((entry, i) => {
+                  if (entry.kind === "tool") {
+                    return (
+                      <ToolCard
+                        key={"t" + i}
+                        entry={entry}
+                        onAllow={() => pendingDecision.current?.(true)}
+                        onDeny={() => pendingDecision.current?.(false)}
+                        onUndo={() => void undoEdit(i)}
+                      />
+                    );
+                  }
+
+                  if (entry.role === "user") {
+                    return (
+                      <div key={i} className="turn user">
+                        {entry.images && entry.images.length > 0 && (
+                          <Thumbs names={entry.images} />
+                        )}
+                        {entry.content && <div className="bubble">{entry.content}</div>}
+                      </div>
+                    );
+                  }
+
+                  const isLast = i === lastAssistant;
+                  const waiting = !entry.content;
+                  return (
+                    <div key={i} className={"turn assistant" + (isLast ? " last" : "")}>
+                      {waiting ? (
+                        <div className="waiting" role="status">
+                          <span className="pulse" aria-hidden="true">
+                            <i />
+                            <i />
+                            <i />
+                          </span>
+                          {status && <span className="waiting-text">{status}</span>}
+                        </div>
+                      ) : (
+                        <>
+                          <Answer text={entry.content} />
+                          {!(isLast && streaming) && (
+                            <div className="turn-meta">
+                              <CopyButton text={entry.content} label="Copy response" />
+                              {entry.model && (
+                                <span className="turn-model" title={entry.model}>
+                                  {splitName(entry.model).family} {splitName(entry.model).size}
+                                </span>
+                              )}
+                              {isLast && stats && <span className="turn-stats">{stats}</span>}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="dock">
+          <div className="column">
+            {error && (
+              <div className="banner" role="alert">
+                <I.Alert />
+                <span className="banner-text">{error}</span>
+                <button className="icon-btn sm" onClick={() => setError("")} aria-label="Dismiss">
+                  <I.X />
+                </button>
+              </div>
+            )}
+
+            <div
+              className={"composer" + (dragging ? " dragging" : "")}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                if (e.dataTransfer?.files?.length) void take(e.dataTransfer.files);
+              }}
+              onClick={(e) => {
+                // A click on the card's padding should land in the text box.
+                if (e.target === e.currentTarget) composerRef.current?.focus();
+              }}
+            >
+              {dragging && <div className="drop-hint">Drop images or text files to attach</div>}
+
+              {staged.length > 0 && (
+                <div className="staged">
+                  {staged.map((a, i) => (
+                    <span key={i} className={"att " + a.kind} title={a.name}>
+                      {a.kind === "image" ? (
+                        <img
+                          className="att-thumb"
+                          src={`data:image/${a.ext === "jpg" ? "jpeg" : a.ext};base64,${a.base64}`}
+                          alt=""
+                        />
+                      ) : (
+                        <span className="att-icon">
+                          <I.File />
+                        </span>
+                      )}
+                      <span className="att-text">
+                        <span className="att-name">{a.name}</span>
+                        <span className="att-cost">
+                          {humanBytes(a.bytes)} · ~{attachmentTokens(a).toLocaleString()} tokens
+                        </span>
+                      </span>
+                      <button
+                        className="att-x"
+                        onClick={() => setStaged((prev) => prev.filter((_, j) => j !== i))}
+                        title="Remove"
+                        aria-label={`Remove ${a.name}`}
+                      >
+                        <I.X width={12} height={12} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <textarea
+                ref={composerRef}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  // Enter sends, Shift+Enter is a newline. The common case is one
+                  // keystroke; the rarer one keeps a modifier.
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void send();
+                  }
+                }}
+                placeholder={empty ? "How can I help?" : "Reply to Citadel"}
+                rows={1}
+                disabled={streaming}
+                aria-label="Message"
+                autoFocus
+              />
+
+              <div className="composer-bar">
+                <label className="icon-btn" title="Attach images or text files">
+                  <I.Plus />
+                  <input
+                    type="file"
+                    multiple
+                    hidden
+                    onChange={(e) => {
+                      if (e.target.files?.length) void take(e.target.files);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+                <button
+                  className={"toggle" + (toolsOn ? " on" : "")}
+                  onClick={() => setToolsOn((v) => !v)}
+                  aria-pressed={toolsOn}
+                  title="Let the model read files — and edit them inside a folder you choose. Every read and every edit is approved individually."
+                >
+                  <I.Wrench width={14} height={14} />
+                  Tools
+                </button>
+                {/* Where edits may happen. Only while Tools is on, because only
+                    then can anything be edited at all. Without a folder the model
+                    can still read, one approved file at a time. */}
+                {toolsOn &&
+                  (folder ? (
+                    <span className="folder-chip" title={`Edits are confined to ${folder.path}`}>
+                      <button className="folder-pick" onClick={() => void chooseFolder()} disabled={streaming}>
+                        <I.Folder width={14} height={14} />
+                        <span className="folder-name">{folder.name}</span>
+                      </button>
+                      <button
+                        className="folder-x"
+                        onClick={() => void clearFolder()}
+                        disabled={streaming}
+                        title="Turn editing off"
+                        aria-label="Turn editing off"
+                      >
+                        <I.X width={12} height={12} />
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      className="folder-chip empty"
+                      onClick={() => void chooseFolder()}
+                      disabled={streaming}
+                      title="Choose the one folder the model may edit files in. Without one it can only read."
+                    >
+                      <I.Folder width={14} height={14} />
+                      Choose folder
+                    </button>
+                  ))}
+
+                <span className="spacer" />
+
+                <button
+                  className="model-pill"
+                  onClick={() => setShowModels(true)}
+                  title={model ?? "Choose a model"}
+                >
+                  <span className={"dot" + (current?.isResident ? " on" : "")} />
+                  {short ? (
+                    <>
+                      <span className="mp-family">{short.family}</span>
+                      <span className="mp-size">{short.size}</span>
+                    </>
+                  ) : (
+                    <span>Choose a model</span>
+                  )}
+                  <I.Chevron width={14} height={14} />
+                </button>
+                <button
+                  className="send"
+                  onClick={() => void send()}
+                  disabled={!canSend}
+                  title="Send (Enter)"
+                  aria-label="Send"
+                >
+                  <I.ArrowUp />
+                </button>
+              </div>
+            </div>
+
+            <div className="composer-foot">
+              {staged.length > 0 ? (
+                <span>
+                  Attachments add about {stagedTokens.toLocaleString()} of {limit.toLocaleString()} tokens
+                </span>
+              ) : empty ? (
+                <span>
+                  <I.Shield width={12} height={12} /> Runs entirely on this machine. Nothing is sent
+                  anywhere.
+                </span>
+              ) : (
+                <span />
+              )}
+              {spent > 0 && (
+                <span
+                  className={"ctx" + (pct > 75 ? " warn" : "")}
+                  title={`${spent.toLocaleString()} of ${limit.toLocaleString()} tokens in the last request`}
+                >
+                  <span className="ctx-bar">
+                    <span style={{ width: `${pct}%` }} />
+                  </span>
+                  {pct}% of context
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
 
       {showModels && (
         <Switchboard
           models={models}
           current={model}
+          card={card}
           onPick={setModel}
           onRefresh={refreshModels}
+          onClose={() => {
+            setShowModels(false);
+            composerRef.current?.focus();
+          }}
           busy={streaming || loadingModels}
         />
       )}
-
-      <div className="body">
-      {showConvos && (
-        <Conversations
-          items={convos}
-          currentId={convoId}
-          onOpen={(id) => void openConvo(id)}
-          onNew={newConvo}
-          onChanged={() => {
-            refreshConvos();
-            // The open conversation may be the one just deleted.
-            invoke<Summary[]>("conversations").then((list) => {
-              if (convoId && !list.some((c) => c.id === convoId)) newConvo();
-            }).catch(() => {});
-          }}
-          busy={streaming}
-        />
-      )}
-
-      <div className="thread" ref={threadRef} onScroll={onScroll}>
-        {dropped > 0 && (
-          <p className="dropped">
-            ⋯ the last request left out {dropped} earlier{" "}
-            {dropped === 1 ? "turn" : "turns"} to fit the context — they are still
-            saved
-          </p>
-        )}
-        {entries.length === 0 && (
-          <p className="idle">
-            Ask anything. Every token stays on this machine.
-          </p>
-        )}
-        {entries.map((entry, i) =>
-          entry.kind === "tool" ? (
-            <div key={"t" + i} className={"toolcall " + entry.state}>
-              <div className="tc-head">
-                <strong>{entry.name}</strong>
-                <code className="tc-path">{entry.path}</code>
-              </div>
-              {entry.state === "pending" && (
-                <div className="tc-ask">
-                  <span>The model wants to read this file. Nothing has been read yet.</span>
-                  <span className="tc-buttons">
-                    <button onClick={() => pendingDecision.current?.(true)}>Allow once</button>
-                    <button className="ghost" onClick={() => pendingDecision.current?.(false)}>
-                      Deny
-                    </button>
-                  </span>
-                </div>
-              )}
-              {entry.state === "denied" && (
-                <div className="tc-note">Denied. The model was told.</div>
-              )}
-              {entry.state === "ran" && (
-                <details className="tc-note">
-                  <summary>
-                    {entry.result?.startsWith("error:")
-                      ? "The read failed — expand for why"
-                      : "Read " + (entry.result?.length ?? 0) + " characters"}
-                  </summary>
-                  <pre className="tc-result">{entry.result?.slice(0, 4000)}</pre>
-                </details>
-              )}
-            </div>
-          ) : entry.role === "user" ? (
-            <div key={i} className="turn user">
-              {entry.images && entry.images.length > 0 && (
-                <span className="turn-images">
-                  {entry.images.length} image{entry.images.length === 1 ? "" : "s"} attached
-                  {" · ~"}
-                  {(entry.images.length * 2042).toLocaleString()} tok
-                </span>
-              )}
-              {entry.content}
-            </div>
-          ) : (
-            <div key={i} className="turn assistant">
-              {entry.content ? <Answer text={entry.content} /> : <span className="dots">…</span>}
-            </div>
-          ),
-        )}
-      </div>
-      </div>
-
-      {error && <p className="error">{error}</p>}
-
-      <div
-        className={dragging ? "composer dragging" : "composer"}
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragging(true);
-        }}
-        onDragLeave={() => setDragging(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragging(false);
-          if (e.dataTransfer?.files?.length) void take(e.dataTransfer.files);
-        }}
-      >
-        {staged.length > 0 && (
-          <div className="chips">
-            {staged.map((a, i) => (
-              <span key={i} className={a.kind === "image" ? "chip image" : "chip"}>
-                <span className="chip-name" title={a.name}>
-                  {a.kind === "image" ? "🖼 " : "📄 "}
-                  {a.name}
-                </span>
-                <span className="chip-cost">
-                  {humanBytes(a.bytes)} · ~{attachmentTokens(a).toLocaleString()} tok
-                </span>
-                <button
-                  className="chip-x"
-                  onClick={() => setStaged((prev) => prev.filter((_, j) => j !== i))}
-                  title="Remove"
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-            <span className="chips-total">
-              ~{stagedTokens.toLocaleString()} of {limit.toLocaleString()} tokens
-            </span>
-          </div>
-        )}
-
-        <div className="composer-row">
-        <label className="attach ghost" title="Attach images or text files">
-          +
-          <input
-            type="file"
-            multiple
-            style={{ display: "none" }}
-            onChange={(e) => {
-              if (e.target.files?.length) void take(e.target.files);
-              e.target.value = "";
-            }}
-          />
-        </label>
-        <textarea
-          ref={composerRef}
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            // Enter sends, Shift+Enter is a newline. The common case is one
-            // keystroke; the rarer one keeps a modifier.
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-          placeholder={streaming ? "…" : "Message Citadel"}
-          rows={3}
-          disabled={streaming}
-          autoFocus
-        />
-        <button
-          onClick={() => void send()}
-          disabled={streaming || (!draft.trim() && staged.length === 0)}
-        >
-          Send
-        </button>
-        </div>
-      </div>
-
-      <footer>
-        <span>{status || stats}</span>
-        <span className="right">
-          {spent > 0 && (
-            <span className={pct > 75 ? "warn" : ""}>
-              {spent.toLocaleString()} / {limit.toLocaleString()} ctx
-            </span>
-          )}
-          {card && (
-            <span title={card.name}>
-              {card.usedMib.toLocaleString()} / {card.totalMib.toLocaleString()} MiB
-            </span>
-          )}
-        </span>
-      </footer>
     </div>
   );
 }

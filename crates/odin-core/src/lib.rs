@@ -21,7 +21,9 @@
 
 pub mod chat;
 pub mod config;
+pub mod edit;
 pub mod ollama;
 pub mod store;
+pub mod toolcall;
 pub mod tools;
 pub mod vram;

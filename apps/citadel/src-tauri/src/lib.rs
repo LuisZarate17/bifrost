@@ -20,7 +20,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 
 use odin_core::chat::{self, Message, Options, StreamChunk};
-use odin_core::{config, ollama, store, tools, vram};
+use odin_core::{config, edit, ollama, store, tools, vram};
 
 /// One message pushed up to the UI.
 ///
@@ -358,16 +358,43 @@ async fn delete_conversation(id: String) -> Result<bool, String> {
 #[serde(rename_all = "camelCase")]
 struct PendingCall {
     name: String,
+    /// For a read, the exact path that will be read. For an edit, the file
+    /// relative to the project folder.
     path: String,
     /// A single-use ticket for exactly this call.
     ///
-    /// **Without it `run_tool` is a filesystem read that takes a path.** The
-    /// approval would live entirely in the frontend, and `tools.rs` would be
-    /// promising a guarantee Rust could not enforce — anything reaching the IPC
-    /// boundary could read any file by asking. The renderer is hardened, so this
-    /// is not exploitable today; it is the difference between "nothing else can
-    /// reach this" and "nothing else *may*".
+    /// **Without it `run_tool` would be a filesystem operation that takes
+    /// arguments.** The approval would live entirely in the frontend, and
+    /// `tools.rs` would be promising a guarantee Rust could not enforce. With
+    /// it, the only thing the webview can do is redeem what it was shown.
     token: String,
+    /// The diff, for an edit. Computed by the same plan [`edit::apply`] writes,
+    /// so what is approved and what is written cannot disagree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diff: Option<DiffView>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DiffView {
+    hunks: Vec<edit::Hunk>,
+    added: usize,
+    removed: usize,
+    create: bool,
+}
+
+/// A call that is waiting for a decision.
+///
+/// **For an edit, the whole plan lives here** — resolved path, exact bytes to
+/// write, the hash of the file it was planned against. `run_tool` redeems the
+/// ticket and applies *this*. Nothing about the edit is taken back from the
+/// webview, so a compromised or buggy page cannot approve one thing and write
+/// another.
+struct Armed {
+    token: String,
+    name: String,
+    path: String,
+    plan: Option<edit::Plan>,
 }
 
 /// The one call currently awaiting approval.
@@ -375,15 +402,14 @@ struct PendingCall {
 /// One slot, not a set: the UI shows a single approval card and waits, so a
 /// second pending call would mean a bug rather than a queue. Issuing a new
 /// ticket invalidates the previous one.
-static PENDING: std::sync::OnceLock<std::sync::Mutex<Option<(String, String, String)>>> =
-    std::sync::OnceLock::new();
+static PENDING: std::sync::OnceLock<std::sync::Mutex<Option<Armed>>> = std::sync::OnceLock::new();
 
-fn pending() -> &'static std::sync::Mutex<Option<(String, String, String)>> {
+fn pending() -> &'static std::sync::Mutex<Option<Armed>> {
     PENDING.get_or_init(|| std::sync::Mutex::new(None))
 }
 
 /// Issue a ticket for a call, replacing any outstanding one.
-fn arm(name: &str, path: &str) -> String {
+fn arm(name: &str, path: &str, plan: Option<edit::Plan>) -> String {
     let token = format!(
         "{:x}",
         std::time::SystemTime::now()
@@ -392,7 +418,7 @@ fn arm(name: &str, path: &str) -> String {
             .unwrap_or_default()
     );
     if let Ok(mut slot) = pending().lock() {
-        *slot = Some((token.clone(), name.to_string(), path.to_string()));
+        *slot = Some(Armed { token: token.clone(), name: name.into(), path: path.into(), plan });
     }
     token
 }
@@ -403,38 +429,48 @@ fn arm(name: &str, path: &str) -> String {
 /// rather than leaving it for a second try, so a caller cannot guess repeatedly
 /// against a standing approval.
 fn redeem_in(
-    slot: &mut Option<(String, String, String)>,
+    slot: &mut Option<Armed>,
     token: &str,
     name: &str,
     path: &str,
-) -> Result<(), String> {
+) -> Result<Option<edit::Plan>, String> {
     match slot.take() {
-        Some((t, n, p)) if t == token && n == name && p == path => Ok(()),
+        Some(a) if a.token == token && a.name == name && a.path == path => Ok(a.plan),
         _ => Err("this call was not approved".to_string()),
     }
 }
 
 /// Spend a ticket. Fails unless it matches the exact call that was approved.
-fn redeem(token: &str, name: &str, path: &str) -> Result<(), String> {
+fn redeem(token: &str, name: &str, path: &str) -> Result<Option<edit::Plan>, String> {
     let mut slot = pending().lock().map_err(|_| "approval state poisoned")?;
     redeem_in(&mut slot, token, name, path)
 }
 
-/// Ask the model, offering the one tool, and report back what it wants.
+/// The project folder, if one is chosen and still exists.
 ///
-/// **This does not run anything.** It returns either an answer or a request,
-/// and the request is shown to the user with the exact path before a single
-/// byte is read. Every tool is code the model chose to run, so the approval is
-/// the point of the chunk rather than a detail of it.
+/// Opened fresh each time rather than cached: the folder can be renamed or
+/// deleted while the app is open, and editing into a stale path would be worse
+/// than saying editing is off.
+fn workspace(cfg: &config::Config) -> Option<edit::Workspace> {
+    cfg.workspace.as_deref().and_then(|p| edit::Workspace::open(p).ok())
+}
+
+/// Ask the model, offering the tools, and report back what it wants.
+///
+/// **This does not run anything.** It returns an answer, a request to approve,
+/// or — for a request that could never succeed, like an edit whose text is not
+/// in the file — a rejection, which goes straight back to the model so it can
+/// read the file again and retry without the user being asked about something
+/// impossible.
 #[tauri::command]
 async fn ask_with_tools(
-    messages: Vec<Message>,
+    mut messages: Vec<Message>,
     model: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let cfg = tauri::async_runtime::spawn_blocking(config::load)
         .await
         .unwrap_or_default();
-    let model = model.unwrap_or(cfg.model);
+    let model = model.unwrap_or(cfg.model.clone());
 
     // Offering tools to a model that cannot carry them wastes a round trip and
     // produces a confusing prose answer instead of a call. Better to say so.
@@ -448,62 +484,261 @@ async fn ask_with_tools(
         }
     }
 
+    let ws = tauri::async_runtime::spawn_blocking({
+        let cfg = cfg.clone();
+        move || workspace(&cfg)
+    })
+    .await
+    .unwrap_or(None);
+    // The folder and the read-before-edit habit, stated once. Added here rather
+    // than stored in the thread, so it always names the folder chosen *now*.
+    if let Some(ws) = &ws {
+        messages.insert(0, Message::system(tools::system_prompt(ws)));
+    }
+
+    // Kept for counting repeats: the history the model has already seen.
+    let history = messages.clone();
     let num_ctx = cfg.num_ctx;
+    let offered = tools::available(ws.is_some());
     let reply = tauri::async_runtime::spawn_blocking(move || {
-        chat::chat(&model, &messages, &tools::available(), Options::new(num_ctx))
+        chat::chat_tools(&model, &messages, &offered, Options::new(num_ctx))
     })
     .await
     .map_err(|e| format!("tool turn failed: {e}"))??;
+    if reply.recovered {
+        println!("[citadel] a malformed tool call was recovered through the raw retry");
+    }
 
     // The first call only. A model that asks for several at once is handled one
     // at a time, because each one needs its own approval.
-    if let Some(call) = reply.tool_calls().first() {
-        let requested = tools::interpret(call)?;
+    let Some(call) = reply.tool_calls().first().cloned() else {
         return Ok(serde_json::json!({
-            "kind": "call",
-            "call": PendingCall {
-                token: arm(&requested.name, &requested.path),
-                name: requested.name,
-                path: requested.path,
-            },
-            // The raw call, so the caller can put the assistant turn that asked
-            // for it back into the conversation before the tool result.
-            //
-            // **Without it the loop does not close.** Ollama expects
-            // assistant(tool_calls) → tool(result); a tool message with no call
-            // in front of it is an answer to a question the model never sees
-            // itself having asked, so it simply asks again. The G6 probe did
-            // this correctly and the app did not, which is exactly the gap a
-            // probe can hide.
-            "rawCall": call,
+            "kind": "answer",
+            "content": reply.message.content,
+            "promptEvalCount": reply.prompt_eval_count,
+            "evalCount": reply.eval_count,
+        }));
+    };
+
+    // A call that has already failed identically, twice, ends the turn: the file
+    // has not changed, so a third try cannot go differently, and each one costs
+    // a round. Measured at G7 - the model once repeated one impossible edit
+    // eight times running.
+    let prior = tools::prior_failures(&history, &call);
+    if prior + 1 >= tools::MAX_IDENTICAL_FAILURES {
+        return Ok(serde_json::json!({
+            "kind": "stuck",
+            "error": format!(
+                "the model kept repeating a {} call that could not be carried out, so it was stopped",
+                call.function.name
+            ),
         }));
     }
 
+    // Rejected without asking anyone: the reason goes back to the model. The raw
+    // call goes with it, so the conversation shows the model its own attempt.
+    let reject = |name: &str, path: &str, why: String| {
+        let why = if prior > 0 { format!("{why}{}", tools::REPEATED_NOTE) } else { why };
+        serde_json::json!({
+            "kind": "rejected",
+            "name": name,
+            "path": path,
+            "error": why,
+            "rawCall": call,
+        })
+    };
+
+    if call.function.name == chat::INVALID_TOOL_CALL {
+        let why = call.function.arguments["error"].as_str().unwrap_or("unreadable").to_string();
+        return Ok(reject("tool call", "", format!("{why}. Send the call again as valid JSON.")));
+    }
+    let request = match tools::interpret(&call) {
+        Ok(r) => r,
+        Err(e) => return Ok(reject(&call.function.name, "", e)),
+    };
+
+    let (name, path, plan) = match request {
+        tools::Request::Read { path } => {
+            let target = tools::read_target(&path, ws.as_ref());
+            ("read_file", target, None)
+        }
+        tools::Request::Rewrite { path, .. } => {
+            return Ok(reject("write_file", &path, "no such tool: write_file — use edit_file".into()));
+        }
+        tools::Request::Edit { .. } | tools::Request::Create { .. } if ws.is_none() => {
+            return Ok(reject(
+                request.name(),
+                request.path(),
+                "editing is off: the user has not chosen a project folder".into(),
+            ));
+        }
+        tools::Request::Edit { path, old_text, new_text } => {
+            let ws = ws.clone().expect("checked above");
+            let planned = tauri::async_runtime::spawn_blocking(move || {
+                edit::plan_replace(&ws, &path, &old_text, &new_text)
+            })
+            .await
+            .map_err(|e| format!("planning the edit failed: {e}"))?;
+            match planned {
+                Ok(p) => ("edit_file", p.display.clone(), Some(p)),
+                Err(e) => return Ok(reject("edit_file", request_path(&call), format!("error: {e}"))),
+            }
+        }
+        tools::Request::Create { path, content } => {
+            let ws = ws.clone().expect("checked above");
+            let planned =
+                tauri::async_runtime::spawn_blocking(move || edit::plan_create(&ws, &path, &content))
+                    .await
+                    .map_err(|e| format!("planning the new file failed: {e}"))?;
+            match planned {
+                Ok(p) => ("create_file", p.display.clone(), Some(p)),
+                Err(e) => return Ok(reject("create_file", request_path(&call), format!("error: {e}"))),
+            }
+        }
+    };
+
+    let diff = plan.as_ref().map(|p| DiffView {
+        hunks: p.hunks.clone(),
+        added: p.added,
+        removed: p.removed,
+        create: p.create,
+    });
     Ok(serde_json::json!({
-        "kind": "answer",
-        "content": reply.message.content,
-        "promptEvalCount": reply.prompt_eval_count,
-        "evalCount": reply.eval_count,
+        "kind": "call",
+        "call": PendingCall { token: arm(name, &path, plan), name: name.to_string(), path, diff },
+        // The raw call, so the caller can put the assistant turn that asked
+        // for it back into the conversation before the tool result.
+        //
+        // **Without it the loop does not close.** Ollama expects
+        // assistant(tool_calls) → tool(result); a tool message with no call in
+        // front of it answers a question the model cannot see itself asking.
+        "rawCall": call,
     }))
 }
 
-/// Run a call the user has just approved, and return what the tool produced.
+fn request_path(call: &chat::ToolCall) -> &str {
+    call.function.arguments["path"].as_str().unwrap_or("")
+}
+
+/// What running an approved call produced.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Ran {
+    /// Goes back to the model.
+    result: String,
+    /// For an edit that was written: the handle to undo it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    undo: Option<String>,
+}
+
+/// Run a call the user has just approved.
 ///
-/// Takes the path the UI displayed rather than re-reading the model's request,
-/// so what was approved is exactly what runs. Anything else would make the
-/// confirmation a formality.
+/// Redeems the ticket and runs **what the ticket holds** — for an edit, the plan
+/// computed when the diff was shown. The webview names the call it approved;
+/// it never supplies what to write.
 #[tauri::command]
-async fn run_tool(name: String, path: String, token: String) -> Result<String, String> {
-    if name != "read_file" {
-        return Err(format!("no such tool: {name}"));
-    }
+async fn run_tool(name: String, path: String, token: String) -> Result<Ran, String> {
     // Before anything touches the disk. The ticket was issued when the UI was
-    // shown this exact name and path, and is spent here - so what runs is what
-    // was approved, and it runs once.
-    redeem(&token, &name, &path)?;
-    tauri::async_runtime::spawn_blocking(move || tools::run_read_file(&path))
+    // shown this exact call, and is spent here - so what runs is what was
+    // approved, and it runs once.
+    let plan = redeem(&token, &name, &path)?;
+    tauri::async_runtime::spawn_blocking(move || match (name.as_str(), plan) {
+        ("read_file", None) => Ok(Ran { result: tools::run_read_file(&path), undo: None }),
+        ("edit_file" | "create_file", Some(plan)) => {
+            let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
+            // A file changed since the diff was shown is refused, not written:
+            // the model is told, and can read it again.
+            Ok(match edit::apply(&plan, &backups) {
+                Ok(done) => Ran { result: tools::applied_message(&done), undo: Some(done.id) },
+                Err(e) => Ran { result: format!("error: {e}"), undo: None },
+            })
+        }
+        (other, _) => Err(format!("no such tool: {other}")),
+    })
+    .await
+    .map_err(|e| format!("running the tool failed: {e}"))?
+}
+
+/// Put a file back the way it was before one edit.
+///
+/// Refused — by [`edit::undo`] — if the file has changed since, so undo never
+/// throws away work done after the edit.
+#[tauri::command]
+async fn undo_edit(id: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
+        edit::undo(&id, &backups)
+    })
+    .await
+    .map_err(|e| format!("undo failed: {e}"))?
+}
+
+// ── the project folder ──────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct Folder {
+    path: String,
+    name: String,
+}
+
+fn folder(ws: &edit::Workspace) -> Folder {
+    let path = ws.root_display();
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.clone());
+    Folder { path, name }
+}
+
+/// The folder edits are confined to, or `None` when editing is off.
+#[tauri::command]
+async fn project_folder() -> Result<Option<Folder>, String> {
+    tauri::async_runtime::spawn_blocking(|| workspace(&config::load()).map(|ws| folder(&ws)))
         .await
-        .map_err(|e| format!("running the tool failed: {e}"))
+        .map_err(|e| format!("reading the project folder failed: {e}"))
+}
+
+/// Choose the project folder **with the system's own folder picker.**
+///
+/// There is deliberately no command that takes a path. The only way to widen
+/// what the model may edit is a native dialog a person operates — so nothing
+/// that reaches the IPC boundary, a hostile page included, can choose a folder
+/// by itself. Cancelling leaves the current choice alone.
+#[tauri::command]
+async fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<Folder>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog().file().set_title("Choose the folder Citadel may edit").blocking_pick_folder()
+    })
+    .await
+    .map_err(|e| format!("the folder picker failed: {e}"))?;
+    let Some(picked) = picked else {
+        return Ok(None);
+    };
+    let dir = picked.into_path().map_err(|e| format!("that is not a folder on this machine: {e}"))?;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let ws = edit::Workspace::open(&dir)?;
+        let mut cfg = config::load();
+        cfg.workspace = Some(ws.root_display());
+        config::save(&cfg)?;
+        Ok(Some(folder(&ws)))
+    })
+    .await
+    .map_err(|e| format!("saving the project folder failed: {e}"))?
+}
+
+/// Turn editing off. Reads keep working, one approved file at a time.
+#[tauri::command]
+async fn clear_project_folder() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut cfg = config::load();
+        cfg.workspace = None;
+        config::save(&cfg)
+    })
+    .await
+    .map_err(|e| format!("clearing the project folder failed: {e}"))?
 }
 
 // ── attachments ─────────────────────────────────────────────────────────────
@@ -585,6 +820,9 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        // Used only from Rust, by choose_project_folder. The capability file grants
+        // the webview no dialog permission, so a page cannot open a picker itself.
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             send,
             models,
@@ -598,6 +836,10 @@ pub fn run() {
             get_attachment,
             ask_with_tools,
             run_tool,
+            undo_edit,
+            project_folder,
+            choose_project_folder,
+            clear_project_folder,
             load_model,
             unload_model,
             set_model
@@ -618,10 +860,10 @@ mod tests {
     /// They drive `redeem_in` with a local slot rather than the process-wide
     /// one, because tests run in parallel and a shared static would make them
     /// interfere with each other instead of with the thing under test.
-    fn armed(name: &str, path: &str) -> (Option<(String, String, String)>, String) {
+    fn armed(name: &str, path: &str) -> (Option<Armed>, String) {
         let token = "ticket-1".to_string();
         (
-            Some((token.clone(), name.to_string(), path.to_string())),
+            Some(Armed { token: token.clone(), name: name.into(), path: path.into(), plan: None }),
             token,
         )
     }
@@ -661,11 +903,35 @@ mod tests {
 
     #[test]
     fn arming_issues_a_ticket_for_exactly_that_call() {
-        let token = arm("read_file", "C:/from-arm.txt");
+        let token = arm("read_file", "C:/from-arm.txt", None);
         assert!(!token.is_empty());
         // Whatever was outstanding is replaced, so only the newest call stands.
         let slot = pending().lock().unwrap();
-        let (t, n, p) = slot.as_ref().expect("a call should be armed");
-        assert_eq!((t.as_str(), n.as_str(), p.as_str()), (token.as_str(), "read_file", "C:/from-arm.txt"));
+        let a = slot.as_ref().expect("a call should be armed");
+        assert_eq!((a.token.as_str(), a.name.as_str(), a.path.as_str()), (token.as_str(), "read_file", "C:/from-arm.txt"));
+    }
+
+    /// **The edit that runs is the one that was planned** - the ticket hands back
+    /// the stored plan, and nothing about the edit comes from the caller.
+    #[test]
+    fn an_edit_ticket_redeems_the_plan_it_was_armed_with() {
+        let dir = std::env::temp_dir().join(format!("citadel-plan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "one
+").unwrap();
+        let ws = edit::Workspace::open(&dir).unwrap();
+        let plan = edit::plan_replace(&ws, "a.txt", "one", "two").unwrap();
+        let mut slot = Some(Armed { token: "t".into(), name: "edit_file".into(), path: "a.txt".into(), plan: Some(plan.clone()) });
+        let got = redeem_in(&mut slot, "t", "edit_file", "a.txt").unwrap();
+        assert_eq!(got, Some(plan));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn an_edit_ticket_cannot_be_redeemed_as_a_read() {
+        // Same token and path, different tool: a read must not get the plan, and
+        // must not be allowed to run on an edit's approval.
+        let mut slot = Some(Armed { token: "t".into(), name: "edit_file".into(), path: "a.txt".into(), plan: None });
+        assert!(redeem_in(&mut slot, "t", "read_file", "a.txt").is_err());
     }
 }

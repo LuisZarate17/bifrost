@@ -1,5 +1,6 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Pencil, Trash } from "./Icons";
 
 export type Summary = {
   id: string;
@@ -8,19 +9,27 @@ export type Summary = {
   messageCount: number;
 };
 
-/** `2026-09-19T14:03:11Z` → `19 Sep 14:03`, or `14:03` if it is today. */
-function when(stamp: string): string {
+/**
+ * Which bucket a conversation belongs in — Today, Yesterday, Previous 7 days,
+ * Older.
+ *
+ * Grouped by recency rather than listed with a timestamp on every row: the
+ * question you ask the list is "where was that thing from this morning", and a
+ * heading answers it faster than reading a column of dates.
+ */
+function bucketOf(stamp: string, now: Date): string {
   const d = new Date(stamp);
-  if (Number.isNaN(d.getTime())) return "";
-  const today = new Date();
-  const sameDay =
-    d.getDate() === today.getDate() &&
-    d.getMonth() === today.getMonth() &&
-    d.getFullYear() === today.getFullYear();
-  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  if (sameDay) return time;
-  return `${d.toLocaleDateString(undefined, { day: "numeric", month: "short" })} ${time}`;
+  if (Number.isNaN(d.getTime())) return "Older";
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOf(now) - startOf(d)) / 86_400_000);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return "Previous 7 days";
+  if (days < 30) return "Previous 30 days";
+  return "Older";
 }
+
+const ORDER = ["Today", "Yesterday", "Previous 7 days", "Previous 30 days", "Older"];
 
 /**
  * The conversation list — pick, rename, delete.
@@ -32,23 +41,30 @@ export function Conversations({
   items,
   currentId,
   onOpen,
-  onNew,
   onChanged,
   busy,
 }: {
   items: Summary[];
   currentId: string | null;
   onOpen: (id: string) => void;
-  onNew: () => void;
   onChanged: () => void;
   busy: boolean;
 }) {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
-  // Delete is confirmed in place rather than with a dialog: the popup-free
-  // version is one click to arm and one to confirm, and it cannot be dismissed
-  // by accident into deleting anyway.
+  // Delete is confirmed in place rather than with a dialog: one click to arm and
+  // one to confirm, and nothing that can be dismissed into deleting by accident.
   const [confirming, setConfirming] = useState<string | null>(null);
+
+  const groups = useMemo(() => {
+    const now = new Date();
+    const by = new Map<string, Summary[]>();
+    for (const c of items) {
+      const k = bucketOf(c.updatedAt, now);
+      by.set(k, [...(by.get(k) ?? []), c]);
+    }
+    return ORDER.filter((k) => by.has(k)).map((k) => ({ label: k, items: by.get(k)! }));
+  }, [items]);
 
   const commitRename = useCallback(
     async (id: string) => {
@@ -59,7 +75,7 @@ export function Conversations({
         await invoke("rename_conversation", { id, title });
         onChanged();
       } catch {
-        /* the list refresh below will show whatever actually happened */
+        /* the list refresh will show whatever actually happened */
       }
     },
     [draft, onChanged],
@@ -78,72 +94,101 @@ export function Conversations({
     [onChanged],
   );
 
+  if (items.length === 0) {
+    return (
+      <p className="cv-empty">
+        Conversations you have appear here. Each one is a file on this machine.
+      </p>
+    );
+  }
+
   return (
-    <aside className="convos">
-      <div className="cv-head">
-        <strong>Conversations</strong>
-        <button onClick={onNew} disabled={busy}>
-          New
-        </button>
-      </div>
+    <nav className="cv" aria-label="Conversations">
+      {groups.map((g) => (
+        <section key={g.label} className="cv-group">
+          <h3 className="cv-label">{g.label}</h3>
+          <ul className="cv-list">
+            {g.items.map((c) => {
+              const title = c.title.trim() || "Untitled";
+              return (
+                <li
+                  key={c.id}
+                  className={
+                    "cv-item" +
+                    (c.id === currentId ? " current" : "") +
+                    (confirming === c.id ? " arming" : "")
+                  }
+                >
+                  {renaming === c.id ? (
+                    <input
+                      className="cv-rename"
+                      value={draft}
+                      autoFocus
+                      aria-label="Rename conversation"
+                      onChange={(e) => setDraft(e.target.value)}
+                      onBlur={() => void commitRename(c.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void commitRename(c.id);
+                        if (e.key === "Escape") setRenaming(null);
+                      }}
+                    />
+                  ) : (
+                    <button
+                      className="cv-open"
+                      onClick={() => onOpen(c.id)}
+                      onDoubleClick={() => {
+                        setRenaming(c.id);
+                        setDraft(c.title);
+                      }}
+                      disabled={busy}
+                      title={`${title} · ${c.messageCount} messages`}
+                    >
+                      {title}
+                    </button>
+                  )}
 
-      {items.length === 0 && (
-        <p className="cv-empty">Nothing saved yet. Ask something and it will appear here.</p>
-      )}
-
-      <ul className="cv-list">
-        {items.map((c) => (
-          <li key={c.id} className={c.id === currentId ? "picked" : ""}>
-            {renaming === c.id ? (
-              <input
-                className="cv-rename"
-                value={draft}
-                autoFocus
-                onChange={(e) => setDraft(e.target.value)}
-                onBlur={() => void commitRename(c.id)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void commitRename(c.id);
-                  if (e.key === "Escape") setRenaming(null);
-                }}
-              />
-            ) : (
-              <button
-                className="cv-open"
-                onClick={() => onOpen(c.id)}
-                onDoubleClick={() => {
-                  setRenaming(c.id);
-                  setDraft(c.title);
-                }}
-                disabled={busy}
-                title={`${c.title}\n${c.messageCount} messages · double-click to rename`}
-              >
-                <span className="cv-title">{c.title}</span>
-                <span className="cv-when">{when(c.updatedAt)}</span>
-              </button>
-            )}
-
-            {confirming === c.id ? (
-              <span className="cv-confirm">
-                <button className="danger" onClick={() => void remove(c.id)}>
-                  Delete
-                </button>
-                <button className="ghost" onClick={() => setConfirming(null)}>
-                  Keep
-                </button>
-              </span>
-            ) : (
-              <button
-                className="cv-x ghost"
-                onClick={() => setConfirming(c.id)}
-                disabled={busy}
-                title="Delete this conversation"
-              >
-                ×
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
-    </aside>
+                  {confirming === c.id ? (
+                    <span className="cv-confirm">
+                      <button className="btn danger xs" onClick={() => void remove(c.id)}>
+                        Delete
+                      </button>
+                      <button className="btn ghost xs" onClick={() => setConfirming(null)}>
+                        Keep
+                      </button>
+                    </span>
+                  ) : (
+                    renaming !== c.id && (
+                      <span className="cv-actions">
+                        <button
+                          className="icon-btn sm"
+                          onClick={() => {
+                            setRenaming(c.id);
+                            setDraft(c.title);
+                          }}
+                          disabled={busy}
+                          title="Rename"
+                          aria-label={`Rename ${title}`}
+                        >
+                          <Pencil />
+                        </button>
+                        <button
+                          className="icon-btn sm"
+                          onClick={() => setConfirming(c.id)}
+                          disabled={busy}
+                          title="Delete"
+                          aria-label={`Delete ${title}`}
+                        >
+                          <Trash />
+                        </button>
+                      </span>
+                    )
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
+    </nav>
   );
 }

@@ -43,7 +43,7 @@ records of what happened.
 - **[STAGE-A.md](../stages/STAGE-A.md)** — foundations, no GUI. Complete.
 - **[STAGE-B.md](../stages/STAGE-B.md)** — the app shell. Complete.
 - **[STAGE-G.md](../stages/STAGE-G.md)** — **Citadel**, the local chat app sharing Warden's
-  model. Built through G6; the testing round is open.
+  model. Built through G7 (editing files); the testing round is open.
 
 ---
 
@@ -62,6 +62,12 @@ names don't, so grep the name if a number has gone stale.
 - **Start Ollama if it is down** — `ollama.rs` → `is_running()`, `ensure_running()`
 - **What the card is *actually* holding** — `vram.rs` → `Card::open()`, `sample()`
 - **The default prompt** — `ollama.rs` → `DEFAULT_PROMPT`
+- **Editing a file safely** — `edit.rs` → `Workspace` (containment), `plan_replace()`,
+  `plan_create()`, `apply()`, `undo()`. Plan first, write the plan, refuse over a changed file
+- **The tools the model is offered, and their wording** — `tools.rs` → `available()`,
+  `system_prompt()`, `interpret()`, `prior_failures()` (loop-breaking)
+- **Recovering a tool call Ollama could not parse** — `chat.rs` → `chat_tools()`, and
+  `toolcall.rs` → `render_chatml()`, `parse_call()`. The G7 `"{` escaping failure, and its fix
 
 > Everything here is **blocking by design**. Calling it from an `async` Tauri command drops a tokio
 > runtime inside an async context and kills the worker. Go through `spawn_blocking`.
@@ -127,6 +133,11 @@ package from G1, so **one renderer means one security review rather than two tha
 ### `crates/bench/` and `evals/` — measuring models
 
 - **Run model × image × prompt** — `crates/bench/src/main.rs`
+- **Can the model call tools?** — `crates/bench/src/bin/toolprobe.rs` (G0)
+- **Can the model edit files correctly?** — `crates/bench/src/bin/editprobe.rs` (G7), scored byte
+  for byte on CRLF files: `cargo run -p bench --bin editprobe`
+- **Citadel's file editing, end to end** — `tools/e2e/citadel-edit.mjs`. Drives the running app
+  over its WebView2 debug port with the real model; 16 checks, leaves nothing behind
 - **The grading rubric** — `evals/cases.md`
 - **Cases that regenerate from tracked source** — `evals/fixtures/`
 - **Saved runs** — `evals/out/`
@@ -183,6 +194,9 @@ Finished chunks: what was built, what was measured, what the measurement changed
   because the model tiles it — so two images and a little history is most of 32k
 - **[G6](results/G6-results.md)** — the tool loop. Off by default, no allowlist, no “always allow”;
   approval is a one-shot ticket redeemed in Rust against the exact path that was shown
+- **[G7](results/G7-results.md)** — editing files. **76% → 98% byte-exact** over three probe
+  rounds; search-and-replace beat whole-file rewrite, which corrupted lines it was never asked to
+  touch. Found Ollama crashing on the model's own tool calls, and recovered them
 
 **Stage F — keep testing models**
 

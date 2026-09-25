@@ -192,6 +192,10 @@ pub struct ChatReply {
     pub ttft: Option<Duration>,
     pub prompt_eval_count: u32,
     pub eval_count: u32,
+    /// True when Ollama rejected a malformed tool call and the turn was
+    /// recovered through [`chat_tools`]'s raw retry. How often this fires is
+    /// how you know whether the recovery is still needed.
+    pub recovered: bool,
 }
 
 impl ChatReply {
@@ -276,8 +280,134 @@ pub fn chat(
         ttft: None,
         prompt_eval_count: raw.prompt_eval_count,
         eval_count: raw.eval_count,
+        recovered: false,
     })
 }
+
+/// [`chat`] with tools, plus a recovery for the one malformed call Ollama
+/// cannot parse — see [`crate::toolcall`] for the measured failure.
+///
+/// **Native first, always.** That is the path G6 verified and the only one that
+/// carries images. Only when Ollama answers with a JSON parse error for the
+/// model's call — and only for a model that speaks Qwen's chat format — is the
+/// same turn asked again through raw `/api/generate`, where the text comes back
+/// untouched and [`crate::toolcall::parse_call`] can repair it.
+///
+/// A call that still cannot be read comes back as an [`INVALID_TOOL_CALL`], so
+/// the caller tells the model — which can try again — instead of the turn ending
+/// in an HTTP 500.
+pub fn chat_tools(
+    model: &str,
+    messages: &[Message],
+    tools: &[Tool],
+    options: Options,
+) -> Result<ChatReply, String> {
+    match chat(model, messages, tools, options) {
+        Err(e) if is_malformed_call(&e) && speaks_chatml(model) => recover(model, messages, tools, options),
+        other => other,
+    }
+}
+
+/// Ollama's wording when the model's tool-call JSON would not parse. Matched
+/// narrowly on purpose: every other error should surface exactly as it was.
+fn is_malformed_call(err: &str) -> bool {
+    err.contains("returned 500")
+        && ["invalid character", "unexpected end of JSON input", "cannot unmarshal"]
+            .iter()
+            .any(|m| err.contains(m))
+}
+
+/// Qwen-family models use the ChatML layout [`crate::toolcall::render_chatml`]
+/// writes. Anything else keeps Ollama's own error rather than getting a prompt
+/// in a format it was not trained on.
+fn speaks_chatml(model: &str) -> bool {
+    crate::ollama::show_cached(model)
+        .map(|d| d.family.starts_with("qwen"))
+        .unwrap_or(false)
+}
+
+#[derive(Deserialize)]
+struct RawGenerate {
+    #[serde(default)]
+    response: String,
+    #[serde(default)]
+    load_duration: u64,
+    #[serde(default)]
+    total_duration: u64,
+    #[serde(default)]
+    prompt_eval_count: u32,
+    #[serde(default)]
+    eval_count: u32,
+}
+
+fn recover(model: &str, messages: &[Message], tools: &[Tool], options: Options) -> Result<ChatReply, String> {
+    let prompt = crate::toolcall::render_chatml(messages, tools);
+    let mut opts = serde_json::json!({
+        "num_ctx": options.num_ctx,
+        "stop": ["<|im_end|>", "<|endoftext|>"],
+    });
+    if let Some(t) = options.temperature {
+        opts["temperature"] = serde_json::json!(t);
+    }
+    let body = serde_json::json!({
+        "model": model,
+        "prompt": prompt,
+        "raw": true,
+        "stream": false,
+        "options": opts,
+    });
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(CHAT_TIMEOUT)
+        .build()
+        .map_err(|e| format!("building client: {e}"))?;
+    let response = client
+        .post(ollama::url("/api/generate"))
+        .json(&body)
+        .send()
+        .map_err(|e| format!("POST /api/generate (tool-call recovery): {e}"))?;
+    let status = response.status();
+    let text = response.text().map_err(|e| format!("reading /api/generate body: {e}"))?;
+    if !status.is_success() {
+        return Err(format!("tool-call recovery: /api/generate returned {status}: {}", text.trim()));
+    }
+    let raw: RawGenerate =
+        serde_json::from_str(&text).map_err(|e| format!("parsing /api/generate reply: {e}"))?;
+
+    let (content, mut calls, failures) = crate::toolcall::extract_calls(&raw.response, tools);
+    if calls.is_empty()
+        && let Some(why) = failures.into_iter().next()
+    {
+        calls.push(ToolCall {
+            id: None,
+            function: FunctionCall {
+                name: INVALID_TOOL_CALL.to_string(),
+                arguments: serde_json::json!({ "error": why }),
+            },
+        });
+    }
+
+    Ok(ChatReply {
+        message: Message {
+            role: "assistant".to_string(),
+            content,
+            images: None,
+            tool_calls: if calls.is_empty() { None } else { Some(calls) },
+            tool_name: None,
+        },
+        load: Duration::from_nanos(raw.load_duration),
+        total: Duration::from_nanos(raw.total_duration),
+        ttft: None,
+        prompt_eval_count: raw.prompt_eval_count,
+        eval_count: raw.eval_count,
+        recovered: true,
+    })
+}
+
+/// The name [`chat_tools`] gives a call it could not read even after repair,
+/// so the caller hands the reason back to the model rather than running
+/// anything.
+pub const INVALID_TOOL_CALL: &str = "invalid_tool_call";
 
 /// One thing that arrived while the model was answering.
 pub enum StreamChunk<'a> {
@@ -360,6 +490,7 @@ pub fn stream(
         ttft: None,
         prompt_eval_count: 0,
         eval_count: 0,
+        recovered: false,
     };
 
     for line in BufReader::new(response).lines() {
@@ -442,6 +573,7 @@ mod tests {
             ttft: None,
             prompt_eval_count: 0,
             eval_count: 0,
+            recovered: false,
         };
         assert!(reply.tool_calls().is_empty());
     }

@@ -18,6 +18,23 @@ working copy change together rather than drifting apart mid-restructure.
 - [ ] **`gh repo rename odin`**, then update `origin`. GitHub redirects the old URL, so a stale
       clone keeps working.
 
+## Open — G7, editing files, 2026-09-24
+
+The model, the diff, the approval, Undo, Deny, a file changed behind the diff's back and a path
+outside the folder are all covered by `node tools/e2e/citadel-edit.mjs` — 16/16 on the shipped
+build. **What it deliberately skips is the one thing a person operates:** the folder picker. The test
+writes the folder into the config instead, because the app has no command that takes a folder path —
+by design.
+
+- [ ] **Turn Tools on, click Choose folder.** The Windows folder picker must open. Pick a real
+      project; the chip must show its name.
+- [ ] **Cancel the picker once.** The chip must keep whatever it had — cancelling is not clearing.
+- [ ] **Ask for a small real edit** in that project. Read the diff before you apply it: it must be
+      exactly the change, with the file's own line numbers.
+- [ ] **Undo it**, then check the file in your editor — it should be as it was, with no trace.
+- [ ] **Click the × on the folder chip.** Editing turns off; asking for an edit should now get
+      *"no project folder is chosen"* in the thread, and nothing written.
+
 ## Open — G6, the tool loop, 2026-09-19
 
 Gated on G0, which cleared it: `qwen3-vl:8b` scored 10/10 including four cases where calling a tool

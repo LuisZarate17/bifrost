@@ -8,15 +8,15 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ---
 
-## Where this stands — 2026-09-19
+## Where this stands — 2026-09-24
 
 **Stages A–C complete; Warden is finished and in daily use. Stage G is built** — the groundwork
 that turned this repo into a workspace two apps can live in, and **Citadel**, the local chat app,
-through G6. What remains is the testing round and the repo-root rename, both in
+through G7 — which now edits files. What remains is the testing round and the repo-root rename, both in
 [PENDING-CHECKS.md](PENDING-CHECKS.md). Chunk-by-chunk detail is in
 [`../stages/STAGE-G.md`](../stages/STAGE-G.md); this is the summary.
 
-### Stage G so far — 2026-09-19
+### Stage G so far — 2026-09-24
 
 | | | |
 |---|---|---|
@@ -34,6 +34,8 @@ through G6. What remains is the testing round and the repo-root rename, both in
 | **G4** | ✅ | Persistence — one JSON file per conversation; list, rename, delete. **[G4-results.md](results/G4-results.md)** — byte-identical round trip; fields carried before they are read |
 | **G5** | ✅ | Attachments — images as base64 on the message, bytes in their own files; text files folded in. **[G5-results.md](results/G5-results.md)** — 51 KB PNG → 68 KB base64; ~2,042 tokens per image whatever it shows |
 | **G6** | ✅ | The tool loop — one hardcoded tool, off by default, every call approved individually. **[G6-results.md](results/G6-results.md)** — approval is a one-shot ticket redeemed in Rust; bounded at 4 rounds |
+| **UI** | ✅ | Citadel redesigned after Claude's desktop app — sidebar grouped by date, centred reading column, serif answers (Sitka Text, a Windows font, so nothing is downloaded), Models dialog, GPU meter, light and dark. Chat logic byte-identical before and after |
+| **G7** | ✅ | **Editing files**, confined to one folder picked with the system dialog; a diff you approve, a backup, and Undo. **[G7-results.md](results/G7-results.md)** — probe **76% → 98%** byte-exact over three rounds; end-to-end **16/16** on the shipped build. Found and worked around an Ollama crash on the model's own tool calls |
 
 G5 and G6 close the packet. Its bar is *you keep it open, and reach for it instead of a browser
 tab* — which only using it can settle, so **built is not the same as done**.

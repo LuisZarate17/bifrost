@@ -14,10 +14,10 @@
       {
         "label": "main",
         "title": "Citadel",
-        "width": 900,
-        "height": 700,
+        "width": 1180,
+        "height": 800,
         "minWidth": 480,
-        "minHeight": 400,
+        "minHeight": 480,
         "resizable": true,
         "decorations": true,
         "transparent": false,
