@@ -550,6 +550,11 @@ fn spawn_detached() -> Result<(), String> {
     for exe in candidates.iter().filter(|c| !c.is_empty()) {
         match std::process::Command::new(exe)
             .arg("serve")
+            // Ollama outlives whatever started it, and it would otherwise inherit that
+            // process's working directory — the repo, for an app launched from its shortcut.
+            // It held the repo open for a week and blocked renaming the folder (2026-09-25),
+            // and so did every model runner it spawned, which inherit it in turn.
+            .current_dir(std::env::temp_dir())
             .creation_flags(CREATE_NO_WINDOW)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
@@ -567,6 +572,7 @@ fn spawn_detached() -> Result<(), String> {
 fn spawn_detached() -> Result<(), String> {
     std::process::Command::new("ollama")
         .arg("serve")
+        .current_dir(std::env::temp_dir()) // see the Windows version above
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

@@ -72,7 +72,7 @@ pub fn status(tag: &str) -> Result<(), String> {
     if !ollama::is_running() {
         println!("model   {tag}");
         println!("state   Off");
-        println!("ollama  not running — `capture warm` will start it");
+        println!("ollama  not running — `odin warm` will start it");
         return Ok(());
     }
 
