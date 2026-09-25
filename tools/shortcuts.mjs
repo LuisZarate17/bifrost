@@ -30,9 +30,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
  * two processes that happen to share a model, and either alone is fully usable —
  * so they get two shortcuts rather than one launcher with a menu.
  *
- * Their icons come from the same shield in `tools/icon/`, in different palettes:
- * Warden is `sentinel`, Citadel is `phantom`. Same family, different mark, which
- * is the point — two identical icons on the Desktop is worse than no icon at all.
+ * Their icons come from `tools/icon/`: Warden is the `sentinel` shield, Citadel
+ * the `bastion` tower. Same family, different silhouette — two identical icons
+ * on the Desktop is worse than no icon at all, and a recoloured shield turned out
+ * to be too close to tell apart at taskbar size.
  */
 const APPS = [
   {

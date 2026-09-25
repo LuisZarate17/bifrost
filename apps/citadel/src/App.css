@@ -5,8 +5,9 @@
    middle of an empty chat and docks once one starts, answers in a serif. The
    surface values follow the lightness steps Claude publishes for its own UI
    (a deep sidebar, a main surface, raised cards, hairline borders), tuned a
-   little cool to sit beside the phantom icon, whose violet eye is the one
-   accent.
+   little cool so the one accent — the red of the bastion icon's tower —
+   stands off them. Errors are orange-red rather than red, so an error and a
+   link never share a colour.
 
    Every font is a Windows system font. Citadel's rule is that nothing leaves
    the machine, so nothing is fetched to draw it either: Segoe UI Variable for
@@ -38,19 +39,19 @@
   --border-2: rgba(232, 230, 250, 0.13);
   --border-3: rgba(232, 230, 250, 0.22);
 
-  --accent: #8a63ff;
-  --accent-hover: #9a78ff;
-  --accent-text: #b9a5ff;
-  --accent-soft: rgba(138, 99, 255, 0.15);
-  --accent-line: rgba(138, 99, 255, 0.5);
+  --accent: #dc2f3c;
+  --accent-hover: #e03a46;
+  --accent-text: #ff6a73;
+  --accent-soft: rgba(220, 47, 60, 0.15);
+  --accent-line: rgba(220, 47, 60, 0.5);
 
   --ok: #6fcf97;
   --ok-soft: rgba(111, 207, 151, 0.14);
   --warn: #e7b85c;
   --warn-soft: rgba(231, 184, 92, 0.14);
-  --danger: #f08a86;
-  --danger-soft: rgba(240, 138, 134, 0.1);
-  --danger-line: rgba(240, 138, 134, 0.35);
+  --danger: #ff8f5e;
+  --danger-soft: rgba(255, 143, 94, 0.1);
+  --danger-line: rgba(255, 143, 94, 0.35);
 
   /* Code stays dark in both themes: the highlighter paints with a dark theme,
      and a light block would need a second one for no gain in legibility. */
@@ -97,19 +98,19 @@
     --border-2: rgba(22, 20, 40, 0.13);
     --border-3: rgba(22, 20, 40, 0.24);
 
-    --accent: #6b44ee;
-    --accent-hover: #5c35e0;
-    --accent-text: #5a33d8;
-    --accent-soft: rgba(107, 68, 238, 0.1);
-    --accent-line: rgba(107, 68, 238, 0.45);
+    --accent: #c81e2b;
+    --accent-hover: #b01824;
+    --accent-text: #c01a28;
+    --accent-soft: rgba(200, 30, 43, 0.1);
+    --accent-line: rgba(200, 30, 43, 0.45);
 
     --ok: #23864f;
     --ok-soft: rgba(35, 134, 79, 0.1);
     --warn: #9a6a10;
     --warn-soft: rgba(154, 106, 16, 0.1);
-    --danger: #b3382f;
-    --danger-soft: rgba(179, 56, 47, 0.07);
-    --danger-line: rgba(179, 56, 47, 0.3);
+    --danger: #c24a0e;
+    --danger-soft: rgba(194, 74, 14, 0.07);
+    --danger-line: rgba(194, 74, 14, 0.3);
 
     --code-inline: rgba(22, 20, 40, 0.07);
 

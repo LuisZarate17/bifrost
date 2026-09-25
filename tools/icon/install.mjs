@@ -1,15 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { png } from "./gen.mjs";
-import { shield, render, DESIGNS } from "./art.mjs";
+import { draw, render, DESIGNS } from "./art.mjs";
 import { ico } from "./ico.mjs";
 
 //   node tools/icon/install.mjs <out-dir> [design]
 //
-// The design defaults to Warden's. Citadel passes `phantom` — the same shield,
-// a different palette. PLAN.md decision #5 wants a variant from the same family
-// rather than the same image: two identical icons on the Desktop is worse than
-// no icon at all, and two *unrelated* ones stop reading as one project.
+// The design defaults to Warden's. Citadel passes `bastion` — a tower, not the
+// shield. PLAN.md decision #5 wants a variant from the same family rather than
+// the same image: two identical icons on the Desktop is worse than no icon at
+// all, and two *unrelated* ones stop reading as one project.
+//
+// Citadel used to be `phantom`, the same shield in violet. That met the letter of
+// #5 and failed it in use: at taskbar size a recoloured shield still read as
+// Warden, because at 16px shape carries identity and hue barely does. So the
+// family now lives in the grid, the outline-and-rim and the single lit feature,
+// and the silhouette is what tells the two apart.
 const out = process.argv[2];
 const design = process.argv[3] ?? "sentinel";
 
@@ -22,7 +28,7 @@ if (!DESIGNS[design]) {
   process.exit(2);
 }
 
-const grid = shield(DESIGNS[design]);
+const grid = draw(DESIGNS[design]);
 const at = (s) => ({ size: s, rgba: render(grid, s), png: png(s, s, render(grid, s)) });
 
 // The set tauri.conf.json names, plus the Store logos already in the folder.

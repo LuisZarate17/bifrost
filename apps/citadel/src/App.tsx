@@ -9,7 +9,7 @@ import {
 } from "./attach";
 import * as I from "./Icons";
 import { ToolCard } from "./ToolCard";
-// The phantom shield — the same art as Citadel's taskbar icon, so the window and
+// The bastion tower — the same art as Citadel's taskbar icon, so the window and
 // the thing you clicked to open it read as one object. 16×16 pixel art drawn at
 // 8×, shown at 2× or 4× so every cell lands on whole device pixels.
 import markUrl from "../src-tauri/icons/128x128.png";
