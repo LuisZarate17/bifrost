@@ -15,8 +15,9 @@ working copy change together rather than drifting apart mid-restructure.
 - [ ] **Re-run `node tools/shortcuts.mjs`** straight afterwards. Both shortcuts point at the old
       path until it does, and a shortcut that silently does nothing is worse than one that is
       obviously broken. `--check` reports where they point without changing anything.
-- [ ] **`gh repo rename odin`**, then update `origin`. GitHub redirects the old URL, so a stale
-      clone keeps working.
+- [x] **`gh repo rename odin`**, then update `origin`. **Done 2026-09-25** — the repo is
+      `LuisZarate17/odin` and `origin` points at it. GitHub redirects the old URL, so a stale clone
+      keeps working. The two items above are what is left, and both need every window closed.
 
 ## Open — G7, editing files, 2026-09-24
 

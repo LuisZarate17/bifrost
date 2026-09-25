@@ -11,20 +11,25 @@ Things with an icon get a name; things you type get a description (PLAN.md §0b)
 
 **Status.** Stages A–C are complete — `Ctrl+Alt+W` anywhere captures the screen and streams an
 answer into the popup. What is left of the original plan is one afternoon of testing, see
-[docs/BUILD.md](docs/BUILD.md). **Stage G is built** — Citadel exists through G6, and what is left
-is the testing round in [docs/PENDING-CHECKS.md](docs/PENDING-CHECKS.md).
+[docs/BUILD.md](docs/BUILD.md). **Stage G is built** — Citadel exists through G7, where it learned
+to edit files in a folder you pick, and what is left is the testing round in
+[docs/PENDING-CHECKS.md](docs/PENDING-CHECKS.md).
 
-## The app
+## The apps
 
 ```
-npm run app                    # build it
-target/debug/warden.exe        # or the Desktop / Start Menu shortcut
+npm run app                    # build Warden
+npm run app:citadel            # build Citadel
+target/debug/warden.exe        # or the Desktop / Start Menu shortcuts
+target/debug/citadel.exe
 ```
 
-**Use `npm run app`, not `cargo build`.** A plain `cargo build` bakes `devUrl` into the binary, so
-the window loads from `localhost:1420` and shows WebView2's "can't reach this" page unless a Vite
+**Build the apps with `npm run`, not `cargo build`.** Cargo alone bakes `devUrl` into the binary,
+so the window loads from `localhost:1420` and shows WebView2's "can't reach this" page unless a Vite
 dev server happens to be running. `npm run app` is `tauri build --debug --no-bundle`: same debug
-profile, but the frontend is embedded, so the app opens and works on its own.
+profile, but the frontend is embedded, so the app opens and works on its own. A bare `cargo build`
+at the root now skips both apps for exactly this reason (`default-members` in `Cargo.toml`) —
+`cargo build -p citadel` would still do it, so don't.
 
 Release builds are refused by Smart App Control on this machine; debug builds usually run, and when
 one is blocked, rebuilding for a fresh hash clears it. See [docs/PLAN.md](docs/PLAN.md) §3.
@@ -41,7 +46,7 @@ The binary is `odin` — short and guessable, because it is a name you type rath
 carries an icon (PLAN.md §0b).
 
 ```
-cargo build                                    # builds every crate into target/
+cargo build                                    # builds the crates (not the apps) into target/
 target/debug/odin                              # answer about your screen, now
 target/debug/odin 12                           # wait 12s first
 target/debug/odin --model qwen3-vl:4b-instruct-q8_0
@@ -74,20 +79,22 @@ each kind, and a single `node_modules`.
 ```
 odin/
 ├── apps/
-│   └── warden/        the overlay — hotkey, popup, tray (src-tauri/ + its React frontend)
+│   ├── warden/        the overlay — hotkey, popup, tray (src-tauri/ + its React frontend)
+│   └── citadel/       the chat app — conversations, models, reading and editing files
 ├── packages/
 │   └── ui/            @odin/ui — the Markdown renderer both apps share
 ├── crates/
-│   ├── odin-core/     shared — Ollama power control, NVML VRAM readout
+│   ├── odin-core/     shared — Ollama, VRAM readout, config, chat, tools, safe file edits
 │   ├── odin-cli/      the CLI, binary `odin`
-│   └── bench/         model × image × prompt benchmark harness
+│   └── bench/         benchmark harness, plus the tool-call and file-edit probes
 ├── evals/             rubric, fixtures, saved runs
+├── tools/             shortcuts, icon, and the end-to-end test that drives Citadel
 ├── docs/              plan, build log, shortcuts, results  →  docs/README.md
 └── stages/            execution packets — paste one into a fresh chat
 ```
 
 *(Restructured at Before-G0 step 1 of Stage G. The project is **ODIN**; **Warden** is the overlay
-and **Citadel** will be the chat app — PLAN.md §0b.)*
+and **Citadel** is the chat app — PLAN.md §0b.)*
 
 ## Docs
 

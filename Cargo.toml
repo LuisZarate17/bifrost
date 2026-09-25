@@ -17,6 +17,14 @@ members = [
     "apps/citadel/src-tauri",
 ]
 
+# What a bare `cargo build` at the root builds: the crates, never the two apps. Building an app
+# with plain cargo leaves out Tauri's custom-protocol feature, so the exe loads its window from
+# `localhost:1420` and shows "can't reach this" without a dev server — and it lands on the same
+# target/debug/*.exe the Desktop shortcuts open, replacing the working one. That happened to
+# Citadel on 2026-09-24. Apps build with `npm run app` / `npm run app:citadel`; `--workspace` still
+# reaches everything, so `cargo test --workspace` and `cargo clippy --workspace` are unchanged.
+default-members = ["crates/odin-core", "crates/odin-cli", "crates/bench"]
+
 # evals/fixtures/frametest is the E0502 fixture that C1b and fixcheck.mjs are built
 # around. It is *meant* not to compile, it is built on its own rather than with the
 # workspace, and it keeps its own Cargo.lock. Without this line, `cargo check` in
