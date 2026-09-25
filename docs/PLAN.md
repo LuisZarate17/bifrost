@@ -11,8 +11,8 @@ captures the screen and streams an answer into the popup. Model chosen at A2:
 **Next: Stage G** — **Citadel**, a local chat app sharing Warden's model.
 See [`../stages/STAGE-G.md`](../stages/STAGE-G.md); built through G7 and in testing.
 
-**Repo root:** `C:\Users\you\source\repos\warden` *(being renamed to `odin` — see
-PENDING-CHECKS.md. The GitHub repo already is: `LuisZarate17/odin`, since 2026-09-25)*
+**Repo root:** `C:\Users\you\source\repos\odin` *(renamed from `warden` on 2026-09-25, the same
+day the GitHub repo became `LuisZarate17/odin`)*
 
 > **Names, since this document predates them.** **ODIN** is the project; **Warden** is the overlay
 > this packet was originally written about; **Citadel** is the chat app. Settled in §0b. Where the

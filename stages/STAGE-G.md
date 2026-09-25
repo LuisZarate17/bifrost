@@ -37,7 +37,7 @@ is bad at something, the answer is a different local model, not a fallback.
 - Windows 11 Pro build 26200
 - Rust 1.98.1 MSVC · Node 24.18 · WebView2 Runtime installed
 - Ollama 0.33.3 · `qwen3-vl:8b-instruct-q4_K_M` *(reports `completion` + `vision` + `tools`)*
-- Repo root: `C:\Users\you\source\repos\warden`
+- Repo root: `C:\Users\you\source\repos\odin` *(`…\warden` until 2026-09-25)*
 
 **Match Warden's versions — Citadel is a sibling, not a newer thing.** Tauri 2 (`tray-icon`,
 `image-png`), `@tauri-apps/api` ^2, React ^19.1, TypeScript ~6.0.3, Vite ^8.0.16.
@@ -352,6 +352,9 @@ Restore this if a later check disagrees. It is what "it already worked" means fo
 > outward-facing moves while local work is still landing. **1h is yours**, and is tracked in
 > `docs/PENDING-CHECKS.md` together with 1e's visual check — the one thing in this step that no
 > tool call can settle.
+>
+> **Update, 2026-09-25.** 1g and 1h are done: the GitHub repo and the folder are both `odin`, and
+> the shortcuts point at the new path. Step 1 is finished apart from 1e's visual check.
 
 Ordered so **every manifest is written once, against final paths**: the crates move before a
 workspace exists to name them, and Warden moves before the root `Cargo.toml` lists its members.
@@ -588,7 +591,7 @@ shortcut somewhere nobody will ever see it.
 
 ---
 
-##### 1h — The root folder rename · yours, not a chat's
+##### 1h — The root folder rename · yours, not a chat's — **DONE 2026-09-25**
 
 **Do:** Close VS Code, confirm no `warden.exe` is running, rename
 `C:\Users\you\source\repos\warden` to `…\repos\odin`, reopen.
@@ -603,6 +606,12 @@ re-run at the new path.
 **Watch for:** re-running `shortcuts.mjs` is **not optional**. Between the rename and that re-run,
 both shortcuts point at a path that no longer exists — and a shortcut that silently does nothing is
 a worse failure than one that is obviously broken.
+
+**What actually held it, 2026-09-25:** not the editor but **Ollama**. Warden had started
+`ollama serve` a week earlier, it inherited the repo as its working directory, and so did every
+model runner it spawned. odin-core now starts Ollama from the temp directory instead. **And the
+first build afterwards needs `cargo clean`** — Tauri's build scripts cache absolute paths, so an
+uncleaned build fails looking for plugin permissions under the old folder.
 
 ---
 

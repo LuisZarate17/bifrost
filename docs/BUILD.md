@@ -8,23 +8,23 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ---
 
-## Where this stands — 2026-09-24
+## Where this stands — 2026-09-25
 
 **Stages A–C complete; Warden is finished and in daily use. Stage G is built** — the groundwork
 that turned this repo into a workspace two apps can live in, and **Citadel**, the local chat app,
-through G7 — which now edits files. What remains is the testing round and the repo-root rename, both in
+through G7 — which now edits files. What remains is the testing round, in
 [PENDING-CHECKS.md](PENDING-CHECKS.md). Chunk-by-chunk detail is in
 [`../stages/STAGE-G.md`](../stages/STAGE-G.md); this is the summary.
 
-### Stage G so far — 2026-09-24
+### Stage G so far — 2026-09-25
 
 | | | |
 |---|---|---|
 | **1a–1d** | ✅ | Repo restructured. Crates under `crates/`, `warden-core` → `odin-core`, Warden into `apps/warden/`, four Cargo projects merged into one workspace |
 | **1e** | ✅ | Renderer extracted to `@odin/ui`, stylesheet split with it. *(Visual check still open)* |
 | **1f** | ✅ | ~30 stale doc paths fixed, `tools/shortcuts.mjs` written, ~17,200 stale build files swept |
-| **1g** | ◐ | Shortcuts repointed. `gh repo rename odin` held until the next push |
-| **1h** | ☐ | **Needs a human** — rename the repo root folder to `odin` |
+| **1g** | ✅ | Shortcuts repointed; GitHub repo renamed to `LuisZarate17/odin` on 2026-09-25 |
+| **1h** | ✅ | Repo root folder renamed to `odin` on 2026-09-25. What held it was Ollama, started from the repo a week earlier; it now starts from the temp directory |
 | **Step 2** | ✅ | Five false claims corrected across the docs |
 | **Step 3** | ✅ | Shared config at `%APPDATA%\odin\config.json`; six duplicated constants removed |
 | **G0** | ✅ | Tool-call probe. **[G0-results.md](results/G0-results.md)** — `qwen3-vl:8b` 10/10, `llama3.1:8b` 6/10 |

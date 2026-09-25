@@ -3,22 +3,6 @@
 Things built here that no tool call can verify — they need a keypress, a hover, or a second
 machine.
 
-## Open — to do before the next push, 2026-09-19
-
-Three things are deliberately held back until immediately before pushing, so the remote and the
-working copy change together rather than drifting apart mid-restructure.
-
-- [ ] **1h — rename the repo root** `C:\Users\you\source\repos\warden` → `…\repos\odin`.
-      **Needs a human**: Windows will not rename a directory that a process holds open, and that
-      includes VS Code, `warden.exe`, and any agent shell working inside it. Close all three,
-      rename, reopen.
-- [ ] **Re-run `node tools/shortcuts.mjs`** straight afterwards. Both shortcuts point at the old
-      path until it does, and a shortcut that silently does nothing is worse than one that is
-      obviously broken. `--check` reports where they point without changing anything.
-- [x] **`gh repo rename odin`**, then update `origin`. **Done 2026-09-25** — the repo is
-      `LuisZarate17/odin` and `origin` points at it. GitHub redirects the old URL, so a stale clone
-      keeps working. The two items above are what is left, and both need every window closed.
-
 ## Open — G7, editing files, 2026-09-24
 
 The model, the diff, the approval, Undo, Deny, a file changed behind the diff's back and a path
@@ -232,6 +216,21 @@ sequence cost 3.09s before. What none of that exercises is the popup.
       or `Ctrl+Alt+Z`'s highlight misbehave rather than the prose: `.answer > .copy-pick` and the
       two `.content.collapsed .answer…` rules. They select `.answer` descendants but encode
       Warden's behaviour, not the renderer's.
+
+## Cleared 2026-09-25 — the rename
+
+- [x] **1h — rename the repo root** `C:\Users\you\source\repos\warden` → `…\repos\odin`.
+      **Done 2026-09-25.** Closing VS Code was not enough: **Ollama was holding the folder.** Warden
+      had started `ollama serve` on 09-17, it inherited the repo as its working directory, and so
+      did every model runner it spawned. odin-core now starts Ollama from the temp directory, so a
+      future rename only needs the editor and the apps closed. **After a rename, `cargo clean`
+      first:** Tauri's build scripts cache absolute paths, so the next build fails reading
+      `…\warden\target\…\permissions\…` rather than rebuilding.
+- [x] **Re-run `node tools/shortcuts.mjs`.** **Done 2026-09-25** — `--check` shows all four, Desktop
+      and Start Menu, at the new path.
+- [x] **`gh repo rename odin`**, then update `origin`. **Done 2026-09-25** — the repo is
+      `LuisZarate17/odin` and `origin` points at it. GitHub redirects the old URL, so a stale clone
+      keeps working.
 
 ## All clear as of 2026-09-17
 
