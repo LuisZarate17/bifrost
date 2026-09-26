@@ -1,7 +1,7 @@
 // Outlined, monochrome, drawn on a 16px grid and coloured by `currentColor`, so
 // every icon takes its colour from whatever it sits in. Inline rather than an
-// icon package: eighteen glyphs do not justify a dependency, and an app whose
-// rule is that nothing leaves the machine should not be loading them from one.
+// icon package: a couple of dozen glyphs do not justify a dependency, and an app
+// whose rule is that nothing leaves the machine should not be loading them from one.
 
 import type { SVGProps } from "react";
 
@@ -127,5 +127,24 @@ export const Folder = (p: P) => (
 export const Shield = (p: P) => (
   <svg {...base(p)}>
     <path d="M8 1.75 2.75 3.75v4c0 3.1 2.2 5.4 5.25 6.5 3.05-1.1 5.25-3.4 5.25-6.5v-4L8 1.75Z" />
+  </svg>
+);
+
+export const Palette = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M8 2.25a5.75 5.75 0 1 0 0 11.5c.85 0 1.35-.55 1.35-1.25 0-.4-.17-.7-.4-.98a1.3 1.3 0 0 1 1-2.12h1.3a2.4 2.4 0 0 0 2.4-2.4c0-2.6-2.5-4.75-5.65-4.75Z" />
+    <circle cx="5" cy="7.25" r=".85" fill="currentColor" stroke="none" />
+    <circle cx="6.75" cy="4.75" r=".85" fill="currentColor" stroke="none" />
+    <circle cx="9.75" cy="4.9" r=".85" fill="currentColor" stroke="none" />
+  </svg>
+);
+
+/** Four panes, for "Match Windows". Drawn in the same line as the rest, not the logo. */
+export const Windows = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="2.5" y="2.5" width="4.75" height="4.75" rx=".75" />
+    <rect x="8.75" y="2.5" width="4.75" height="4.75" rx=".75" />
+    <rect x="2.5" y="8.75" width="4.75" height="4.75" rx=".75" />
+    <rect x="8.75" y="8.75" width="4.75" height="4.75" rx=".75" />
   </svg>
 );

@@ -15,6 +15,8 @@
 //! Warden's popup is stateless between summons, while this window owns its thread.
 //! G4 is what moves storage into Rust properly.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use base64::prelude::*;
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -66,6 +68,8 @@ async fn send(
     model: Option<String>,
     on_event: Channel<StreamEvent>,
 ) -> Result<(), String> {
+    let id = STREAMS_STARTED.fetch_add(1, Ordering::SeqCst) + 1;
+
     // Every odin_core call goes off the async worker. It is blocking by design,
     // and calling it from an async command drops a tokio runtime inside an async
     // context and kills the worker — which already cost Warden a request that
@@ -103,6 +107,11 @@ async fn send(
         let _ = on_event.send(StreamEvent::Warming);
     }
 
+    // Stopped while Ollama was starting or the model was loading: never ask.
+    if stopped(id) {
+        return Ok(());
+    }
+
     // The stream itself is blocking, so the whole loop runs off-thread and sends
     // into the Channel from there. A Channel is Send, so this is fine — and it is
     // why odin_core::chat::stream takes a callback rather than being async.
@@ -110,6 +119,11 @@ async fn send(
     let channel = on_event.clone();
     tauri::async_runtime::spawn_blocking(move || {
         chat::stream(&model, &messages, &[], Options::new(num_ctx), |chunk| {
+            // Returning an error is how chat::stream is cancelled: it drops the
+            // response, the connection closes, and Ollama stops generating.
+            if stopped(id) {
+                return Err(STOPPED.to_string());
+            }
             match chunk {
                 StreamChunk::Token(text) => channel
                     .send(StreamEvent::Token { text: text.to_string() })
@@ -127,9 +141,41 @@ async fn send(
             Ok(())
         })
         .map(|_| ())
+        // A stop is what was asked for, not a failure to report.
+        .or_else(|e| if e == STOPPED { Ok(()) } else { Err(e) })
     })
     .await
     .map_err(|e| format!("stream task failed: {e}"))?
+}
+
+// ── stopping an answer ──────────────────────────────────────────────────────
+
+/// How many answers `send` has started, and how many of those have been
+/// stopped — every answer numbered up to this one.
+///
+/// **Counters, not a flag.** A flag would have to be reset when the next answer
+/// starts, and an old stream still waiting on its first token would then read
+/// the reset and run on. With numbers, stopping marks only the answers that
+/// already exist; the next one gets a higher number and cannot be caught by it.
+static STREAMS_STARTED: AtomicU64 = AtomicU64::new(0);
+static STREAMS_STOPPED: AtomicU64 = AtomicU64::new(0);
+
+/// What the stream callback returns to cancel, so `send` can tell a stop from
+/// a real error.
+const STOPPED: &str = "stopped";
+
+fn stopped(id: u64) -> bool {
+    STREAMS_STOPPED.load(Ordering::SeqCst) >= id
+}
+
+/// Stop the answer that is streaming now.
+///
+/// Takes effect at the next token. The window stops showing the answer at once
+/// either way, so a model still loading — which cannot be interrupted — only
+/// costs the load, not a wait.
+#[tauri::command]
+fn stop() {
+    STREAMS_STOPPED.fetch_max(STREAMS_STARTED.load(Ordering::SeqCst), Ordering::SeqCst);
 }
 
 #[derive(Serialize)]
@@ -721,12 +767,68 @@ async fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<Folder>, 
     tauri::async_runtime::spawn_blocking(move || {
         let ws = edit::Workspace::open(&dir)?;
         let mut cfg = config::load();
-        cfg.workspace = Some(ws.root_display());
+        let root = ws.root_display();
+        remember(&mut cfg, &root);
+        cfg.workspace = Some(root);
         config::save(&cfg)?;
         Ok(Some(folder(&ws)))
     })
     .await
     .map_err(|e| format!("saving the project folder failed: {e}"))?
+}
+
+/// How many folders the new-chat screen offers again.
+const RECENT_FOLDERS: usize = 5;
+
+/// Put a picked folder at the front of the recent list, once.
+fn remember(cfg: &mut config::Config, root: &str) {
+    cfg.recent_workspaces.retain(|p| !p.eq_ignore_ascii_case(root));
+    cfg.recent_workspaces.insert(0, root.to_string());
+    cfg.recent_workspaces.truncate(RECENT_FOLDERS);
+}
+
+/// Folders picked before, newest first, that still exist.
+///
+/// A folder that has since been deleted or moved is left out rather than shown
+/// and then refused.
+#[tauri::command]
+async fn recent_folders() -> Result<Vec<Folder>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        config::load()
+            .recent_workspaces
+            .iter()
+            .filter_map(|p| edit::Workspace::open(p).ok())
+            .map(|ws| folder(&ws))
+            .collect()
+    })
+    .await
+    .map_err(|e| format!("reading recent folders failed: {e}"))
+}
+
+/// Make a recent folder the project folder again.
+///
+/// **Takes a position, not a path**, and the position is into a list only
+/// `choose_project_folder` writes — so this can only ever restore a folder the
+/// user picked in the system dialog. Counting skips folders that no longer
+/// exist, the same way `recent_folders` does, so the index means the same row.
+#[tauri::command]
+async fn use_recent_folder(index: usize) -> Result<Folder, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cfg = config::load();
+        let ws = cfg
+            .recent_workspaces
+            .iter()
+            .filter_map(|p| edit::Workspace::open(p).ok())
+            .nth(index)
+            .ok_or_else(|| "that folder is no longer in the recent list".to_string())?;
+        let root = ws.root_display();
+        remember(&mut cfg, &root);
+        cfg.workspace = Some(root);
+        config::save(&cfg)?;
+        Ok(folder(&ws))
+    })
+    .await
+    .map_err(|e| format!("reopening the folder failed: {e}"))?
 }
 
 /// Turn editing off. Reads keep working, one approved file at a time.
@@ -769,6 +871,50 @@ async fn get_attachment(name: String) -> Result<String, String> {
     })
     .await
     .map_err(|e| format!("reading the attachment failed: {e}"))?
+}
+
+// ── appearance ──────────────────────────────────────────────────────────────
+
+/// The Windows accent colour as `#rrggbb`, for the "Match Windows" accent.
+///
+/// Read from the registry value Explorer and DWM write when you pick a colour in
+/// Settings → Personalisation, stored as 0xAABBGGRR. Tauri has no API for it,
+/// and WebView2 does not expose the CSS `AccentColor` keyword outside installed
+/// web apps. `None` when the value is missing, which the webview treats as "keep
+/// the colour you have".
+#[tauri::command]
+fn system_accent() -> Option<String> {
+    windows_accent()
+}
+
+#[cfg(windows)]
+fn windows_accent() -> Option<String> {
+    use windows::core::w;
+    use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+
+    let mut value: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    // SAFETY: `value` is a u32 and `size` says so; RegGetValueW writes at most
+    // `size` bytes, and RRF_RT_REG_DWORD refuses any other value type.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            w!(r"Software\Microsoft\Windows\DWM"),
+            w!("AccentColor"),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut value as *mut u32 as *mut core::ffi::c_void),
+            Some(&mut size),
+        )
+    };
+    status.ok().ok()?;
+    let (r, g, b) = (value & 0xff, (value >> 8) & 0xff, (value >> 16) & 0xff);
+    Some(format!("#{r:02x}{g:02x}{b:02x}"))
+}
+
+#[cfg(not(windows))]
+fn windows_accent() -> Option<String> {
+    None
 }
 
 /// Send `println!` and `eprintln!` to a file, since there is no console.
@@ -842,7 +988,11 @@ pub fn run() {
             clear_project_folder,
             load_model,
             unload_model,
-            set_model
+            set_model,
+            system_accent,
+            recent_folders,
+            use_recent_folder,
+            stop
         ])
         .run(tauri::generate_context!())
         .expect("error while running Citadel");

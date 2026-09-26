@@ -31,8 +31,9 @@ base64 = "0.22"
 # gets no file access from either, and no dialog permission in capabilities.
 tauri-plugin-dialog = "2"
 
-# Only for suppressing the console and pointing stdout at a file. Deliberately
-# two features, not Warden’s eight - none of the capture, hook or window
-# machinery belongs in an ordinary window.
+# For suppressing the console and pointing stdout at a file, and for reading the
+# Windows accent colour for "Match Windows" (one registry value, read-only).
+# Deliberately three features, not Warden’s eight - none of the capture, hook or
+# window machinery belongs in an ordinary window.
 [target."cfg(windows)".dependencies]
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Registry"] }

@@ -92,6 +92,11 @@ pub struct Config {
     /// no command that takes a path for it, so nothing reaching the app's IPC can
     /// widen it. Warden and the CLI ignore it.
     pub workspace: Option<String>,
+    /// Folders chosen before, newest first, for Citadel's new-chat screen. Only
+    /// the picker adds to it, and the webview can pick an entry only by its
+    /// position — so choosing a recent folder never lets a path in from outside,
+    /// and `workspace` stays something the user picked with their own hands.
+    pub recent_workspaces: Vec<String>,
 }
 
 impl Default for Config {
@@ -101,6 +106,7 @@ impl Default for Config {
             prompt: DEFAULT_PROMPT.to_string(),
             num_ctx: DEFAULT_NUM_CTX,
             workspace: None,
+            recent_workspaces: Vec::new(),
         }
     }
 }
@@ -175,6 +181,7 @@ mod tests {
             prompt: "what is this".into(),
             num_ctx: 4096,
             workspace: Some(r"C:\work\demo".into()),
+            recent_workspaces: vec![r"C:\work\demo".into(), r"C:\work\older".into()],
         };
         let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(c, back);

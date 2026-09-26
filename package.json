@@ -14,6 +14,7 @@
     "check:inert": "npm run check:inert -w packages/ui",
     "check:fixes": "node evals/fixcheck.mjs",
     "app:citadel": "npm run app -w apps/citadel",
-    "dev:citadel": "npm run dev -w apps/citadel"
+    "dev:citadel": "npm run dev -w apps/citadel",
+    "shots:citadel": "node tools/citadel-shots.mjs"
   }
 }

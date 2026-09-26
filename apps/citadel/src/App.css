@@ -3,11 +3,24 @@
    Structure borrowed from Claude's desktop app — a sidebar of conversations
    grouped by recency, a centred reading column, a composer that sits in the
    middle of an empty chat and docks once one starts, answers in a serif. The
-   surface values follow the lightness steps Claude publishes for its own UI
-   (a deep sidebar, a main surface, raised cards, hairline borders), tuned a
-   little cool so the one accent — the red of the bastion icon's tower —
-   stands off them. Errors are orange-red rather than red, so an error and a
-   link never share a colour.
+   surfaces are ChatGPT's: true black (white in the light theme), edges drawn in
+   translucent white rather than solid greys, no shadow on anything that does not
+   float, and round shapes — pill buttons, a 28px composer, 22px bubbles. Picked
+   from four mocked directions, over Claude's warm charcoal, Linear's layered
+   slate and the cool grey Citadel started with.
+
+   The accent is used sparingly. Primary buttons are ivory on black and ink on
+   white, so "Allow once" never reads as a destructive action; the accent marks
+   only what is yours to act on or notice — sending, focus, the tower, the GPU
+   meter, the Tools toggle, a request waiting for approval. It is whichever
+   colour the user picked, blue by default: src/accent.ts derives every shade
+   from one seed with its contrast checked and writes them as --u-* properties,
+   which the tokens below read with the default blue as fallback. Errors are
+   orange-red, so an error and the default accent never share a colour.
+
+   The theme is data-theme on <html>, set before the first paint by
+   public/theme-boot.js from the user's choice, or from Windows under "system".
+   Dark is the base; light overrides it.
 
    Every font is a Windows system font. Citadel's rule is that nothing leaves
    the machine, so nothing is fetched to draw it either: Segoe UI Variable for
@@ -21,29 +34,51 @@
 :root {
   color-scheme: dark;
 
-  --bg-sidebar: #131317;
-  --bg: #1b1b20;
-  --bg-raised: #25252c;
-  --bg-sunk: rgba(255, 255, 255, 0.045);
-  --bg-hover: rgba(255, 255, 255, 0.055);
-  --bg-active: rgba(255, 255, 255, 0.085);
-  --bubble: #2c2c35;
+  --bg-sidebar: #0b0b0b;
+  --bg: #000000;
+  --bg-raised: #141414;
+  --bg-card: #0b0b0b;
+  --bg-composer: #1a1a1a;
+  --bg-sunk: rgba(255, 255, 255, 0.04);
+  --bg-hover: rgba(255, 255, 255, 0.07);
+  --bg-active: rgba(255, 255, 255, 0.11);
+  /* The lightest dark surface text sits on. accent.ts checks the accent's text
+     shade against it, so keep SURFACES there in step with this. */
+  --bubble: #262626;
 
-  --text-strong: #f6f5fb;
-  --text: #e6e5ee;
-  --text-2: #b4b3c0;
-  --text-3: #85848f;
-  --text-4: #5d5c66;
+  --text-strong: #ffffff;
+  --text: #ececec;
+  --text-2: #c4c4c4;
+  --text-3: #9b9b9b;
+  --text-4: #7a7a7a;
 
-  --border: rgba(232, 230, 250, 0.08);
-  --border-2: rgba(232, 230, 250, 0.13);
-  --border-3: rgba(232, 230, 250, 0.22);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-2: rgba(255, 255, 255, 0.14);
+  --border-3: rgba(255, 255, 255, 0.24);
 
-  --accent: #dc2f3c;
-  --accent-hover: #e03a46;
-  --accent-text: #ff6a73;
-  --accent-soft: rgba(220, 47, 60, 0.15);
-  --accent-line: rgba(220, 47, 60, 0.5);
+  /* The fallbacks are what accent.ts derives from the default blue. */
+  --accent: var(--u-accent-d, #1c70e3);
+  --accent-hover: var(--u-hover-d, #0864d5);
+  --accent-press: var(--u-press-d, #0058c2);
+  --on-accent: var(--u-on-d, #ffffff);
+  --accent-text: var(--u-text-d, #5d9eff);
+  --accent-soft: color-mix(in oklab, var(--accent) 16%, transparent);
+  --accent-line: color-mix(in oklab, var(--accent) 50%, transparent);
+  /* Solid, and at least 4.5:1 on every surface. The old ring was the accent at
+     half alpha, 1.8:1 — under the 3:1 a focus indicator needs. */
+  --focus-ring: var(--accent-text);
+
+  /* The tower's walls and outlines, re-derived from the accent (see Tower.tsx). */
+  --tw-a: var(--u-tw-ink-d, #020c22);
+  --tw-b: var(--u-tw-hi-d, #5f9fff);
+  --tw-c: var(--u-tw-mid-d, #1c70e3);
+  --tw-d: var(--u-tw-ink2-d, #02132e);
+  --tw-e: var(--u-tw-lo-d, #003a84);
+
+  /* Primary buttons. Not the accent: see the header. */
+  --primary: #ffffff;
+  --primary-hover: #dcdcdc;
+  --on-primary: #000000;
 
   --ok: #6fcf97;
   --ok-soft: rgba(111, 207, 151, 0.14);
@@ -55,15 +90,25 @@
 
   /* Code stays dark in both themes: the highlighter paints with a dark theme,
      and a light block would need a second one for no gain in legibility. */
-  --code-bg: #121216;
-  --code-border: rgba(255, 255, 255, 0.07);
-  --code-text: #e3e2ea;
-  --code-inline: rgba(255, 255, 255, 0.08);
+  --code-bg: #121212;
+  --code-border: rgba(255, 255, 255, 0.08);
+  --code-text: #e3e3e3;
+  --code-inline: rgba(255, 255, 255, 0.09);
 
-  --scrim: rgba(6, 6, 10, 0.55);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25), 0 8px 24px -8px rgba(0, 0, 0, 0.45);
-  --shadow-dialog: 0 24px 64px -12px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.3);
-  --scroll: rgba(255, 255, 255, 0.12);
+  --scrim: rgba(0, 0, 0, 0.74);
+  /* The one shadow: dialogs float, so they get one. Nothing else does. */
+  --shadow-dialog: 0 24px 64px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --scroll: rgba(255, 255, 255, 0.14);
+
+  --r-composer: 28px;
+  --r-bubble: 22px;
+  --r-card: 16px;
+  --r-row: 10px;
+  --r-dialog: 20px;
+  --r-code: 12px;
+
+  /* Ease-out: things arrive quickly and settle. Nothing bounces. */
+  --ease: cubic-bezier(0.25, 1, 0.5, 1);
 
   --font-ui: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
   --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
@@ -72,53 +117,68 @@
   --font-hero: "Sitka Display", "Sitka Heading", Georgia, serif;
   --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
 
-  --sidebar-w: 268px;
+  --sidebar-w: 264px;
   --column: 736px;
 }
 
-@media (prefers-color-scheme: light) {
-  :root {
-    color-scheme: light;
+/* Its own values rather than an inversion: white, a faint grey sidebar, ink
+   buttons, and borders in translucent black. */
+:root[data-theme="light"] {
+  color-scheme: light;
 
-    --bg-sidebar: #f0eff4;
-    --bg: #fafafc;
-    --bg-raised: #ffffff;
-    --bg-sunk: rgba(22, 20, 40, 0.04);
-    --bg-hover: rgba(22, 20, 40, 0.05);
-    --bg-active: rgba(22, 20, 40, 0.08);
-    --bubble: #ecebf2;
+  --bg-sidebar: #f9f9f9;
+  --bg: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-card: #fbfbfb;
+  --bg-composer: #ffffff;
+  --bg-sunk: rgba(0, 0, 0, 0.03);
+  --bg-hover: rgba(0, 0, 0, 0.045);
+  --bg-active: rgba(0, 0, 0, 0.075);
+  --bubble: #f0f0f0;
 
-    --text-strong: #0f0e14;
-    --text: #1e1d25;
-    --text-2: #4a4955;
-    --text-3: #75747f;
-    --text-4: #a4a3ad;
+  --text-strong: #000000;
+  --text: #0d0d0d;
+  --text-2: #3d3d3d;
+  --text-3: #5d5d5d;
+  --text-4: #6e6e6e;
 
-    --border: rgba(22, 20, 40, 0.08);
-    --border-2: rgba(22, 20, 40, 0.13);
-    --border-3: rgba(22, 20, 40, 0.24);
+  --border: rgba(0, 0, 0, 0.08);
+  --border-2: rgba(0, 0, 0, 0.13);
+  --border-3: rgba(0, 0, 0, 0.24);
 
-    --accent: #c81e2b;
-    --accent-hover: #b01824;
-    --accent-text: #c01a28;
-    --accent-soft: rgba(200, 30, 43, 0.1);
-    --accent-line: rgba(200, 30, 43, 0.45);
+  --accent: var(--u-accent-l, #1168da);
+  --accent-hover: var(--u-hover-l, #005cca);
+  --accent-press: var(--u-press-l, #0052b5);
+  --on-accent: var(--u-on-l, #ffffff);
+  --accent-text: var(--u-text-l, #005fd0);
+  --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
+  --accent-line: color-mix(in oklab, var(--accent) 45%, transparent);
 
-    --ok: #23864f;
-    --ok-soft: rgba(35, 134, 79, 0.1);
-    --warn: #9a6a10;
-    --warn-soft: rgba(154, 106, 16, 0.1);
-    --danger: #c24a0e;
-    --danger-soft: rgba(194, 74, 14, 0.07);
-    --danger-line: rgba(194, 74, 14, 0.3);
+  --tw-a: var(--u-tw-ink-l, #020c22);
+  --tw-b: var(--u-tw-hi-l, #5097ff);
+  --tw-c: var(--u-tw-mid-l, #1168da);
+  --tw-d: var(--u-tw-ink2-l, #02132e);
+  --tw-e: var(--u-tw-lo-l, #003478);
 
-    --code-inline: rgba(22, 20, 40, 0.07);
+  --primary: #0d0d0d;
+  --primary-hover: #2e2e2e;
+  --on-primary: #ffffff;
 
-    --scrim: rgba(20, 18, 32, 0.28);
-    --shadow-card: 0 1px 2px rgba(20, 18, 32, 0.06), 0 8px 24px -10px rgba(20, 18, 32, 0.16);
-    --shadow-dialog: 0 24px 64px -12px rgba(20, 18, 32, 0.28), 0 2px 6px rgba(20, 18, 32, 0.08);
-    --scroll: rgba(22, 20, 40, 0.16);
-  }
+  /* Darker than it looks necessary: on its own soft wash and on the grey of a
+     picked row, #23864f fell to 3.9:1. */
+  --ok: #17703f;
+  --ok-soft: rgba(23, 112, 63, 0.1);
+  --warn: #9a6a10;
+  --warn-soft: rgba(154, 106, 16, 0.1);
+  --danger: #c24a0e;
+  --danger-soft: rgba(194, 74, 14, 0.07);
+  --danger-line: rgba(194, 74, 14, 0.3);
+
+  --code-inline: rgba(0, 0, 0, 0.055);
+
+  --scrim: rgba(0, 0, 0, 0.25);
+  --shadow-dialog: 0 24px 64px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  --scroll: rgba(0, 0, 0, 0.18);
 }
 
 /* ── base ───────────────────────────────────────────────────────────────── */
@@ -153,11 +213,11 @@ button {
 }
 
 ::selection {
-  background: var(--accent-soft);
+  background: color-mix(in oklab, var(--accent) 35%, transparent);
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent-line);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -201,16 +261,15 @@ kbd {
   height: 32px;
   padding: 0;
   border: none;
-  border-radius: 9px;
+  border-radius: 50%;
   background: transparent;
   color: var(--text-3);
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background 150ms var(--ease), color 150ms var(--ease);
 }
 .icon-btn.sm {
   width: 26px;
   height: 26px;
-  border-radius: 7px;
 }
 .icon-btn:hover:not(:disabled) {
   background: var(--bg-hover);
@@ -227,37 +286,36 @@ kbd {
   justify-content: center;
   gap: 6px;
   height: 32px;
-  padding: 0 14px;
+  padding: 0 16px;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: 999px;
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background 150ms var(--ease), border-color 150ms var(--ease);
 }
 .btn.sm {
   height: 28px;
-  padding: 0 12px;
+  padding: 0 14px;
   font-size: 12.5px;
-  border-radius: 8px;
 }
 .btn.xs {
   height: 24px;
-  padding: 0 8px;
+  padding: 0 10px;
   font-size: 12px;
-  border-radius: 6px;
 }
 .btn:disabled {
   opacity: 0.4;
   cursor: default;
 }
 .btn.primary {
-  background: var(--accent);
-  color: #fff;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-weight: 600;
 }
 .btn.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--primary-hover);
 }
 .btn.ghost {
   background: transparent;
@@ -345,10 +403,16 @@ kbd {
 }
 /* 16x16 pixel art at exactly 2x, so every cell is a whole number of pixels. */
 .brand-mark {
-  width: 32px;
-  height: 32px;
-  image-rendering: pixelated;
+  flex: none;
+  display: block;
 }
+.tower .tw-a { fill: var(--tw-a); }
+.tower .tw-b { fill: var(--tw-b); }
+.tower .tw-c { fill: var(--tw-c); }
+.tower .tw-d { fill: var(--tw-d); }
+.tower .tw-e { fill: var(--tw-e); }
+.tower .tw-f { fill: #ffb13b; }
+.tower .tw-g { fill: #fff1c9; }
 .brand-name {
   font-family: var(--font-display);
   font-size: 16px;
@@ -363,20 +427,19 @@ kbd {
   align-items: center;
   gap: 10px;
   height: 38px;
-  margin: 2px 10px 12px;
+  margin: 2px 8px 14px;
   padding: 0 12px;
-  border: 1px solid var(--border-2);
-  border-radius: 10px;
-  background: var(--bg-sunk);
+  border: none;
+  border-radius: var(--r-row);
+  background: transparent;
   color: var(--text);
   font-size: 13.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background 150ms var(--ease), border-color 150ms var(--ease);
 }
 .new-chat:hover:not(:disabled) {
   background: var(--bg-hover);
-  border-color: var(--border-3);
 }
 .new-chat:disabled {
   opacity: 0.5;
@@ -415,8 +478,8 @@ kbd {
 .cv-item {
   display: flex;
   align-items: center;
-  border-radius: 8px;
-  transition: background 100ms ease;
+  border-radius: var(--r-row);
+  transition: background 120ms var(--ease);
 }
 .cv-item:hover {
   background: var(--bg-hover);
@@ -468,7 +531,7 @@ kbd {
   min-width: 0;
   margin: 2px;
   padding: 5px 8px;
-  border: 1px solid var(--accent-line);
+  border: 1px solid var(--border-3);
   border-radius: 7px;
   background: var(--bg);
   color: var(--text);
@@ -483,19 +546,43 @@ kbd {
   color: var(--text-3);
 }
 
+.sb-link {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  margin: 0 8px 6px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--r-row);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: background 150ms var(--ease), color 150ms var(--ease);
+}
+.sb-link:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.sb-link kbd {
+  margin-left: auto;
+}
+
 .sb-foot {
   flex: none;
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin: 0 8px 10px;
-  padding: 11px 10px 12px;
+  padding: 11px 12px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--r-card);
   background: transparent;
   text-align: left;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background 150ms var(--ease), border-color 150ms var(--ease);
 }
 .sb-foot:hover {
   background: var(--bg-hover);
@@ -582,6 +669,9 @@ kbd {
   /* Chromium, so WebView2 honours it — keeps the viewport stable as content
      grows above the scroll position while streaming. */
   overflow-anchor: auto;
+  /* Scrolled text fades in under the top bar instead of being cut at a line —
+     the same courtesy .dock::before pays it at the bottom. */
+  mask-image: linear-gradient(to bottom, transparent 0, #000 20px);
 }
 
 .column {
@@ -610,8 +700,10 @@ kbd {
 .main.empty .thread > .column {
   padding-bottom: 26px;
 }
+/* The dock takes more of the split than the thread since the starters joined it,
+   so the whole group — greeting, composer, starters — centres as one. */
 .main.empty .dock {
-  flex: 1 1 0;
+  flex: 1.35 1 0;
 }
 
 .hero {
@@ -624,7 +716,6 @@ kbd {
 .hero-mark {
   width: 48px;
   height: 48px;
-  image-rendering: pixelated;
 }
 .hero-title {
   margin: 0;
@@ -646,9 +737,9 @@ kbd {
   gap: 8px;
 }
 .bubble {
-  max-width: 85%;
-  padding: 10px 16px;
-  border-radius: 18px;
+  max-width: 80%;
+  padding: 10px 18px;
+  border-radius: var(--r-bubble);
   background: var(--bubble);
   color: var(--text);
   font-size: 15px;
@@ -697,7 +788,7 @@ kbd {
   font-size: 12px;
   color: var(--text-3);
   opacity: 0;
-  transition: opacity 140ms ease;
+  transition: opacity 150ms var(--ease);
 }
 .turn.assistant:hover .turn-meta,
 .turn.assistant.last .turn-meta,
@@ -710,6 +801,13 @@ kbd {
 .turn-stats {
   font-variant-numeric: tabular-nums;
   color: var(--text-4);
+}
+.turn-stopped {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-sunk);
+  color: var(--text-3);
+  font-size: 11.5px;
 }
 
 .waiting {
@@ -728,7 +826,7 @@ kbd {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--text-3);
   opacity: 0.35;
   animation: pulse 1.2s ease-in-out infinite;
 }
@@ -770,8 +868,8 @@ kbd {
    thread where the conversation is — not in a log nobody opens. */
 .tool {
   border: 1px solid var(--border-2);
-  border-radius: 12px;
-  background: var(--bg-raised);
+  border-radius: var(--r-card);
+  background: var(--bg-card);
   overflow: hidden;
   font-size: 13px;
 }
@@ -823,17 +921,35 @@ kbd {
   color: var(--danger);
 }
 
-/* Waiting on a decision, so it is the loudest thing on screen. */
+/* Waiting on a decision, so it is the loudest thing on screen — through the
+   brighter edge, the accent badge and the one solid button, not a glow. */
 .tool.pending {
-  border-color: var(--accent-line);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  border-color: var(--border-3);
 }
 .tool.pending .tool-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: var(--accent-soft);
   color: var(--accent-text);
+  font-weight: 600;
 }
-.tool.denied {
-  opacity: 0.65;
+.tool.pending .tool-state::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.tool.denied,
+.tool.edit.undone {
+  border-style: dashed;
+  background: transparent;
+}
+.tool.denied .tool-name,
+.tool.edit.undone .tool-name {
+  color: var(--text-3);
+  font-weight: 500;
 }
 
 .tool-ask {
@@ -874,7 +990,7 @@ kbd {
   display: inline-block;
   width: 14px;
   margin-left: -14px;
-  transition: transform 120ms ease;
+  transition: transform 150ms var(--ease);
 }
 .tool-result[open] summary::before {
   transform: rotate(90deg);
@@ -905,9 +1021,6 @@ kbd {
 .tool.edit.failed .tool-state {
   background: var(--danger-soft);
   color: var(--danger);
-}
-.tool.edit.undone {
-  opacity: 0.75;
 }
 .tool.edit .tool-head .btn {
   margin-left: 2px;
@@ -951,7 +1064,7 @@ kbd {
   max-height: 420px;
   overflow: auto;
   border: 1px solid var(--code-border);
-  border-radius: 10px;
+  border-radius: var(--r-code);
   background: var(--code-bg);
   font-family: var(--font-mono);
   font-size: 12.5px;
@@ -960,7 +1073,7 @@ kbd {
 }
 .tool-result .diff {
   margin-top: 0;
-  border-radius: 0 0 10px 10px;
+  border-radius: 0 0 var(--r-code) var(--r-code);
 }
 .hunk {
   min-width: max-content;
@@ -968,7 +1081,7 @@ kbd {
 }
 .hunk-gap {
   padding: 2px 0 6px 20px;
-  color: #6c6b78;
+  color: #8a8a94;
   letter-spacing: 0.2em;
 }
 .dl {
@@ -980,7 +1093,8 @@ kbd {
 .dl .ln {
   padding-right: 10px;
   text-align: right;
-  color: #5c5b66;
+  /* 5.5:1 on the code ground; the old #5c5b66 was 2.8:1. */
+  color: #8a8a94;
   user-select: none;
 }
 .dl .sign {
@@ -1128,9 +1242,9 @@ kbd {
   align-items: flex-start;
   gap: 10px;
   margin-bottom: 10px;
-  padding: 9px 8px 9px 12px;
+  padding: 9px 8px 9px 14px;
   border: 1px solid var(--danger-line);
-  border-radius: 12px;
+  border-radius: var(--r-card);
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 13px;
@@ -1153,19 +1267,18 @@ kbd {
 
 .composer {
   position: relative;
-  padding: 12px 10px 10px 16px;
+  padding: 12px 10px 10px 18px;
   border: 1px solid var(--border-2);
-  border-radius: 20px;
-  background: var(--bg-raised);
-  box-shadow: var(--shadow-card);
+  border-radius: var(--r-composer);
+  background: var(--bg-composer);
   cursor: text;
-  transition: border-color 140ms ease, box-shadow 140ms ease;
+  transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease);
 }
 .composer:focus-within {
   border-color: var(--border-3);
 }
 .composer.dragging {
-  border-color: var(--accent-line);
+  border-color: var(--border-3);
   border-style: dashed;
 }
 
@@ -1176,10 +1289,10 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 20px;
-  background: var(--accent-soft);
+  border-radius: var(--r-composer);
+  background: var(--bg-hover);
   backdrop-filter: blur(2px);
-  color: var(--accent-text);
+  color: var(--text-strong);
   font-size: 14px;
   font-weight: 500;
   pointer-events: none;
@@ -1241,7 +1354,7 @@ kbd {
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition: background 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease);
 }
 .toggle:hover {
   background: var(--bg-hover);
@@ -1251,6 +1364,7 @@ kbd {
   border-color: var(--accent-line);
   background: var(--accent-soft);
   color: var(--accent-text);
+  font-weight: 600;
 }
 
 .model-pill {
@@ -1258,14 +1372,14 @@ kbd {
   align-items: center;
   gap: 7px;
   height: 32px;
-  padding: 0 8px 0 10px;
+  padding: 0 10px 0 12px;
   border: none;
-  border-radius: 9px;
+  border-radius: 999px;
   background: transparent;
   color: var(--text-3);
   font-size: 13px;
   cursor: pointer;
-  transition: background 120ms ease;
+  transition: background 150ms var(--ease);
 }
 .model-pill:hover {
   background: var(--bg-hover);
@@ -1282,18 +1396,30 @@ kbd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   margin-left: 4px;
   border: none;
-  border-radius: 11px;
+  border-radius: 50%;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
-  transition: background 120ms ease, opacity 120ms ease;
+  transition: background 150ms var(--ease), opacity 150ms var(--ease);
 }
 .send:hover:not(:disabled) {
   background: var(--accent-hover);
+}
+.send:active:not(:disabled) {
+  background: var(--accent-press);
+}
+/* Stop is a different act from sending, so it is not the accent: ivory on black,
+   ink on white, like every other button that ends something. */
+.send.stop {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+.send.stop:hover {
+  background: var(--primary-hover);
 }
 .send:disabled {
   background: var(--bg-active);
@@ -1312,9 +1438,9 @@ kbd {
   align-items: center;
   gap: 9px;
   max-width: 280px;
-  padding: 5px 5px 5px 5px;
+  padding: 5px;
   border: 1px solid var(--border-2);
-  border-radius: 12px;
+  border-radius: var(--r-card);
   background: var(--bg-sunk);
 }
 .att-thumb,
@@ -1356,8 +1482,8 @@ kbd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border: none;
   border-radius: 50%;
   background: transparent;
@@ -1385,6 +1511,79 @@ kbd {
 }
 .main.empty .composer-foot {
   justify-content: center;
+}
+
+/* The new-chat screen's ways in. Only while the composer is empty, so they are
+   gone the moment you start typing; they sit under the composer, so hiding them
+   never moves it. */
+.starters {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin: 16px 0 6px;
+}
+.starter-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.starter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 15px 0 13px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 150ms var(--ease), color 150ms var(--ease), border-color 150ms var(--ease);
+}
+.starter svg {
+  color: var(--text-3);
+}
+.starter:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-3);
+  color: var(--text);
+}
+.recent {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.recent > span {
+  margin-right: 2px;
+}
+.recent-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border: none;
+  border-radius: 999px;
+  background: var(--bg-sunk);
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 150ms var(--ease), color 150ms var(--ease);
+}
+.recent-folder:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.recent-folder.on {
+  background: var(--bg-active);
+  color: var(--text-strong);
 }
 .ctx {
   display: inline-flex;
@@ -1423,7 +1622,7 @@ kbd {
   justify-content: center;
   padding: 24px;
   background: var(--scrim);
-  animation: fade 140ms ease;
+  animation: fade 150ms var(--ease);
 }
 .dialog {
   width: min(780px, 100%);
@@ -1431,7 +1630,7 @@ kbd {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--border-2);
-  border-radius: 18px;
+  border-radius: var(--r-dialog);
   background: var(--bg-raised);
   box-shadow: var(--shadow-dialog);
   outline: none;
@@ -1493,14 +1692,14 @@ kbd {
   align-items: center;
   gap: 14px;
   padding: 8px 12px;
-  border-radius: 12px;
-  transition: background 100ms ease;
+  border-radius: var(--r-row);
+  transition: background 120ms var(--ease);
 }
 .model:hover {
   background: var(--bg-hover);
 }
 .model.picked {
-  background: var(--accent-soft);
+  background: var(--bg-active);
 }
 .model-pick {
   display: flex;
@@ -1525,11 +1724,12 @@ kbd {
   height: 18px;
   border: 1.5px solid var(--border-3);
   border-radius: 50%;
-  color: #fff;
+  color: var(--on-accent);
 }
 .model.picked .radio {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
 }
 .radio svg {
   width: 12px;
@@ -1600,7 +1800,7 @@ kbd {
 .dialog-note {
   margin: 8px 24px 0;
   font-size: 12.5px;
-  color: var(--accent-text);
+  color: var(--text-2);
 }
 .dialog-foot {
   display: flex;
@@ -1617,6 +1817,172 @@ kbd {
   color: var(--text-3);
 }
 
+/* ── appearance dialog ──────────────────────────────────────────────────── */
+
+.dialog.appearance {
+  width: min(560px, 100%);
+}
+.settings {
+  display: flex;
+  flex-direction: column;
+  padding: 0 24px 6px;
+  overflow-y: auto;
+}
+.setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 0;
+}
+.setting + .setting {
+  border-top: 1px solid var(--border);
+}
+.setting.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+}
+.setting-text h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.setting-text p {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.seg {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--bg-sunk);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.seg button {
+  height: 30px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms var(--ease), color 150ms var(--ease);
+}
+.seg button:hover {
+  color: var(--text);
+}
+.seg button.on {
+  background: var(--bg-active);
+  color: var(--text-strong);
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+/* The seed itself, not the derived fill: this is the colour the user picked. */
+.swatch {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--border-2);
+  cursor: pointer;
+  transition: transform 150ms var(--ease), box-shadow 150ms var(--ease);
+}
+.swatch:hover {
+  transform: scale(1.08);
+}
+.swatch.on {
+  box-shadow: 0 0 0 2px var(--bg-raised), 0 0 0 4px var(--text-strong);
+}
+/* A rainbow ring around the picked colour, so it still reads as "any colour". */
+.swatch.custom {
+  background: radial-gradient(circle, var(--c, transparent) 0 52%, transparent 53%),
+    conic-gradient(#e5484d, #f5a524, #e3d44a, #46a758, #12a594, #3e9ae8, #8e4ec6, #d6409f, #e5484d);
+}
+.swatch.custom:has(input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.swatch.custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.match-windows {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-card);
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms var(--ease), border-color 150ms var(--ease);
+}
+.match-windows:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.match-windows.on {
+  border-color: var(--border-3);
+  background: var(--bg-active);
+}
+.match-windows:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mw-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+.mw-text .muted {
+  font-size: 12px;
+  font-weight: 400;
+}
+.mw-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.mw-chip {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--border-2);
+}
+.mw-check {
+  flex: none;
+  color: var(--text-strong);
+}
+
 /* ── the answer, as Citadel reads it ────────────────────────────────────── */
 
 /* @odin/ui sizes these for Warden's 480px popup — 12.5px text, dark only. In a
@@ -1629,6 +1995,8 @@ kbd {
   font-size: 16px;
   line-height: 1.7;
   color: var(--text);
+  /* Sitka's default figures are oldstyle, which set "3000" as "3ooo". */
+  font-variant-numeric: lining-nums proportional-nums;
 }
 .app .answer p {
   margin: 0 0 14px;
@@ -1683,6 +2051,8 @@ kbd {
 }
 .app .answer li::marker {
   color: var(--text-3);
+  /* Chromium gives markers tabular-nums, which drops the lining figures above. */
+  font-variant-numeric: lining-nums tabular-nums;
 }
 .app .answer hr {
   margin: 22px 0;
@@ -1730,7 +2100,7 @@ kbd {
   padding: 14px 16px;
   max-height: min(60vh, 560px);
   border: 1px solid var(--code-border);
-  border-radius: 12px;
+  border-radius: var(--r-code);
   background: var(--code-bg);
   color: var(--code-text);
   font-family: var(--font-mono);

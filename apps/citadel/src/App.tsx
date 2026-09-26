@@ -9,10 +9,11 @@ import {
 } from "./attach";
 import * as I from "./Icons";
 import { ToolCard } from "./ToolCard";
+import { Appearance, syncWindowsAccent } from "./Appearance";
 // The bastion tower — the same art as Citadel's taskbar icon, so the window and
-// the thing you clicked to open it read as one object. 16×16 pixel art drawn at
-// 8×, shown at 2× or 4× so every cell lands on whole device pixels.
-import markUrl from "../src-tauri/icons/128x128.png";
+// the thing you clicked to open it read as one object. Drawn as SVG so its walls
+// can follow the accent.
+import { Tower } from "./Tower";
 // The renderer's styles. @odin/ui does not import them itself, so that
 // `npm run check:inert` can SSR-build Answer and run it under plain node.
 import "@odin/ui/answer.css";
@@ -63,6 +64,8 @@ export type Entry =
       /** Which model produced this turn. Set when the answer completes, so a
        *  thread spanning a model switch keeps its per-turn provenance. */
       model?: string;
+      /** Stopped by the user partway. Shown for this session, not saved. */
+      stopped?: boolean;
     }
   /** A tool the model asked for, and what happened. Shown in the thread so the
    *  record of what ran is where the conversation is, not in a log. */
@@ -113,6 +116,18 @@ const BUDGET = 0.75;
  * when the true count does not exist yet.
  */
 const estimate = (text: string) => Math.ceil(text.length / 4);
+
+/**
+ * What the new-chat screen offers to start with — the four things Citadel does
+ * that a plain chat box does not, each filling the composer rather than sending,
+ * so the question is still yours to finish.
+ */
+const STARTERS = [
+  { label: "Explain an error", Icon: I.Alert, prompt: "Explain this error and how to fix it:\n\n" },
+  { label: "Edit files in a folder", Icon: I.Pencil, prompt: "In this folder, ", tools: true, folder: true },
+  { label: "Describe an image", Icon: I.Image, prompt: "What's in this image?", attach: true },
+  { label: "Summarise a file", Icon: I.File, prompt: "Summarise the file ", tools: true },
+] as const;
 
 /** The composer grows with what you type, up to this, then scrolls. */
 const COMPOSER_MAX_PX = 280;
@@ -214,6 +229,9 @@ function App() {
   // The one folder edits are confined to. Set only through the system folder
   // picker, which Rust opens — there is no way to hand it a path from here.
   const [folder, setFolder] = useState<Folder | null>(null);
+  // Folders picked before, for the new-chat screen. Rust keeps the list; this
+  // can only choose from it by position (see use_recent_folder).
+  const [recent, setRecent] = useState<Folder[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -223,6 +241,7 @@ function App() {
   const [model, setModel] = useState<string | null>(null);
   const [card, setCard] = useState<CardState | null>(null);
   const [showModels, setShowModels] = useState(false);
+  const [showAppearance, setShowAppearance] = useState(false);
   // Open by default on a window with room for it; a narrow window starts with
   // the thread to itself.
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth >= 820);
@@ -239,9 +258,13 @@ function App() {
 
   const threadRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const attachRef = useRef<HTMLInputElement>(null);
   // Follow the bottom while streaming, but stop the moment the reader scrolls up
   // to re-read something, and resume on the next answer.
   const pinned = useRef(true);
+  /** Bumped by each send and by Stop. A request whose number is no longer the
+   *  current one has been stopped, and anything it still receives is dropped. */
+  const activeRequest = useRef(0);
   /** Resolved by the Allow/Deny buttons; the tool loop awaits it. */
   const pendingDecision = useRef<((ok: boolean) => void) | null>(null);
   /** The live thread, for saving after a turn completes.
@@ -285,16 +308,41 @@ function App() {
       .catch(() => {});
   }, []);
 
+  const refreshRecent = useCallback(() => {
+    invoke<Folder[]>("recent_folders").then(setRecent).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshRecent();
+  }, [refreshRecent]);
+
   const chooseFolder = useCallback(async () => {
     try {
       // Opens the system's own folder picker. Cancelling returns null and leaves
       // the current folder as it was.
       const picked = await invoke<Folder | null>("choose_project_folder");
       if (picked) setFolder(picked);
+      refreshRecent();
     } catch (e) {
       setError(String(e));
     }
-  }, []);
+  }, [refreshRecent]);
+
+  const reopenFolder = useCallback(
+    async (index: number) => {
+      try {
+        const f = await invoke<Folder>("use_recent_folder", { index });
+        setFolder(f);
+        // The folder only shows, and only matters, with tools on.
+        setToolsOn(true);
+        refreshRecent();
+        composerRef.current?.focus();
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [refreshRecent],
+  );
 
   const clearFolder = useCallback(async () => {
     try {
@@ -317,8 +365,11 @@ function App() {
       entriesRef.current = p.entries;
       setStatus(p.status);
       setStats(p.stats);
-      setSpent(3214);
+      setSpent(p.spent);
+      setConvoId(p.convoId);
       setStreaming(mode === "stream");
+      if (mode === "appearance") setShowAppearance(true);
+      if (mode === "models") setShowModels(true);
       if (mode === "edit") {
         setToolsOn(true);
         setFolder({ path: "C:\\Users\\you\\source\\repos\\demo", name: "demo" });
@@ -473,6 +524,15 @@ function App() {
     entriesRef.current = entries;
   }, [entries]);
 
+  // "Match Windows" follows the Windows accent: re-read it at startup and each
+  // time the window comes back to the front.
+  useEffect(() => {
+    void syncWindowsAccent();
+    const onFocus = () => void syncWindowsAccent();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
   useEffect(() => {
     if (pinned.current && threadRef.current) {
       threadRef.current.scrollTop = threadRef.current.scrollHeight;
@@ -597,12 +657,15 @@ function App() {
    * array before it can do anything. The conversational turns still stream.
    */
   const askWithTools = useCallback(
-    async (history: Array<Record<string, unknown>>) => {
+    async (history: Array<Record<string, unknown>>, live: () => boolean) => {
       let convo = [...history];
 
       // A bound, not a timeout. Without one, a model that keeps asking loops
       // forever and the only symptom is the app getting warm.
       for (let step = 0; step < MAX_ROUNDS; step++) {
+        // Stopped: a tool round is not streamed, so it cannot be cut short, but
+        // nothing after the stop is shown or acted on.
+        if (!live()) return;
         const out = await invoke<
           | { kind: "answer"; content: string; promptEvalCount: number; evalCount: number }
           | {
@@ -613,6 +676,7 @@ function App() {
           | { kind: "rejected"; name: string; path: string; error: string; rawCall: Record<string, unknown> }
           | { kind: "stuck"; error: string }
         >("ask_with_tools", { messages: convo, model });
+        if (!live()) return;
 
         if (out.kind === "answer") {
           setEntries((prev) => {
@@ -751,6 +815,8 @@ function App() {
     setDraft("");
     setStreaming(true);
     pinned.current = true;
+    const req = ++activeRequest.current;
+    const live = () => activeRequest.current === req;
 
     const limit = card?.numCtx ?? 32768;
     // Text files fold into the question; images ride as base64 on the message.
@@ -790,19 +856,25 @@ function App() {
       // The tool path is its own turn: not streamed, because a call arrives
       // whole and half of one cannot be acted on.
       try {
-        await askWithTools(await toWire(sendable));
+        await askWithTools(await toWire(sendable), live);
       } catch (e) {
-        setError(String(e));
+        if (live()) setError(String(e));
       } finally {
-        setStreaming(false);
-        composerRef.current?.focus();
-        await persist(entriesRef.current, convoId);
+        // A stopped request was already wrapped up and saved by stop().
+        if (live()) {
+          setStreaming(false);
+          composerRef.current?.focus();
+          await persist(entriesRef.current, convoId);
+        }
       }
       return;
     }
 
     const onEvent = new Channel<StreamEvent>();
     onEvent.onmessage = (message) => {
+      // Stopped: Rust drops the stream at its next token, but anything already in
+      // flight is ignored here so nothing lands after Stop.
+      if (!live()) return;
       if (message.event === "startingOllama") {
         // The longest of the waits, and the one most likely to look broken:
         // nothing was running, so this request pays for the server too.
@@ -836,9 +908,12 @@ function App() {
       const messages = await toWire(sendable);
       await invoke("send", { messages, model, onEvent });
     } catch (e) {
-      setError(String(e));
-      setStatus("");
+      if (live()) {
+        setError(String(e));
+        setStatus("");
+      }
     } finally {
+      if (!live()) return;
       setStreaming(false);
       composerRef.current?.focus();
       // Stamp the model onto the turn it actually answered, then save the whole
@@ -856,6 +931,37 @@ function App() {
       await persist(entriesRef.current, convoId);
     }
   }, [draft, streaming, entries, model, card, planSend, staged, persist, convoId, toolsOn, askWithTools, toWire]);
+
+  /**
+   * Stop the answer being written, and keep what has arrived.
+   *
+   * The window lets go at once: the request is marked stale, so late tokens and
+   * results are dropped, and the thread is saved as it stands. Rust is told as
+   * well, and closes the stream at its next token so the model stops working.
+   * A request waiting on your approval is answered with a refusal, which the
+   * stale tool loop then drops rather than sending.
+   */
+  const stop = useCallback(() => {
+    if (!streaming) return;
+    activeRequest.current++;
+    void invoke("stop").catch(() => {});
+    pendingDecision.current?.(false);
+
+    const cur = entriesRef.current;
+    const out = [...cur];
+    const last = out[out.length - 1];
+    if (last?.kind === "turn" && last.role === "assistant") {
+      // Stopped before a word arrived: leave no empty answer behind.
+      if (!last.content) out.pop();
+      else out[out.length - 1] = { ...last, stopped: true, ...(model ? { model } : {}) };
+    }
+    entriesRef.current = out;
+    setEntries(out);
+    setStatus("");
+    setStreaming(false);
+    composerRef.current?.focus();
+    void persist(out, convoId);
+  }, [streaming, model, persist, convoId]);
 
   /**
    * Put a file back the way it was before one edit.
@@ -895,9 +1001,16 @@ function App() {
   }, []);
 
   // Ctrl+N for a new chat and Ctrl+B for the sidebar — the two things reached
-  // for often enough to deserve a key. Escape for the dialog lives on the dialog.
+  // for often enough to deserve a key — and Ctrl+, for Appearance, where
+  // Windows apps keep settings. Escape for a dialog lives on the dialog.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Escape stops an answer, unless a dialog is open to take it first.
+      if (e.key === "Escape" && streaming && !showModels && !showAppearance) {
+        e.preventDefault();
+        stop();
+        return;
+      }
       if (!e.ctrlKey || e.altKey || e.shiftKey) return;
       const k = e.key.toLowerCase();
       if (k === "n") {
@@ -906,11 +1019,14 @@ function App() {
       } else if (k === "b") {
         e.preventDefault();
         setSidebarOpen((v) => !v);
+      } else if (k === ",") {
+        e.preventDefault();
+        setShowAppearance(true);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [streaming, newConvo]);
+  }, [streaming, newConvo, stop, showModels, showAppearance]);
 
   const limit = card?.numCtx ?? 32768;
   const pct = Math.min(100, Math.round((spent / limit) * 100));
@@ -936,7 +1052,7 @@ function App() {
       <aside className="sidebar" aria-hidden={!sidebarOpen}>
         <div className="sb-top">
           <div className="brand">
-            <img src={markUrl} alt="" className="brand-mark" width={32} height={32} />
+            <Tower size={32} className="brand-mark" />
             <span className="brand-name">Citadel</span>
           </div>
           <button
@@ -952,7 +1068,7 @@ function App() {
         <button className="new-chat" onClick={newConvo} disabled={streaming}>
           <I.Plus />
           <span>New chat</span>
-          <kbd>Ctrl N</kbd>
+          <kbd>Ctrl+N</kbd>
         </button>
 
         <div className="sb-scroll">
@@ -970,6 +1086,12 @@ function App() {
             busy={streaming}
           />
         </div>
+
+        <button className="sb-link" onClick={() => setShowAppearance(true)}>
+          <I.Palette />
+          <span>Appearance</span>
+          <kbd>Ctrl+,</kbd>
+        </button>
 
         <button className="sb-foot" onClick={() => setShowModels(true)} title="Models">
           <span className="sb-resident">
@@ -1020,7 +1142,7 @@ function App() {
           <div className="column">
             {empty ? (
               <div className="hero">
-                <img src={markUrl} alt="" className="hero-mark" width={48} height={48} />
+                <Tower size={48} className="hero-mark" />
                 <h1 className="hero-title">{greeting()}</h1>
               </div>
             ) : (
@@ -1079,6 +1201,7 @@ function App() {
                                   {splitName(entry.model).family} {splitName(entry.model).size}
                                 </span>
                               )}
+                              {entry.stopped && <span className="turn-stopped">Stopped</span>}
                               {isLast && stats && <span className="turn-stats">{stats}</span>}
                             </div>
                           )}
@@ -1180,6 +1303,7 @@ function App() {
                 <label className="icon-btn" title="Attach images or text files">
                   <I.Plus />
                   <input
+                    ref={attachRef}
                     type="file"
                     multiple
                     hidden
@@ -1248,17 +1372,63 @@ function App() {
                   )}
                   <I.Chevron width={14} height={14} />
                 </button>
-                <button
-                  className="send"
-                  onClick={() => void send()}
-                  disabled={!canSend}
-                  title="Send (Enter)"
-                  aria-label="Send"
-                >
-                  <I.ArrowUp />
-                </button>
+                {/* While an answer is being written, the same place stops it. */}
+                {streaming ? (
+                  <button className="send stop" onClick={stop} title="Stop (Esc)" aria-label="Stop">
+                    <I.Stop />
+                  </button>
+                ) : (
+                  <button
+                    className="send"
+                    onClick={() => void send()}
+                    disabled={!canSend}
+                    title="Send (Enter)"
+                    aria-label="Send"
+                  >
+                    <I.ArrowUp />
+                  </button>
+                )}
               </div>
             </div>
+
+            {empty && !draft && staged.length === 0 && (
+              <div className="starters">
+                <div className="starter-row">
+                  {STARTERS.map((s) => (
+                    <button
+                      key={s.label}
+                      className="starter"
+                      onClick={() => {
+                        setDraft(s.prompt);
+                        if ("tools" in s) setToolsOn(true);
+                        if ("folder" in s && !folder) void chooseFolder();
+                        if ("attach" in s) attachRef.current?.click();
+                        composerRef.current?.focus();
+                      }}
+                    >
+                      <s.Icon width={14} height={14} />
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+                {recent.length > 0 && (
+                  <div className="recent" role="group" aria-label="Recent folders">
+                    <span>Recent folders</span>
+                    {recent.map((r, i) => (
+                      <button
+                        key={r.path}
+                        className={"recent-folder" + (toolsOn && folder?.path === r.path ? " on" : "")}
+                        title={r.path}
+                        onClick={() => void reopenFolder(i)}
+                      >
+                        <I.Folder width={12} height={12} />
+                        {r.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="composer-foot">
               {staged.length > 0 ? (
@@ -1301,6 +1471,15 @@ function App() {
             composerRef.current?.focus();
           }}
           busy={streaming || loadingModels}
+        />
+      )}
+
+      {showAppearance && (
+        <Appearance
+          onClose={() => {
+            setShowAppearance(false);
+            composerRef.current?.focus();
+          }}
         />
       )}
     </div>

@@ -7,8 +7,204 @@
 //
 //   ?preview          a finished exchange, ending on a tool call awaiting approval
 //   ?preview=stream   the same thread, with an answer still being waited on
+//   ?preview=edit     the file-editing flow: an undoable edit, a rejection, a diff to review
+//   ?preview=empty    a new chat, with the sidebar and models filled in
+//   ?preview=appearance  the thread, with the Appearance dialog open over it
+//   ?preview=models   the thread, with the models dialog open over it
+//   &accent=dc2f3c    any of the above in another accent, applied but not saved
+//
+// It also stands in for Rust: `installPreviewIpc` answers every `invoke` from
+// memory, so a plain browser tab shows models, a GPU meter and a conversation
+// list instead of "Cannot read properties of undefined (reading 'invoke')".
 
+import { mockIPC } from "@tauri-apps/api/mocks";
+import type { Channel } from "@tauri-apps/api/core";
 import type { Entry } from "./App";
+import { applyTheme, makeTheme } from "./accent";
+import type { Summary } from "./Conversations";
+import type { CardState, ModelInfo } from "./Switchboard";
+
+const MODELS: ModelInfo[] = [
+  {
+    name: "qwen3-vl:8b-instruct-q4_K_M",
+    size: 6_136_000_000,
+    parameterSize: "8.8B",
+    quantization: "Q4_K_M",
+    isCurrent: true,
+    isResident: true,
+    residentMib: 8_120,
+    capabilities: ["completion", "vision", "tools"],
+    maxContext: 262_144,
+    error: null,
+  },
+  {
+    name: "qwen3-vl:4b-instruct-q8_0",
+    size: 5_070_000_000,
+    parameterSize: "4.4B",
+    quantization: "Q8_0",
+    isCurrent: false,
+    isResident: false,
+    residentMib: 0,
+    capabilities: ["completion", "vision", "tools"],
+    maxContext: 262_144,
+    error: null,
+  },
+  {
+    name: "llama3.2:3b",
+    size: 2_019_000_000,
+    parameterSize: "3.2B",
+    quantization: "Q4_K_M",
+    isCurrent: false,
+    isResident: false,
+    residentMib: 0,
+    capabilities: ["completion", "tools"],
+    maxContext: 131_072,
+    error: null,
+  },
+];
+
+const CARD: CardState = {
+  usedMib: 8_890,
+  totalMib: 16_376,
+  name: "Preview GPU",
+  model: MODELS[0].name,
+  numCtx: 32_768,
+};
+
+const RECENT = [
+  { path: "C:\\Users\\you\\source\\repos\\demo", name: "demo" },
+  { path: "C:\\Users\\you\\source\\repos\\odin", name: "odin" },
+  { path: "C:\\Users\\you\\practice", name: "practice" },
+];
+
+/** Spread across every recency bucket, so the grouping is on screen too. */
+function seedConversations(): Summary[] {
+  const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+  return [
+    { id: "p1", title: "Borrow checker E0502", updatedAt: ago(0.2), messageCount: 8 },
+    { id: "p2", title: "What's in the root Cargo.toml", updatedAt: ago(2), messageCount: 4 },
+    { id: "p3", title: "Summarise docs/PLAN.md", updatedAt: ago(5), messageCount: 2 },
+    { id: "p4", title: "Port 3000 in src/config.rs", updatedAt: ago(26), messageCount: 6 },
+    { id: "p5", title: "Rename greet to welcome", updatedAt: ago(60), messageCount: 10 },
+    { id: "p6", title: "Why Ollama starts in the temp directory", updatedAt: ago(100), messageCount: 4 },
+    { id: "p7", title: "Sitka or Georgia for long answers", updatedAt: ago(300), messageCount: 12 },
+    { id: "p8", title: "NVML versus ollama ps", updatedAt: ago(900), messageCount: 6 },
+  ];
+}
+
+const STREAMED = `Here is the short version of **docs/PLAN.md**:
+
+1. **Warden** answers about whatever is on screen, in a popup no screen-share can see.
+2. **Citadel** is the chat window, sharing Warden's model and deciding which one is loaded.
+3. Both run on one machine, and nothing leaves it.
+
+The model holds about 8 GB while resident, which is why \`warm\` and \`off\` are explicit.`;
+
+/** `&accent=rrggbb`: preview another accent without touching the stored one. */
+export function previewAccent() {
+  const hex = new URLSearchParams(location.search).get("accent");
+  if (hex) applyTheme(makeTheme("#" + hex.replace(/^#/, ""), "custom", "system"));
+}
+
+/** Fake the Rust side for a browser tab. Call before the first render. */
+export function installPreviewIpc() {
+  let convos = seedConversations();
+  // The same numbering lib.rs uses: a stop reaches the answers already started.
+  let sends = 0;
+  let stopAt = 0;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  mockIPC(async (cmd, payload) => {
+    const args = (payload ?? {}) as Record<string, unknown>;
+    switch (cmd) {
+      case "models":
+        return MODELS;
+      case "card":
+        return CARD;
+      case "conversations":
+        return convos;
+      case "project_folder":
+      case "clear_project_folder":
+        return null;
+      case "choose_project_folder":
+        return RECENT[0];
+      case "recent_folders":
+        return RECENT;
+      case "use_recent_folder":
+        return RECENT[Number(args.index)];
+      case "open_conversation": {
+        const c = convos.find((x) => x.id === args.id);
+        return {
+          id: args.id,
+          title: c?.title ?? "",
+          created_at: "",
+          updated_at: c?.updatedAt ?? "",
+          messages: [
+            { role: "user", content: c?.title ?? "" },
+            { role: "assistant", content: "A stored conversation, as `?preview` imagines it.", model: MODELS[0].name },
+          ],
+        };
+      }
+      case "save_conversation": {
+        const conv = args.conversation as { id: string; messages: { role: string; content: string }[] };
+        const id = conv.id || `new-${Date.now()}`;
+        const title = conv.messages.find((m) => m.role === "user")?.content.slice(0, 60) ?? "Untitled";
+        convos = [
+          { id, title, updatedAt: new Date().toISOString(), messageCount: conv.messages.length },
+          ...convos.filter((x) => x.id !== id),
+        ];
+        return { ...conv, id, title };
+      }
+      case "rename_conversation":
+        convos = convos.map((x) => (x.id === args.id ? { ...x, title: String(args.title) } : x));
+        return null;
+      case "delete_conversation":
+        convos = convos.filter((x) => x.id !== args.id);
+        return null;
+      case "send": {
+        // Streams a canned answer through the real Channel, so sending a message
+        // exercises the waiting state, the token-by-token render and the stats.
+        const channel = args.onEvent as Channel<unknown>;
+        const emit = (m: unknown) => channel.onmessage(m);
+        const mine = ++sends;
+        emit({ event: "warming" });
+        await sleep(700);
+        for (const word of STREAMED.split(/(?<= )/)) {
+          if (stopAt >= mine) return null;
+          emit({ event: "token", data: { text: word } });
+          await sleep(60);
+        }
+        emit({ event: "done", data: { promptEvalCount: 3_620, evalCount: 96, totalMs: 3_400, ttftMs: 740, loadMs: 0 } });
+        return null;
+      }
+      case "stop":
+        stopAt = sends;
+        return null;
+      case "ask_with_tools":
+        await sleep(600);
+        return { kind: "answer", content: "In preview, tools answer straight away.", promptEvalCount: 3_620, evalCount: 12 };
+      case "run_tool":
+        return { result: "(preview) nothing was read or written" };
+      case "undo_edit":
+        return "undone";
+      case "load_model":
+        await sleep(900);
+        return 2.4;
+      case "unload_model":
+        return true;
+      case "set_model":
+        return null;
+      case "system_accent":
+        return "#018574";
+      case "put_attachment":
+        return `preview-${Date.now()}.png`;
+      case "get_attachment":
+        return "";
+      default:
+        throw new Error(`?preview has no stand-in for "${cmd}"`);
+    }
+  });
+}
 
 const ANSWER = `This is **E0502** — you are holding an immutable borrow of \`scores\` while trying to mutate it. \`first\` points *into* the vector, and \`push\` may reallocate, which would leave \`first\` dangling.
 
@@ -87,7 +283,21 @@ const PORT_DIFF = {
   ],
 };
 
-export function previewThread(mode: string): { entries: Entry[]; status: string; stats: string } {
+export type Preview = {
+  entries: Entry[];
+  status: string;
+  stats: string;
+  /** Which seeded conversation the thread is, so the sidebar and title agree. */
+  convoId: string | null;
+  /** Tokens the last request spent, for the context bar. */
+  spent: number;
+};
+
+export function previewThread(mode: string): Preview {
+  if (mode === "empty") {
+    return { entries: [], status: "", stats: "", convoId: null, spent: 0 };
+  }
+
   // ?preview=edit — the file-editing flow: a finished edit you can undo, a
   // request that went straight back to the model, and one awaiting your review.
   if (mode === "edit") {
@@ -103,6 +313,8 @@ export function previewThread(mode: string): { entries: Entry[]; status: string;
       ],
       status: "",
       stats: "",
+      convoId: "p4",
+      spent: 3_214,
     };
   }
 
@@ -133,6 +345,8 @@ export function previewThread(mode: string): { entries: Entry[]; status: string;
       ],
       status: "Warming the model…",
       stats: "",
+      convoId: "p1",
+      spent: 3_214,
     };
   }
 
@@ -149,5 +363,7 @@ export function previewThread(mode: string): { entries: Entry[]; status: string;
     ],
     status: "",
     stats: "3,214 in · 402 out · 1.21s to first · 4.8s total",
+    convoId: "p1",
+    spent: 3_214,
   };
 }
