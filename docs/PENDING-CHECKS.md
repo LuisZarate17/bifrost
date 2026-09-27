@@ -3,6 +3,9 @@
 Things built here that no tool call can verify — they need a keypress, a hover, or a second
 machine.
 
+**To work through Stage G's checks, use [G-testing.md](G-testing.md)** — the same checks as a
+worksheet, with exact text to type and what should happen. This file keeps the reasoning.
+
 ## Open — G7, editing files, 2026-09-24
 
 The model, the diff, the approval, Undo, Deny, a file changed behind the diff's back and a path
@@ -119,10 +122,13 @@ With no config file present, `config::load()` still yields `qwen3-vl:8b-instruct
       an error, because nothing about it looks wrong.
 - [ ] **The tray follows too.** After switching, use the tray's Warm — it should load the model you
       chose, not the one Warden started with. Confirm with `odin status` in a terminal.
-- [ ] **⭐ Delete `%APPDATA%\odin\config.json` entirely and press the hotkey.** The popup must
+- [x] **⭐ Delete `%APPDATA%\odin\config.json` entirely and press the hotkey.** The popup must
       answer normally on its built-in default, **with no error and no stall**. This is decision #5
       and the single most important check in the stage: it is the one that says **a new app did not
       break the finished one**. Warden must work on a machine where Citadel was never installed.
+      **Passed 2026-09-25**, config renamed away: answered in ~6s on `qwen3-vl:8b-instruct-q4_K_M`,
+      no warning, and the file was not recreated. Pressed with a synthetic keypress and read over
+      the debug port rather than by eye.
 
 ## Open — G2, the switchboard, 2026-09-19
 
@@ -188,8 +194,8 @@ sequence cost 3.09s before. What none of that exercises is the popup.
 - [ ] **Does Warden read the config too?** Write `%APPDATA%\odin\config.json` with an obvious
       prompt — `{"model":"qwen3-vl:8b-instruct-q4_K_M","prompt":"Say only the word BANANA.","num_ctx":32768}`
       — then press `Ctrl+Alt+W`. The popup should answer `BANANA`.
-- [ ] **Then delete the file and press it again.** The popup must answer normally on the built-in
-      default, **with no error and no stall**. This is the one that matters: PLAN.md decision #5
+- [x] **Then delete the file and press it again.** *(Passed 2026-09-25 — the ⭐ check under G3.)*
+      The popup must answer normally on the built-in default, **with no error and no stall**. This is the one that matters: PLAN.md decision #5
       says a missing config is a normal state, and it is what keeps Warden working on a machine
       where Citadel was never installed.
 - [ ] **Warm survives the hotkey.** `odin warm`, then `Ctrl+Alt+W`. The popup should not show

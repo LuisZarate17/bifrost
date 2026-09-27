@@ -13,7 +13,7 @@ Things with an icon get a name; things you type get a description (PLAN.md §0b)
 answer into the popup. What is left of the original plan is one afternoon of testing, see
 [docs/BUILD.md](docs/BUILD.md). **Stage G is built** — Citadel exists through G7, where it learned
 to edit files in a folder you pick, and what is left is the testing round in
-[docs/PENDING-CHECKS.md](docs/PENDING-CHECKS.md).
+[docs/G-testing.md](docs/G-testing.md).
 
 ## The apps
 
@@ -88,7 +88,7 @@ odin/
 │   ├── odin-cli/      the CLI, binary `odin`
 │   └── bench/         benchmark harness, plus the tool-call and file-edit probes
 ├── evals/             rubric, fixtures, saved runs
-├── tools/             shortcuts, icon, and the end-to-end test that drives Citadel
+├── tools/             shortcuts, icon, the end-to-end test that drives Citadel, the practice folder
 ├── docs/              plan, build log, shortcuts, results  →  docs/README.md
 └── stages/            execution packets — paste one into a fresh chat
 ```

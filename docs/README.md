@@ -32,6 +32,9 @@ not another. The most-opened file here.
 **[D-testing.md](D-testing.md)** — the deferred testing round, as a worksheet to fill in at the
 machine. For when you have an afternoon.
 
+**[G-testing.md](G-testing.md)** — Stage G's checks as a worksheet: exact text to type into
+Citadel and Warden, and what should happen. `node tools/practice.mjs` builds the folder it uses.
+
 **[PENDING-CHECKS.md](PENDING-CHECKS.md)** — things no tool call can verify, because they need a
 keypress, a hover, or a second machine. Where "built but never actually pressed" is tracked.
 
