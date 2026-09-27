@@ -13,9 +13,9 @@
    white, so "Allow once" never reads as a destructive action; the accent marks
    only what is yours to act on or notice — sending, focus, the badge, the GPU
    meter, the Tools toggle, a request waiting for approval. It is whichever
-   colour the user picked, blue by default: src/accent.ts derives every shade
+   colour the user picked, sea by default (Mímir's own badge color): src/accent.ts derives every shade
    from one seed with its contrast checked and writes them as --u-* properties,
-   which the tokens below read with the default blue as fallback. Errors are
+   which the tokens below read with the default sea as fallback. Errors are
    orange-red, so an error and the default accent never share a colour.
 
    The theme is data-theme on <html>, set before the first paint by
@@ -56,12 +56,12 @@
   --border-2: rgba(255, 255, 255, 0.14);
   --border-3: rgba(255, 255, 255, 0.24);
 
-  /* The fallbacks are what accent.ts derives from the default blue. */
-  --accent: var(--u-accent-d, #1c70e3);
-  --accent-hover: var(--u-hover-d, #0864d5);
-  --accent-press: var(--u-press-d, #0058c2);
+  /* The fallbacks are what accent.ts derives from the default sea. */
+  --accent: var(--u-accent-d, #108283);
+  --accent-hover: var(--u-hover-d, #007676);
+  --accent-press: var(--u-press-d, #006969);
   --on-accent: var(--u-on-d, #ffffff);
-  --accent-text: var(--u-text-d, #5d9eff);
+  --accent-text: var(--u-text-d, #4fb0b0);
   --accent-soft: color-mix(in oklab, var(--accent) 16%, transparent);
   --accent-line: color-mix(in oklab, var(--accent) 50%, transparent);
   /* Solid, and at least 4.5:1 on every surface. The old ring was the accent at
@@ -139,11 +139,11 @@
   --border-2: rgba(0, 0, 0, 0.13);
   --border-3: rgba(0, 0, 0, 0.24);
 
-  --accent: var(--u-accent-l, #1168da);
-  --accent-hover: var(--u-hover-l, #005cca);
-  --accent-press: var(--u-press-l, #0052b5);
+  --accent: var(--u-accent-l, #067f7f);
+  --accent-hover: var(--u-hover-l, #007272);
+  --accent-press: var(--u-press-l, #006566);
   --on-accent: var(--u-on-l, #ffffff);
-  --accent-text: var(--u-text-l, #005fd0);
+  --accent-text: var(--u-text-l, #007071);
   --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
   --accent-line: color-mix(in oklab, var(--accent) 45%, transparent);
 

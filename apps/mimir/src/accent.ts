@@ -13,7 +13,7 @@
 //   on the soft accent wash laid over that bubble.
 //
 // The result is written as --u-* custom properties on <html>. App.css reads them
-// with the default blue as fallback, so nothing stored still draws correctly, and
+// with the default sea as fallback, so nothing stored still draws correctly, and
 // public/theme-boot.js replays the stored copy before the first paint.
 
 export type Mode = "dark" | "light";
@@ -38,11 +38,13 @@ export type Theme = {
   vars: Record<string, string>;
 };
 
-export const DEFAULT_SEED = "#2275e8";
+/** Sea: the color of Mímir's own badge, so the window and its icon match. */
+export const DEFAULT_SEED = "#1f8a8a";
 export const STORE_KEY = "mimir.theme";
 
 /** In hue order from the default. Every one passes both themes (see derive). */
 export const PRESETS: { name: string; seed: string }[] = [
+  { name: "Sea", seed: "#1f8a8a" },
   { name: "Blue", seed: "#2275e8" },
   { name: "Violet", seed: "#824fea" },
   { name: "Pink", seed: "#df3798" },
@@ -50,7 +52,6 @@ export const PRESETS: { name: string; seed: string }[] = [
   { name: "Ember", seed: "#e65909" },
   { name: "Amber", seed: "#fcb52c" },
   { name: "Green", seed: "#1ca045" },
-  { name: "Teal", seed: "#009488" },
   { name: "Sky", seed: "#5dcdfa" },
   { name: "Graphite", seed: "#71717a" },
 ];
@@ -216,7 +217,7 @@ export function themeVars(seed: string): Record<string, string> {
 /**
  * localStorage, not a file: it is synchronous, and only something synchronous
  * can be read before the first paint. A file would need an IPC round trip and the
- * default blue would flash first. The accent is cosmetic and per-machine, so it
+ * default sea would flash first. The accent is cosmetic and per-machine, so it
  * does not belong in the config Heimdall and the CLI share.
  */
 export function loadTheme(): Theme | null {
