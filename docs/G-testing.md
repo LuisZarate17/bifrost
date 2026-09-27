@@ -9,7 +9,7 @@ is the short version, in the order that is quickest to work through.
 
 **Before you start**
 
-- `npm run app` and `npm run app:citadel` if anything changed since the last build, then open both
+- `npm run app` and `npm run app:mimir` if anything changed since the last build, then open both
   from their shortcuts
 - `node tools/practice.mjs` — builds `practice\` in the repo (gitignored) with three small files
   whose contents are known, so every check below has an exact right answer. **Run it again to
@@ -28,27 +28,27 @@ What the practice folder holds:
 
 ---
 
-## ⭐ 0 — Warden works with no config file
+## ⭐ 0 — Heimdall works with no config file
 
 - [x] **Done 2026-09-25.** With `%APPDATA%\odin\config.json` renamed away, `Ctrl+Alt+W` answered in
       about 6 seconds on the built-in default model, with no error, no warning and no stall, and
-      Warden did not recreate the file. Pressed with a synthetic keypress and read from the popup
+      Heimdall did not recreate the file. Pressed with a synthetic keypress and read from the popup
       over its debug port, not by eye — rerun it by hand if you want to see it yourself.
 
 ---
 
 ## 1 — Editing files
 
-In Citadel. Turn on **Tools** in the message box first; the folder button only appears while it
+In Mímir. Turn on **Tools** in the message box first; the folder button only appears while it
 is on.
 
 - [ ] **Pick the folder.**
-  1. Click **Choose folder**. The Windows folder picker opens, titled *Choose the folder Citadel
+  1. Click **Choose folder**. The Windows folder picker opens, titled *Choose the folder Mímir
      may edit*.
   2. Go to `C:\Users\you\source\repos\odin`, then double-click **into** `practice`.
   3. Click **Select Folder**.
 
-  ⚠ **Not while you are still in `odin`** — selecting `odin` itself lets Citadel edit the real
+  ⚠ **Not while you are still in `odin`** — selecting `odin` itself lets Mímir edit the real
   project instead of the practice files.
 
   **Expect:** the button now reads `practice`.
@@ -129,7 +129,7 @@ Tools on. The folder does not matter; reads are allowed anywhere, one approval a
 
 - [ ] **It remembers across a restart.** New chat. Type:
       `Remember this: my dog is called Bramble. Reply with just OK.`
-      Close Citadel. Reopen it from the Desktop shortcut, open that chat in the sidebar, and type:
+      Close Mímir. Reopen it from the Desktop shortcut, open that chat in the sidebar, and type:
       `What is my dog called?` **Expect:** Bramble.
 - [ ] **Titles.** **Expect:** that chat is titled from its first line, not *New conversation*.
 - [ ] **Rename.** On the chat's row, click **Rename**, type a new name, press Enter.
@@ -139,18 +139,18 @@ Tools on. The folder does not matter; reads are allowed anywhere, one approval a
 
 ---
 
-## 5 — Warden follows Citadel
+## 5 — Heimdall follows Mímir
 
 Have a terminal open in the repo for `target\debug\odin status`.
 
 - [ ] **Switch the model.** Click the model button at the bottom right of the message box and pick
       `qwen3-vl:4b-instruct-q4_K_M`. Run `target\debug\odin status`. **Expect:** `model` shows the
-      4b. Press `Ctrl+Alt+W` — **without restarting Warden**. **Expect:** a normal answer, and
+      4b. Press `Ctrl+Alt+W` — **without restarting Heimdall**. **Expect:** a normal answer, and
       `odin status` then shows the 4b loaded.
 - [ ] **A model that can't see.** Pick `llama3.1:8b`, press `Ctrl+Alt+W`. **Expect:** the popup
       header says **cannot see images**, and the popup says *llama3.1:8b cannot be sent images, so
       nothing was captured*. No answer.
-- [ ] **The tray follows too.** Right-click Warden's tray icon and tick **Loaded**. Run
+- [ ] **The tray follows too.** Right-click Heimdall's tray icon and tick **Loaded**. Run
       `odin status`. **Expect:** `state Ready`, with the model you picked.
 - [ ] **Warm survives the hotkey.** Run `target\debug\odin warm`, then press `Ctrl+Alt+W`.
       **Expect:** no *Warming the model…*; the answer starts straight away.
@@ -173,19 +173,19 @@ Click the bottom of the sidebar, where the loaded model and the GPU meter are.
 
 ## 7 — How answers look
 
-- [ ] **Citadel streams, and renders.** Type:
+- [ ] **Mímir streams, and renders.** Type:
       `Write a short Rust function that adds two numbers. Use a heading, a bullet list and a code block.`
       **Expect:** words appear progressively, not all at once. The code block is highlighted,
       `inline code` has a faint pill, the heading is larger.
-- [ ] **Warden looks as it did.** Open `greet.rs` in VS Code, press `Ctrl+Alt+W`, then
+- [ ] **Heimdall looks as it did.** Open `greet.rs` in VS Code, press `Ctrl+Alt+W`, then
       `Ctrl+Alt+F` and type:
       `Answer with a heading, a bullet list, a short Rust code block and a link to doc.rust-lang.org.`
       **Expect:** headings set apart by weight more than size, a dark code panel with a border,
       inline code with a faint pill, the link underlined but not coloured, and a long answer
       folded with a fade and *Ctrl+Alt+wheel down for the rest*.
-- [ ] **Warden with Citadel open.** Both running, `Ctrl+Alt+W` still answers.
+- [ ] **Heimdall with Mímir open.** Both running, `Ctrl+Alt+W` still answers.
 
-**Optional.** Fill Citadel's context by pasting a long document several times. **Expect:**
+**Optional.** Fill Mímir's context by pasting a long document several times. **Expect:**
 *⋯ n earlier turns dropped to make room* in the thread, rather than the chat quietly going
 strange.
 

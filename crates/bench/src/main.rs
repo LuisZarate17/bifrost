@@ -32,7 +32,7 @@ mod report;
 
 // Deliberately NOT read from the shared config. This is a measurement harness:
 // changing its context would make F1’s saved runs incomparable to new ones, and
-// comparability is the entire point of keeping it. Warden and the CLI both use
+// comparability is the entire point of keeping it. Heimdall and the CLI both use
 // config::DEFAULT_NUM_CTX instead.
 const NUM_CTX: u32 = 8192;
 const GENERATE_TIMEOUT: Duration = Duration::from_secs(300);

@@ -8,13 +8,13 @@
     "packages/*"
   ],
   "scripts": {
-    "app": "npm run app -w apps/warden",
-    "dev": "npm run dev -w apps/warden",
-    "build": "npm run build -w apps/warden",
+    "app": "npm run app -w apps/heimdall",
+    "dev": "npm run dev -w apps/heimdall",
+    "build": "npm run build -w apps/heimdall",
     "check:inert": "npm run check:inert -w packages/ui",
     "check:fixes": "node evals/fixcheck.mjs",
-    "app:citadel": "npm run app -w apps/citadel",
-    "dev:citadel": "npm run dev -w apps/citadel",
-    "shots:citadel": "node tools/citadel-shots.mjs"
+    "app:mimir": "npm run app -w apps/mimir",
+    "dev:mimir": "npm run dev -w apps/mimir",
+    "shots:mimir": "node tools/mimir-shots.mjs"
   }
 }

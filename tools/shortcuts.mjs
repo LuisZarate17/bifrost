@@ -4,11 +4,11 @@
 //   node tools/shortcuts.mjs --check   # report where they currently point, change nothing
 //
 // Why this is a script and not a one-off. The shortcuts were made by hand and
-// pointed at `src-tauri/target/debug/warden.exe`, which stopped existing the
-// moment Before-G0 step 1 moved Warden into apps/ and consolidated every crate
+// pointed at `src-tauri/target/debug/heimdall.exe`, which stopped existing the
+// moment Before-G0 step 1 moved Heimdall into apps/ and consolidated every crate
 // into one root `target/`. A shortcut that silently does nothing is a worse
 // failure than one that is obviously broken, so the fix has to be repeatable —
-// and PLAN.md decision #5 gives Citadel its own shortcut beside Warden's, so a
+// and PLAN.md decision #5 gives Mímir its own shortcut beside Heimdall's, so a
 // second caller already exists.
 //
 // The Desktop is resolved through the shell, never by joining %USERPROFILE% and
@@ -30,20 +30,21 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
  * two processes that happen to share a model, and either alone is fully usable —
  * so they get two shortcuts rather than one launcher with a menu.
  *
- * Their icons come from `tools/icon/`: Warden is the `sentinel` shield, Citadel
- * the `bastion` tower. Same family, different silhouette — two identical icons
- * on the Desktop is worse than no icon at all, and a recoloured shield turned out
- * to be too close to tell apart at taskbar size.
+ * Their icons come from `tools/icon/`: each app holds half of the Helm of Awe on
+ * a disc of its own color, Heimdall the barred arms in silver and Mímir the
+ * tridents in sea teal. Same family, different mark — two identical icons on the
+ * Desktop is worse than no icon at all, and color alone is too little to tell
+ * two icons apart at taskbar size.
  */
 const APPS = [
   {
-    name: "Warden",
-    exe: path.join(repoRoot, "target", "debug", "warden.exe"),
+    name: "Heimdall",
+    exe: path.join(repoRoot, "target", "debug", "heimdall.exe"),
     description: "Press a hotkey, get an answer about whatever is on screen.",
   },
   {
-    name: "Citadel",
-    exe: path.join(repoRoot, "target", "debug", "citadel.exe"),
+    name: "Mímir",
+    exe: path.join(repoRoot, "target", "debug", "mimir.exe"),
     description: "A local chat app. Every token stays on this machine.",
   },
 ];

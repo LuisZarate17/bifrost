@@ -50,3 +50,20 @@ export function ico(images) {
   });
   return Buffer.concat([dir, ...blobs]);
 }
+
+// ICNS packer, for the macOS entry tauri.conf.json lists. PNG payloads only:
+// every type used here has accepted PNG since macOS 10.7.
+const ICNS_TYPES = { 32: "ic11", 64: "ic12", 128: "ic07", 256: "ic08", 512: "ic09", 1024: "ic10" };
+
+export function icns(images) {
+  const parts = images.map(({ size, png: bytes }) => {
+    const head = Buffer.alloc(8);
+    head.write(ICNS_TYPES[size], 0, "ascii");
+    head.writeUInt32BE(bytes.length + 8, 4);
+    return Buffer.concat([head, bytes]);
+  });
+  const head = Buffer.alloc(8);
+  head.write("icns", 0, "ascii");
+  head.writeUInt32BE(8 + parts.reduce((n, p) => n + p.length, 0), 4);
+  return Buffer.concat([head, ...parts]);
+}

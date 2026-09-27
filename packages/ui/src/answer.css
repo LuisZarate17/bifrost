@@ -1,4 +1,4 @@
-/* Styles for <Answer> and <CodeBlock>, split out of Warden's App.css at
+/* Styles for <Answer> and <CodeBlock>, split out of Heimdall's App.css at
    Before-G0 step 1e. Moved verbatim — this chunk changes no appearance.
 
    Consumers import this themselves (`import "@odin/ui/answer.css"`) rather than
@@ -7,7 +7,7 @@
 
    What deliberately stayed behind in App.css: `.answer > .copy-pick`, and the
    two `.content.collapsed .answer…` rules. They select .answer descendants but
-   encode Warden-only behaviour — the pick-and-copy overlay and the collapse — so
+   encode Heimdall-only behaviour — the pick-and-copy overlay and the collapse — so
    they belong to the app, not the renderer. */
 
 .answer {

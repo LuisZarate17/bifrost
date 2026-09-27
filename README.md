@@ -5,23 +5,23 @@ Local AI tools that share one model and one machine. Nothing leaves the computer
 | | |
 |---|---|
 | **`odin`** | The same pipeline from the command line, plus `warm` / `off` / `status` power control |
-| **Citadel** | A local chat app sharing Warden's model and deciding which one is loaded. **Built, in testing** — [stages/STAGE-G.md](stages/STAGE-G.md) |
+| **Mímir** | A local chat app sharing Heimdall's model and deciding which one is loaded. **Built, in testing** — [stages/STAGE-G.md](stages/STAGE-G.md) |
 
 Things with an icon get a name; things you type get a description (PLAN.md §0b).
 
 **Status.** Stages A–C are complete — `Ctrl+Alt+W` anywhere captures the screen and streams an
 answer into the popup. What is left of the original plan is one afternoon of testing, see
-[docs/BUILD.md](docs/BUILD.md). **Stage G is built** — Citadel exists through G7, where it learned
+[docs/BUILD.md](docs/BUILD.md). **Stage G is built** — Mímir exists through G7, where it learned
 to edit files in a folder you pick, and what is left is the testing round in
 [docs/G-testing.md](docs/G-testing.md).
 
 ## The apps
 
 ```
-npm run app                    # build Warden
-npm run app:citadel            # build Citadel
-target/debug/warden.exe        # or the Desktop / Start Menu shortcuts
-target/debug/citadel.exe
+npm run app                    # build Heimdall
+npm run app:mimir            # build Mímir
+target/debug/heimdall.exe        # or the Desktop / Start Menu shortcuts
+target/debug/mimir.exe
 ```
 
 **Build the apps with `npm run`, not `cargo build`.** Cargo alone bakes `devUrl` into the binary,
@@ -29,12 +29,12 @@ so the window loads from `localhost:1420` and shows WebView2's "can't reach this
 dev server happens to be running. `npm run app` is `tauri build --debug --no-bundle`: same debug
 profile, but the frontend is embedded, so the app opens and works on its own. A bare `cargo build`
 at the root now skips both apps for exactly this reason (`default-members` in `Cargo.toml`) —
-`cargo build -p citadel` would still do it, so don't.
+`cargo build -p mimir` would still do it, so don't.
 
 Release builds are refused by Smart App Control on this machine; debug builds usually run, and when
 one is blocked, rebuilding for a fresh hash clears it. See [docs/PLAN.md](docs/PLAN.md) §3.
 
-**Every control Warden has is in [docs/shortcuts.md](docs/shortcuts.md)** — there is no menu and no
+**Every control Heimdall has is in [docs/shortcuts.md](docs/shortcuts.md)** — there is no menu and no
 window chrome, so that file is the interface.
 
 ## The CLI
@@ -79,8 +79,8 @@ each kind, and a single `node_modules`.
 ```
 odin/
 ├── apps/
-│   ├── warden/        the overlay — hotkey, popup, tray (src-tauri/ + its React frontend)
-│   └── citadel/       the chat app — conversations, models, reading and editing files
+│   ├── heimdall/        the overlay — hotkey, popup, tray (src-tauri/ + its React frontend)
+│   └── mimir/       the chat app — conversations, models, reading and editing files
 ├── packages/
 │   └── ui/            @odin/ui — the Markdown renderer both apps share
 ├── crates/
@@ -88,13 +88,13 @@ odin/
 │   ├── odin-cli/      the CLI, binary `odin`
 │   └── bench/         benchmark harness, plus the tool-call and file-edit probes
 ├── evals/             rubric, fixtures, saved runs
-├── tools/             shortcuts, icon, the end-to-end test that drives Citadel, the practice folder
+├── tools/             shortcuts, icon, the end-to-end test that drives Mímir, the practice folder
 ├── docs/              plan, build log, shortcuts, results  →  docs/README.md
 └── stages/            execution packets — paste one into a fresh chat
 ```
 
-*(Restructured at Before-G0 step 1 of Stage G. The project is **ODIN**; **Warden** is the overlay
-and **Citadel** is the chat app — PLAN.md §0b.)*
+*(Restructured at Before-G0 step 1 of Stage G. The project is **ODIN**; **Heimdall** is the overlay
+and **Mímir** is the chat app — PLAN.md §0b.)*
 
 ## Docs
 

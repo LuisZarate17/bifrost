@@ -36,18 +36,26 @@ Fixed:
 
 ---
 
-## 0b. Names — settled 2026-09-18
+## 0b. Names — settled 2026-09-18, apps renamed 2026-09-26
 
 **ODIN — On-Device INference.** The project, and the command you type.
 
 | Piece | Name | Why |
 |---|---|---|
 | The project | **ODIN** | On-Device INference. What it is, in four letters |
-| The overlay | **Warden** | Summoned, and guards what it shows. Unchanged since B4 |
-| The chat app | **Citadel** | The fortified seat a garrison is commanded from — and this app commands which model is loaded |
+| The overlay | **Heimdall** (was Warden) | The watchman of the gods, who sees and hears everything — and this app looks at your screen when you call it |
+| The chat app | **Mímir** (was Citadel) | The wise counselor Odin goes to with questions, keeper of the well of wisdom. Files and the exe are `mimir` |
 | The CLI | `odin` | |
 | The harness | `bench` | |
 | The shared crate | `odin-core` | |
+
+**Renamed 2026-09-26: Warden → Heimdall, Citadel → Mímir.** The icons became the Helm of Awe,
+split between the two apps as two badges that complete one mark, and the fortress names no longer
+matched a Norse umbrella and a Norse logo. The rename is full: folders (`apps/heimdall`,
+`apps/mimir`), packages, exe names, app identifiers (`com.odin.heimdall`, `com.odin.mimir`), window
+titles, the tray, shortcuts, event names and the `HEIMDALL_*` environment switches. **The rest of
+this plan, `stages/` and `docs/results/` keep the names they were written with** — they record what
+happened, when it was Warden and Citadel. The paragraphs below are the 09-18 reasoning, unedited.
 
 **The rule: things with an icon get a name, things you type get a description.**
 

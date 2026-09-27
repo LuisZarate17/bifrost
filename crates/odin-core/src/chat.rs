@@ -425,7 +425,7 @@ pub enum StreamChunk<'a> {
 /// dependencies (this crate carries `reqwest`'s `blocking` feature only), and a
 /// much simpler loop. `reqwest::blocking::Response` implements [`std::io::Read`],
 /// so `BufReader::lines()` does the NDJSON splitting; the async version in
-/// Warden has to keep a remainder buffer because a network chunk can end
+/// Heimdall has to keep a remainder buffer because a network chunk can end
 /// mid-line.
 ///
 /// Returning `on`'s error stops the stream — that is how a caller cancels, and

@@ -6,7 +6,7 @@
     "module": "ESNext",
     "skipLibCheck": true,
 
-    /* Bundler mode — same settings as apps/warden, so a file behaves
+    /* Bundler mode — same settings as apps/heimdall, so a file behaves
        identically whichever side of the package boundary it sits on. */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,

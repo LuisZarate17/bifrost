@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // evals/bench.mjs
 //
-// Zero-dependency benchmark harness for local Ollama vision models (Warden A2).
+// Zero-dependency benchmark harness for local Ollama vision models (Heimdall A2).
 // Only Node built-ins are used: global fetch/AbortController/TextDecoder, node:fs,
 // node:path, node:crypto, node:child_process, node:perf_hooks, node:url.
 //

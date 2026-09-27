@@ -1,0 +1,2147 @@
+/* Mímir's interface.
+
+   Structure borrowed from Claude's desktop app — a sidebar of conversations
+   grouped by recency, a centred reading column, a composer that sits in the
+   middle of an empty chat and docks once one starts, answers in a serif. The
+   surfaces are ChatGPT's: true black (white in the light theme), edges drawn in
+   translucent white rather than solid greys, no shadow on anything that does not
+   float, and round shapes — pill buttons, a 28px composer, 22px bubbles. Picked
+   from four mocked directions, over Claude's warm charcoal, Linear's layered
+   slate and the cool grey Mímir started with.
+
+   The accent is used sparingly. Primary buttons are ivory on black and ink on
+   white, so "Allow once" never reads as a destructive action; the accent marks
+   only what is yours to act on or notice — sending, focus, the badge, the GPU
+   meter, the Tools toggle, a request waiting for approval. It is whichever
+   colour the user picked, blue by default: src/accent.ts derives every shade
+   from one seed with its contrast checked and writes them as --u-* properties,
+   which the tokens below read with the default blue as fallback. Errors are
+   orange-red, so an error and the default accent never share a colour.
+
+   The theme is data-theme on <html>, set before the first paint by
+   public/theme-boot.js from the user's choice, or from Windows under "system".
+   Dark is the base; light overrides it.
+
+   Every font is a Windows system font. Mímir's rule is that nothing leaves
+   the machine, so nothing is fetched to draw it either: Segoe UI Variable for
+   the interface, Sitka Text — Matthew Carter's screen-reading serif — for
+   answers, Cascadia Code for code.
+
+   The renderer's own styles come from @odin/ui and are shared with Heimdall's
+   popup. Mímir overrides them further down, always under .app, so nothing
+   here reaches Heimdall. */
+
+:root {
+  color-scheme: dark;
+
+  --bg-sidebar: #0b0b0b;
+  --bg: #000000;
+  --bg-raised: #141414;
+  --bg-card: #0b0b0b;
+  --bg-composer: #1a1a1a;
+  --bg-sunk: rgba(255, 255, 255, 0.04);
+  --bg-hover: rgba(255, 255, 255, 0.07);
+  --bg-active: rgba(255, 255, 255, 0.11);
+  /* The lightest dark surface text sits on. accent.ts checks the accent's text
+     shade against it, so keep SURFACES there in step with this. */
+  --bubble: #262626;
+
+  --text-strong: #ffffff;
+  --text: #ececec;
+  --text-2: #c4c4c4;
+  --text-3: #9b9b9b;
+  --text-4: #7a7a7a;
+
+  --border: rgba(255, 255, 255, 0.08);
+  --border-2: rgba(255, 255, 255, 0.14);
+  --border-3: rgba(255, 255, 255, 0.24);
+
+  /* The fallbacks are what accent.ts derives from the default blue. */
+  --accent: var(--u-accent-d, #1c70e3);
+  --accent-hover: var(--u-hover-d, #0864d5);
+  --accent-press: var(--u-press-d, #0058c2);
+  --on-accent: var(--u-on-d, #ffffff);
+  --accent-text: var(--u-text-d, #5d9eff);
+  --accent-soft: color-mix(in oklab, var(--accent) 16%, transparent);
+  --accent-line: color-mix(in oklab, var(--accent) 50%, transparent);
+  /* Solid, and at least 4.5:1 on every surface. The old ring was the accent at
+     half alpha, 1.8:1 — under the 3:1 a focus indicator needs. */
+  --focus-ring: var(--accent-text);
+
+  /* Primary buttons. Not the accent: see the header. */
+  --primary: #ffffff;
+  --primary-hover: #dcdcdc;
+  --on-primary: #000000;
+
+  --ok: #6fcf97;
+  --ok-soft: rgba(111, 207, 151, 0.14);
+  --warn: #e7b85c;
+  --warn-soft: rgba(231, 184, 92, 0.14);
+  --danger: #ff8f5e;
+  --danger-soft: rgba(255, 143, 94, 0.1);
+  --danger-line: rgba(255, 143, 94, 0.35);
+
+  /* Code stays dark in both themes: the highlighter paints with a dark theme,
+     and a light block would need a second one for no gain in legibility. */
+  --code-bg: #121212;
+  --code-border: rgba(255, 255, 255, 0.08);
+  --code-text: #e3e3e3;
+  --code-inline: rgba(255, 255, 255, 0.09);
+
+  --scrim: rgba(0, 0, 0, 0.74);
+  /* The one shadow: dialogs float, so they get one. Nothing else does. */
+  --shadow-dialog: 0 24px 64px -12px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  --scroll: rgba(255, 255, 255, 0.14);
+
+  --r-composer: 28px;
+  --r-bubble: 22px;
+  --r-card: 16px;
+  --r-row: 10px;
+  --r-dialog: 20px;
+  --r-code: 12px;
+
+  /* Ease-out: things arrive quickly and settle. Nothing bounces. */
+  --ease: cubic-bezier(0.25, 1, 0.5, 1);
+
+  --font-ui: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-read: "Sitka Text", Georgia, Cambria, serif;
+  --font-read-head: "Sitka Heading", "Sitka Text", Georgia, serif;
+  --font-hero: "Sitka Display", "Sitka Heading", Georgia, serif;
+  --font-mono: "Cascadia Code", "Cascadia Mono", Consolas, ui-monospace, monospace;
+
+  --sidebar-w: 264px;
+  --column: 736px;
+}
+
+/* Its own values rather than an inversion: white, a faint grey sidebar, ink
+   buttons, and borders in translucent black. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-sidebar: #f9f9f9;
+  --bg: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-card: #fbfbfb;
+  --bg-composer: #ffffff;
+  --bg-sunk: rgba(0, 0, 0, 0.03);
+  --bg-hover: rgba(0, 0, 0, 0.045);
+  --bg-active: rgba(0, 0, 0, 0.075);
+  --bubble: #f0f0f0;
+
+  --text-strong: #000000;
+  --text: #0d0d0d;
+  --text-2: #3d3d3d;
+  --text-3: #5d5d5d;
+  --text-4: #6e6e6e;
+
+  --border: rgba(0, 0, 0, 0.08);
+  --border-2: rgba(0, 0, 0, 0.13);
+  --border-3: rgba(0, 0, 0, 0.24);
+
+  --accent: var(--u-accent-l, #1168da);
+  --accent-hover: var(--u-hover-l, #005cca);
+  --accent-press: var(--u-press-l, #0052b5);
+  --on-accent: var(--u-on-l, #ffffff);
+  --accent-text: var(--u-text-l, #005fd0);
+  --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
+  --accent-line: color-mix(in oklab, var(--accent) 45%, transparent);
+
+  --primary: #0d0d0d;
+  --primary-hover: #2e2e2e;
+  --on-primary: #ffffff;
+
+  /* Darker than it looks necessary: on its own soft wash and on the grey of a
+     picked row, #23864f fell to 3.9:1. */
+  --ok: #17703f;
+  --ok-soft: rgba(23, 112, 63, 0.1);
+  --warn: #9a6a10;
+  --warn-soft: rgba(154, 106, 16, 0.1);
+  --danger: #c24a0e;
+  --danger-soft: rgba(194, 74, 14, 0.07);
+  --danger-line: rgba(194, 74, 14, 0.3);
+
+  --code-inline: rgba(0, 0, 0, 0.055);
+
+  --scrim: rgba(0, 0, 0, 0.25);
+  --shadow-dialog: 0 24px 64px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.05);
+  --scroll: rgba(0, 0, 0, 0.18);
+}
+
+/* ── base ───────────────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--accent) 35%, transparent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scroll);
+  border: 4px solid transparent;
+  border-radius: 12px;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--border-3);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+kbd {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-4);
+  letter-spacing: 0.02em;
+}
+
+.muted {
+  color: var(--text-3);
+}
+
+/* ── controls ───────────────────────────────────────────────────────────── */
+
+.icon-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 150ms var(--ease), color 150ms var(--ease);
+}
+.icon-btn.sm {
+  width: 26px;
+  height: 26px;
+}
+.icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 150ms var(--ease), border-color 150ms var(--ease);
+}
+.btn.sm {
+  height: 28px;
+  padding: 0 14px;
+  font-size: 12.5px;
+}
+.btn.xs {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.btn.primary {
+  background: var(--primary);
+  color: var(--on-primary);
+  font-weight: 600;
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+.btn.ghost {
+  background: transparent;
+  border-color: var(--border-2);
+  color: var(--text);
+}
+.btn.ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-3);
+}
+.btn.danger {
+  background: var(--danger-soft);
+  border-color: var(--danger-line);
+  color: var(--danger);
+}
+
+.dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-4);
+}
+.dot.on {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}
+
+/* ── layout ─────────────────────────────────────────────────────────────── */
+
+.app {
+  display: grid;
+  grid-template-columns: 0 minmax(0, 1fr);
+  height: 100vh;
+  transition: grid-template-columns 180ms ease;
+}
+.app.with-sidebar {
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+}
+/* Placed explicitly. On a narrow window the sidebar becomes position: fixed and
+   leaves the grid, and auto-placement then put .main into the sidebar's 0px
+   column — the whole thread vanished and only the send button showed. */
+.sidebar {
+  grid-column: 1;
+  grid-row: 1;
+}
+.main {
+  grid-column: 2;
+  grid-row: 1;
+}
+.sb-scrim {
+  display: none;
+}
+
+/* ── sidebar ────────────────────────────────────────────────────────────── */
+
+.sidebar {
+  width: var(--sidebar-w);
+  min-width: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-sidebar);
+  border-right: 1px solid var(--border);
+}
+.app:not(.with-sidebar) .sidebar {
+  visibility: hidden;
+}
+
+.sb-top {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 56px;
+  padding: 0 10px 0 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+/* The badge (Badge.tsx): a disc in the accent with the mark in its label color,
+   so it stays readable on any accent the user picks. */
+.brand-mark {
+  flex: none;
+  display: block;
+}
+.badge-disc {
+  fill: var(--accent);
+}
+.badge-mark {
+  stroke: var(--on-accent);
+}
+.badge-eye {
+  fill: var(--on-accent);
+}
+.brand-name {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.new-chat {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  margin: 2px 8px 14px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--r-row);
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms var(--ease), border-color 150ms var(--ease);
+}
+.new-chat:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.new-chat:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.new-chat kbd {
+  margin-left: auto;
+}
+
+.sb-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+}
+
+.cv-group + .cv-group {
+  margin-top: 16px;
+}
+.cv-label {
+  margin: 0;
+  padding: 4px 10px 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.01em;
+}
+.cv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.cv-item {
+  display: flex;
+  align-items: center;
+  border-radius: var(--r-row);
+  transition: background 120ms var(--ease);
+}
+.cv-item:hover {
+  background: var(--bg-hover);
+}
+.cv-item.current {
+  background: var(--bg-active);
+}
+.cv-open {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: none;
+  background: none;
+  text-align: left;
+  color: var(--text-2);
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.cv-item.current .cv-open,
+.cv-item:hover .cv-open {
+  color: var(--text);
+}
+.cv-open:disabled {
+  cursor: default;
+}
+/* Quiet until you are on a row: the list is for reading, not for acting on. */
+.cv-actions {
+  display: none;
+  gap: 1px;
+  padding-right: 4px;
+}
+.cv-item:hover .cv-actions,
+.cv-item:focus-within .cv-actions {
+  display: flex;
+}
+.cv-confirm {
+  display: flex;
+  gap: 4px;
+  padding-right: 5px;
+}
+.cv-item.arming {
+  background: var(--danger-soft);
+}
+.cv-rename {
+  flex: 1;
+  min-width: 0;
+  margin: 2px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-3);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  outline: none;
+}
+.cv-empty {
+  margin: 4px 10px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+.sb-link {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  margin: 0 8px 6px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--r-row);
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: background 150ms var(--ease), color 150ms var(--ease);
+}
+.sb-link:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.sb-link kbd {
+  margin-left: auto;
+}
+
+.sb-foot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 8px 10px;
+  padding: 11px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-card);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms var(--ease), border-color 150ms var(--ease);
+}
+.sb-foot:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-2);
+}
+.sb-resident {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  min-width: 0;
+}
+.sb-resident-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.meter-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11.5px;
+}
+.meter-label {
+  color: var(--text-3);
+}
+.meter-value {
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.meter-track {
+  height: 4px;
+  border-radius: 4px;
+  background: var(--bg-active);
+  overflow: hidden;
+}
+.meter-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--accent);
+  transition: width 400ms ease;
+}
+.meter-fill.hot {
+  background: var(--warn);
+}
+
+/* ── main ───────────────────────────────────────────────────────────────── */
+
+.main {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 52px;
+  padding: 0 14px;
+}
+.topbar-title {
+  margin-left: 6px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Chromium, so WebView2 honours it — keeps the viewport stable as content
+     grows above the scroll position while streaming. */
+  overflow-anchor: auto;
+  /* Scrolled text fades in under the top bar instead of being cut at a line —
+     the same courtesy .dock::before pays it at the bottom. */
+  mask-image: linear-gradient(to bottom, transparent 0, #000 20px);
+}
+
+.column {
+  width: 100%;
+  max-width: var(--column);
+  margin: 0 auto;
+  padding: 0 28px;
+}
+.thread > .column {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+  padding-top: 8px;
+  padding-bottom: 32px;
+}
+
+/* An empty chat: the greeting sits just above the middle and the composer just
+   below it. The thread and the dock split the height, so it stays centred at
+   any window size without measuring anything. */
+.main.empty .thread {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+.main.empty .thread > .column {
+  padding-bottom: 26px;
+}
+/* The dock takes more of the split than the thread since the starters joined it,
+   so the whole group — greeting, composer, starters — centres as one. */
+.main.empty .dock {
+  flex: 1.35 1 0;
+}
+
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  text-align: center;
+}
+.hero-mark {
+  width: 48px;
+  height: 48px;
+}
+.hero-title {
+  margin: 0;
+  font-family: var(--font-hero);
+  font-size: 36px;
+  font-weight: 400;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  text-wrap: balance;
+}
+
+/* ── turns ──────────────────────────────────────────────────────────────── */
+
+.turn.user {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.bubble {
+  max-width: 80%;
+  padding: 10px 18px;
+  border-radius: var(--r-bubble);
+  background: var(--bubble);
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.thumb {
+  display: block;
+  max-width: 280px;
+  max-height: 200px;
+  border-radius: 12px;
+  border: 1px solid var(--border-2);
+  object-fit: cover;
+}
+.thumbs-missing {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.turn.assistant {
+  user-select: text;
+}
+
+/* Copy, which model, and — on the latest answer — what it cost. Shown on the
+   latest answer and on hover elsewhere, so a long thread is not a column of
+   buttons. */
+.turn-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  margin-top: 2px;
+  margin-left: -6px;
+  font-size: 12px;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity 150ms var(--ease);
+}
+.turn.assistant:hover .turn-meta,
+.turn.assistant.last .turn-meta,
+.turn-meta:focus-within {
+  opacity: 1;
+}
+.turn-model {
+  font-weight: 500;
+}
+.turn-stats {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-4);
+}
+.turn-stopped {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--bg-sunk);
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.waiting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 28px;
+  color: var(--text-3);
+  font-size: 14px;
+}
+.pulse {
+  display: inline-flex;
+  gap: 5px;
+}
+.pulse i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+  opacity: 0.35;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.pulse i:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.pulse i:nth-child(3) {
+  animation-delay: 0.32s;
+}
+@keyframes pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.85);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Where turns were left out to fit the context. Deliberately visible — a silent
+   drop is what "it got strange after a while" looks like from the outside. */
+.dropped {
+  align-self: center;
+  margin: 0;
+  padding: 6px 14px;
+  border: 1px dashed var(--border-2);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-3);
+  text-align: center;
+}
+
+/* ── tool calls ─────────────────────────────────────────────────────────── */
+
+/* Every tool is code the model chose to run, so what it wants sits in the
+   thread where the conversation is — not in a log nobody opens. */
+.tool {
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-card);
+  background: var(--bg-card);
+  overflow: hidden;
+  font-size: 13px;
+}
+.tool-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.tool-icon {
+  display: inline-flex;
+  color: var(--text-3);
+}
+.tool-name {
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+.tool-path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  user-select: text;
+}
+.tool-state {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--bg-sunk);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.tool.ran .tool-state {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.tool.failed .tool-state {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* Waiting on a decision, so it is the loudest thing on screen — through the
+   brighter edge, the accent badge and the one solid button, not a glow. */
+.tool.pending {
+  border-color: var(--border-3);
+}
+.tool.pending .tool-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.tool.pending .tool-state::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.tool.denied,
+.tool.edit.undone {
+  border-style: dashed;
+  background: transparent;
+}
+.tool.denied .tool-name,
+.tool.edit.undone .tool-name {
+  color: var(--text-3);
+  font-weight: 500;
+}
+
+.tool-ask {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 0 12px 12px 37px;
+}
+.tool-ask p {
+  flex: 1 1 260px;
+  margin: 0;
+  color: var(--text-2);
+  line-height: 1.5;
+}
+.tool-buttons {
+  display: flex;
+  gap: 8px;
+}
+.tool-note {
+  margin: 0;
+  padding: 0 12px 11px 37px;
+  color: var(--text-3);
+}
+.tool-result summary {
+  padding: 8px 12px 9px 37px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--text-3);
+  cursor: pointer;
+  list-style: none;
+}
+.tool-result summary::-webkit-details-marker {
+  display: none;
+}
+.tool-result summary::before {
+  content: "›";
+  display: inline-block;
+  width: 14px;
+  margin-left: -14px;
+  transition: transform 150ms var(--ease);
+}
+.tool-result[open] summary::before {
+  transform: rotate(90deg);
+}
+.tool-result summary:hover {
+  color: var(--text);
+}
+.tool-result pre {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 280px;
+  overflow: auto;
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+/* ── edits ──────────────────────────────────────────────────────────────── */
+
+.tool.edit.ran .tool-state {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.tool.edit.failed .tool-state {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.tool.edit .tool-head .btn {
+  margin-left: 2px;
+}
+.tool-note.err {
+  color: var(--danger);
+}
+
+.counts {
+  flex: none;
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.counts .plus {
+  color: var(--ok);
+}
+.counts .minus {
+  color: var(--danger);
+}
+
+/* No ligatures anywhere code is shown. Cascadia Code draws `->` as one arrow
+   glyph, and in a diff whose whole job is showing exactly what will be written,
+   that reads as a `→` character in the file. What you see must be the bytes. */
+.diff,
+.app .code,
+.app .inline-code,
+.tool-result pre,
+.tool-rejected pre,
+.tool-path {
+  font-variant-ligatures: none;
+  font-feature-settings: "calt" 0, "liga" 0;
+}
+
+/* The diff you approve. Always dark, like code: it is code, and the red and
+   green read the same in either theme against one ground. */
+.diff {
+  margin: 0 12px 12px 12px;
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--code-border);
+  border-radius: var(--r-code);
+  background: var(--code-bg);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--code-text);
+}
+.tool-result .diff {
+  margin-top: 0;
+  border-radius: 0 0 var(--r-code) var(--r-code);
+}
+.hunk {
+  min-width: max-content;
+  padding: 6px 0;
+}
+.hunk-gap {
+  padding: 2px 0 6px 20px;
+  color: #8a8a94;
+  letter-spacing: 0.2em;
+}
+.dl {
+  display: grid;
+  grid-template-columns: 40px 40px 20px 1fr;
+  white-space: pre;
+  user-select: text;
+}
+.dl .ln {
+  padding-right: 10px;
+  text-align: right;
+  /* 5.5:1 on the code ground; the old #5c5b66 was 2.8:1. */
+  color: #8a8a94;
+  user-select: none;
+}
+.dl .sign {
+  text-align: center;
+  user-select: none;
+}
+.dl-text {
+  padding-right: 16px;
+}
+.dl.add {
+  background: rgba(78, 196, 128, 0.14);
+}
+.dl.add .sign,
+.dl.add .ln {
+  color: #7fdca3;
+}
+.dl.del {
+  background: rgba(240, 110, 104, 0.14);
+}
+.dl.del .sign,
+.dl.del .ln {
+  color: #f59a95;
+}
+
+/* A request that went straight back to the model. Quiet — you were not asked
+   anything — but in the thread, so nothing happens unseen. */
+.tool-rejected {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.tool-rejected summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+.tool-rejected summary::-webkit-details-marker {
+  display: none;
+}
+.tool-rejected summary:hover {
+  color: var(--text-2);
+}
+.tool-rejected code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+.tool-rejected pre {
+  margin: 8px 0 0 21px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+/* ── the project folder ─────────────────────────────────────────────────── */
+
+.folder-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 32px;
+  max-width: 220px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+}
+.folder-chip.empty {
+  gap: 6px;
+  padding: 0 12px;
+  border-style: dashed;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.folder-chip.empty:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.folder-pick,
+.folder-x {
+  display: inline-flex;
+  align-items: center;
+  height: 100%;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.folder-pick {
+  gap: 6px;
+  min-width: 0;
+  padding: 0 4px 0 12px;
+  border-radius: 999px 0 0 999px;
+  color: var(--text);
+}
+.folder-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.folder-x {
+  padding: 0 10px 0 6px;
+  border-radius: 0 999px 999px 0;
+  color: var(--text-3);
+}
+.folder-pick:hover:not(:disabled),
+.folder-x:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* ── dock: error, composer ──────────────────────────────────────────────── */
+
+.dock {
+  position: relative;
+  flex: none;
+  padding-top: 6px;
+  padding-bottom: 14px;
+  background: var(--bg);
+}
+/* The thread fades out under the composer instead of being cut flush against
+   it, so scrolled text reads as continuing rather than clipped. */
+.dock::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 12px;
+  bottom: 100%;
+  height: 32px;
+  background: linear-gradient(to bottom, transparent, var(--bg));
+  pointer-events: none;
+}
+.main.empty .dock::before {
+  display: none;
+}
+
+.banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 9px 8px 9px 14px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--r-card);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.banner > svg {
+  flex: none;
+  margin-top: 2px;
+}
+.banner-text {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.banner .icon-btn {
+  color: inherit;
+}
+
+.composer {
+  position: relative;
+  padding: 12px 10px 10px 18px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-composer);
+  background: var(--bg-composer);
+  cursor: text;
+  transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease);
+}
+.composer:focus-within {
+  border-color: var(--border-3);
+}
+.composer.dragging {
+  border-color: var(--border-3);
+  border-style: dashed;
+}
+
+.drop-hint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-composer);
+  background: var(--bg-hover);
+  backdrop-filter: blur(2px);
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+.composer textarea {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  max-height: 280px;
+  margin: 0;
+  padding: 2px 6px 10px 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.55;
+  resize: none;
+  outline: none;
+  overflow-y: hidden;
+}
+.composer textarea::placeholder {
+  color: var(--text-3);
+}
+/* Roomier when it is the only thing on screen, as an invitation to write more
+   than a line. The auto-grow still takes over past this. */
+.main.empty .composer textarea {
+  min-height: 56px;
+}
+.composer textarea:disabled {
+  opacity: 0.6;
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: -6px;
+  cursor: default;
+}
+.composer-bar .spacer {
+  flex: 1;
+}
+.composer-bar label.icon-btn {
+  cursor: pointer;
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease);
+}
+.toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.toggle.on {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.model-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 10px 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 150ms var(--ease);
+}
+.model-pill:hover {
+  background: var(--bg-hover);
+}
+.mp-family {
+  font-weight: 500;
+  color: var(--text);
+}
+.mp-size {
+  color: var(--text-3);
+}
+
+.send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin-left: 4px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+  transition: background 150ms var(--ease), opacity 150ms var(--ease);
+}
+.send:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.send:active:not(:disabled) {
+  background: var(--accent-press);
+}
+/* Stop is a different act from sending, so it is not the accent: ivory on black,
+   ink on white, like every other button that ends something. */
+.send.stop {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+.send.stop:hover {
+  background: var(--primary-hover);
+}
+.send:disabled {
+  background: var(--bg-active);
+  color: var(--text-4);
+  cursor: default;
+}
+
+.staged {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 6px 10px -4px;
+}
+.att {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 280px;
+  padding: 5px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-card);
+  background: var(--bg-sunk);
+}
+.att-thumb,
+.att-icon {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+}
+.att-thumb {
+  object-fit: cover;
+}
+.att-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-hover);
+  color: var(--text-3);
+}
+.att-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.att-name {
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.att-cost {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.att-x {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.att-x:hover {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 20px;
+  padding: 8px 6px 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.composer-foot svg {
+  vertical-align: -2px;
+  margin-right: 3px;
+}
+.main.empty .composer-foot {
+  justify-content: center;
+}
+
+/* The new-chat screen's ways in. Only while the composer is empty, so they are
+   gone the moment you start typing; they sit under the composer, so hiding them
+   never moves it. */
+.starters {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin: 16px 0 6px;
+}
+.starter-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.starter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 36px;
+  padding: 0 15px 0 13px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 150ms var(--ease), color 150ms var(--ease), border-color 150ms var(--ease);
+}
+.starter svg {
+  color: var(--text-3);
+}
+.starter:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-3);
+  color: var(--text);
+}
+.recent {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.recent > span {
+  margin-right: 2px;
+}
+.recent-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border: none;
+  border-radius: 999px;
+  background: var(--bg-sunk);
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 150ms var(--ease), color 150ms var(--ease);
+}
+.recent-folder:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.recent-folder.on {
+  background: var(--bg-active);
+  color: var(--text-strong);
+}
+.ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ctx-bar {
+  width: 44px;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--bg-active);
+  overflow: hidden;
+}
+.ctx-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--text-3);
+}
+.ctx.warn {
+  color: var(--warn);
+}
+.ctx.warn .ctx-bar > span {
+  background: var(--warn);
+}
+
+/* ── models dialog ──────────────────────────────────────────────────────── */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim);
+  animation: fade 150ms var(--ease);
+}
+.dialog {
+  width: min(780px, 100%);
+  max-height: min(84vh, 760px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-dialog);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-dialog);
+  outline: none;
+  animation: rise 160ms ease;
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
+
+.dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 16px 14px 24px;
+}
+.dialog-head h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+.dialog-sub {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text-3);
+}
+.dialog code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+.dialog-tools {
+  display: flex;
+  gap: 2px;
+}
+
+.models {
+  list-style: none;
+  margin: 0;
+  padding: 2px 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.model {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 104px 88px;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 12px;
+  border-radius: var(--r-row);
+  transition: background 120ms var(--ease);
+}
+.model:hover {
+  background: var(--bg-hover);
+}
+.model.picked {
+  background: var(--bg-active);
+}
+.model-pick {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.model-pick:disabled {
+  cursor: default;
+}
+.radio {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--border-3);
+  border-radius: 50%;
+  color: var(--on-accent);
+}
+.model.picked .radio {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+.radio svg {
+  width: 12px;
+  height: 12px;
+  stroke-width: 2;
+}
+.model-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.model-name {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-meta {
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.caps {
+  display: flex;
+  gap: 6px;
+}
+.cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 9px 2px 7px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  cursor: help;
+}
+.cap.warn {
+  border-color: transparent;
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.residency {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.loaded,
+.unloaded {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.loaded {
+  color: var(--ok);
+}
+.unloaded {
+  color: var(--text-3);
+}
+.model-act {
+  justify-self: end;
+  width: 100%;
+}
+
+.dialog-note {
+  margin: 8px 24px 0;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.dialog-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--border);
+}
+.dialog-fine {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-3);
+}
+
+/* ── appearance dialog ──────────────────────────────────────────────────── */
+
+.dialog.appearance {
+  width: min(560px, 100%);
+}
+.settings {
+  display: flex;
+  flex-direction: column;
+  padding: 0 24px 6px;
+  overflow-y: auto;
+}
+.setting {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 0;
+}
+.setting + .setting {
+  border-top: 1px solid var(--border);
+}
+.setting.stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+}
+.setting-text h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+.setting-text p {
+  margin: 3px 0 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+
+.seg {
+  flex: none;
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--bg-sunk);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.seg button {
+  height: 30px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms var(--ease), color 150ms var(--ease);
+}
+.seg button:hover {
+  color: var(--text);
+}
+.seg button.on {
+  background: var(--bg-active);
+  color: var(--text-strong);
+}
+
+.swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+/* The seed itself, not the derived fill: this is the colour the user picked. */
+.swatch {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--border-2);
+  cursor: pointer;
+  transition: transform 150ms var(--ease), box-shadow 150ms var(--ease);
+}
+.swatch:hover {
+  transform: scale(1.08);
+}
+.swatch.on {
+  box-shadow: 0 0 0 2px var(--bg-raised), 0 0 0 4px var(--text-strong);
+}
+/* A rainbow ring around the picked colour, so it still reads as "any colour". */
+.swatch.custom {
+  background: radial-gradient(circle, var(--c, transparent) 0 52%, transparent 53%),
+    conic-gradient(#e5484d, #f5a524, #e3d44a, #46a758, #12a594, #3e9ae8, #8e4ec6, #d6409f, #e5484d);
+}
+.swatch.custom:has(input:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.swatch.custom input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.match-windows {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 11px 14px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-card);
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms var(--ease), border-color 150ms var(--ease);
+}
+.match-windows:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.match-windows.on {
+  border-color: var(--border-3);
+  background: var(--bg-active);
+}
+.match-windows:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.mw-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+.mw-text .muted {
+  font-size: 12px;
+  font-weight: 400;
+}
+.mw-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.mw-chip {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--border-2);
+}
+.mw-check {
+  flex: none;
+  color: var(--text-strong);
+}
+
+/* ── the answer, as Mímir reads it ────────────────────────────────────── */
+
+/* @odin/ui sizes these for Heimdall's 480px popup — 12.5px text, dark only. In a
+   reading column they want to be larger and set in the serif, and in the light
+   theme every colour answer.css hard-codes for dark has to follow the tokens.
+   Scoped under .app, so Heimdall's popup never sees any of it. */
+
+.app .answer {
+  font-family: var(--font-read);
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--text);
+  /* Sitka's default figures are oldstyle, which set "3000" as "3ooo". */
+  font-variant-numeric: lining-nums proportional-nums;
+}
+.app .answer p {
+  margin: 0 0 14px;
+}
+.app .answer > :last-child {
+  margin-bottom: 0;
+}
+.app .answer h1,
+.app .answer h2,
+.app .answer h3,
+.app .answer h4,
+.app .answer h5,
+.app .answer h6 {
+  margin: 24px 0 8px;
+  font-family: var(--font-read-head);
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text-strong);
+  opacity: 1;
+}
+.app .answer > :first-child {
+  margin-top: 0;
+}
+.app .answer h1 {
+  font-size: 22px;
+}
+.app .answer h2 {
+  font-size: 19px;
+}
+.app .answer h3 {
+  font-size: 17px;
+}
+.app .answer h4,
+.app .answer h5,
+.app .answer h6 {
+  font-size: 16px;
+}
+.app .answer strong {
+  color: var(--text-strong);
+}
+.app .answer em {
+  opacity: 1;
+}
+.app .answer ul,
+.app .answer ol {
+  margin: 0 0 14px;
+  padding-left: 26px;
+}
+.app .answer li {
+  margin: 6px 0;
+  padding-left: 2px;
+}
+.app .answer li::marker {
+  color: var(--text-3);
+  /* Chromium gives markers tabular-nums, which drops the lining figures above. */
+  font-variant-numeric: lining-nums tabular-nums;
+}
+.app .answer hr {
+  margin: 22px 0;
+  border-top-color: var(--border-2);
+}
+.app .answer blockquote {
+  margin: 0 0 14px;
+  padding-left: 16px;
+  border-left: 3px solid var(--border-3);
+  color: var(--text-2);
+  opacity: 1;
+}
+.app .answer .link-text {
+  opacity: 1;
+  text-decoration-color: var(--text-3);
+}
+.app .answer table {
+  margin: 0 0 16px;
+  font-family: var(--font-ui);
+  font-size: 13.5px;
+}
+.app .answer th,
+.app .answer td {
+  padding: 7px 12px;
+  border-color: var(--border-2);
+}
+.app .answer th {
+  background: var(--bg-sunk);
+}
+
+/* Quieter than the renderer's default: in a serif paragraph a bright mono pill
+   on every identifier pulls the eye off the sentence. */
+.app .inline-code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--code-inline);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.8em;
+  white-space: break-spaces;
+}
+
+.app .code {
+  margin: 6px 0 18px;
+  padding: 14px 16px;
+  max-height: min(60vh, 560px);
+  border: 1px solid var(--code-border);
+  border-radius: var(--r-code);
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.app .code::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+
+/* ── narrow windows ─────────────────────────────────────────────────────── */
+
+/* Below this the sidebar would squeeze the thread to nothing, so it floats over
+   the thread instead of taking width from it. */
+@media (max-width: 720px) {
+  .app,
+  .app.with-sidebar {
+    grid-template-columns: 0 minmax(0, 1fr);
+  }
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 40;
+    box-shadow: var(--shadow-dialog);
+  }
+  .app.with-sidebar .sb-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 39;
+    background: var(--scrim);
+  }
+  .column {
+    padding: 0 18px;
+  }
+  .model {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .caps,
+  .residency {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

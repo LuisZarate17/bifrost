@@ -6,7 +6,7 @@ know what you want but not where it lives, it is on this page.
 ## Start here
 
 - **What does this key do?** → [shortcuts.md](shortcuts.md)
-  Warden has no menu and no window chrome, so that file *is* the interface.
+  Heimdall has no menu and no window chrome, so that file *is* the interface.
 - **Where does the project stand?** → [BUILD.md](BUILD.md)
 - **Why was this decided?** → [PLAN.md](PLAN.md)
 - **How do I build and run it?** → [../README.md](../README.md)
@@ -26,14 +26,14 @@ Read it before re-deriving something, or when wondering whether a feature belong
 
 **[BUILD.md](BUILD.md)** — the build plan, stages A–F, chunk by chunk, and what is left.
 
-**[shortcuts.md](shortcuts.md)** — every control Warden has, and why each one is that key and
+**[shortcuts.md](shortcuts.md)** — every control Heimdall has, and why each one is that key and
 not another. The most-opened file here.
 
 **[D-testing.md](D-testing.md)** — the deferred testing round, as a worksheet to fill in at the
 machine. For when you have an afternoon.
 
 **[G-testing.md](G-testing.md)** — Stage G's checks as a worksheet: exact text to type into
-Citadel and Warden, and what should happen. `node tools/practice.mjs` builds the folder it uses.
+Mímir and Heimdall, and what should happen. `node tools/practice.mjs` builds the folder it uses.
 
 **[PENDING-CHECKS.md](PENDING-CHECKS.md)** — things no tool call can verify, because they need a
 keypress, a hover, or a second machine. Where "built but never actually pressed" is tracked.
@@ -45,7 +45,7 @@ records of what happened.
 
 - **[STAGE-A.md](../stages/STAGE-A.md)** — foundations, no GUI. Complete.
 - **[STAGE-B.md](../stages/STAGE-B.md)** — the app shell. Complete.
-- **[STAGE-G.md](../stages/STAGE-G.md)** — **Citadel**, the local chat app sharing Warden's
+- **[STAGE-G.md](../stages/STAGE-G.md)** — **Mímir**, the local chat app sharing Heimdall's
   model. Built through G7 (editing files); the testing round is open.
 
 ---
@@ -56,7 +56,7 @@ Four Rust crates, one shared React package and one app frontend. Line numbers dr
 names don't, so grep the name if a number has gone stale.
 
 > **Paths changed at Before-G0 step 1** (Stage G). Everything moved under `apps/`, `packages/` and
-> `crates/`, and `warden-core` became `odin-core`. The headings below are the current locations.
+> `crates/`, and `heimdall-core` became `odin-core`. The headings below are the current locations.
 
 ### `crates/odin-core/` — shared by everything
 
@@ -75,7 +75,7 @@ names don't, so grep the name if a number has gone stale.
 > Everything here is **blocking by design**. Calling it from an `async` Tauri command drops a tokio
 > runtime inside an async context and kills the worker. Go through `spawn_blocking`.
 
-### `apps/warden/src-tauri/src/lib.rs` — Warden's Rust side
+### `apps/heimdall/src-tauri/src/lib.rs` — Heimdall's Rust side
 
 About 2,000 lines, and most of the app is in it.
 
@@ -99,22 +99,22 @@ About 2,000 lines, and most of the app is in it.
 - **Where the logs go** — `redirect_log_to_file()` (~1732)
   The app is windowless, so this is the only way to see anything it printed.
 
-### `apps/warden/src-tauri/src/tray.rs` — the tray
+### `apps/heimdall/src-tauri/src/tray.rs` — the tray
 
 - **The menu, and Off / Warming / Ready** — `install()` (~324), `Power`
 - **Warming exists only here** — `/api/ps` has no "loading" entry, so only a long-lived process
   that knows it issued a load can show it
 
-### `apps/warden/src/` — Warden's own React frontend
+### `apps/heimdall/src/` — Heimdall's own React frontend
 
 - **The popup's markup, header hints, pick-and-copy state** — `App.tsx`
 - **The popup's chrome** — `App.css`. The renderer's styles are *not* here; see `@odin/ui` below.
-  Three rules that select `.answer` descendants do stay, because they are Warden behaviours rather
+  Three rules that select `.answer` descendants do stay, because they are Heimdall behaviours rather
   than renderer ones: `.answer > .copy-pick` and the two `.content.collapsed .answer…` rules.
 
 ### `packages/ui/` — `@odin/ui`, the renderer both apps share
 
-Extracted at Before-G0 step 1e, while Warden was still its only consumer. Citadel imports the same
+Extracted at Before-G0 step 1e, while Heimdall was still its only consumer. Mímir imports the same
 package from G1, so **one renderer means one security review rather than two that drift**.
 
 - **Markdown rendering, and the security refusals** — `src/Answer.tsx`
@@ -139,7 +139,7 @@ package from G1, so **one renderer means one security review rather than two tha
 - **Can the model call tools?** — `crates/bench/src/bin/toolprobe.rs` (G0)
 - **Can the model edit files correctly?** — `crates/bench/src/bin/editprobe.rs` (G7), scored byte
   for byte on CRLF files: `cargo run -p bench --bin editprobe`
-- **Citadel's file editing, end to end** — `tools/e2e/citadel-edit.mjs`. Drives the running app
+- **Mímir's file editing, end to end** — `tools/e2e/mimir-edit.mjs`. Drives the running app
   over its WebView2 debug port with the real model; 16 checks, leaves nothing behind
 - **The grading rubric** — `evals/cases.md`
 - **Cases that regenerate from tracked source** — `evals/fixtures/`
@@ -169,7 +169,7 @@ Finished chunks: what was built, what was measured, what the measurement changed
 - **[B1](results/B1-results.md)** — Tauri 2 + React + TypeScript. A window opens
 - **[B2](results/B2-results.md)** — streaming over a `Channel`.
   **Never return the answer as a command's `Result`** — it buffers the whole thing.
-- **[B3](results/B3-results.md)** — capture behind a button, exclusion verified against Warden's
+- **[B3](results/B3-results.md)** — capture behind a button, exclusion verified against Heimdall's
   own screenshot
 - **[B4](results/B4-results.md)** — hotkey and corner popup. Translucency is CSS alpha, not a DWM
   backdrop
@@ -182,15 +182,15 @@ Finished chunks: what was built, what was measured, what the measurement changed
 - **[C4a](results/C4a-results.md)** — power control in the CLI.
   **off −8,193 MiB · warm +7,873 MiB in 2.2 s** — the deltas match, which is the test.
 
-**Stage G — Citadel, the local chat app**
+**Stage G — Mímir, the local chat app**
 
 - **[G0](results/G0-results.md)** — the tool-call probe. **qwen3-vl:8b 10/10, llama3.1:8b 6/10** with a
-  spurious call on every negative case. G6 is worth building, on the model Warden already uses.
+  spurious call on every negative case. G6 is worth building, on the model Heimdall already uses.
 - **[G1](results/G1-results.md)** — the spine. A conversation that remembers, streamed in fragments.
   **`ttft` measured 85.3µs until the clock was started before `.send()`** — then 150ms warm, 3.77s cold
 - **[G2](results/G2-results.md)** — the switchboard. **`load_duration 0.00s`** is the proof the warm
   model survived a model switch; a runner is keyed by model *and* `num_ctx`
-- **[G3](results/G3-results.md)** — Warden follows the config.
+- **[G3](results/G3-results.md)** — Heimdall follows the config.
   **A model without `vision` does not refuse a screenshot** — it describes a screen it never saw
 - **[G4](results/G4-results.md)** — conversations survive a restart. One JSON file each, no database
 - **[G5](results/G5-results.md)** — attachments. **An image costs ~2,042 tokens whatever it shows**,

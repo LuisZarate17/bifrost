@@ -4,7 +4,7 @@
 //!   cargo run -p bench --bin editprobe -- --model llama3.1:8b --runs 3
 //!   cargo run -p bench --bin editprobe -- --only t10 --format replace
 //!
-//! **This decides how Citadel edits files, and whether it should at all.**
+//! **This decides how Mímir edits files, and whether it should at all.**
 //! Reading a file wrong costs one bad answer; writing one wrong corrupts it. So
 //! before the feature is trusted, it is measured on the model that will do it.
 //!

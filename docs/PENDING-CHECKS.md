@@ -9,7 +9,7 @@ worksheet, with exact text to type and what should happen. This file keeps the r
 ## Open — G7, editing files, 2026-09-24
 
 The model, the diff, the approval, Undo, Deny, a file changed behind the diff's back and a path
-outside the folder are all covered by `node tools/e2e/citadel-edit.mjs` — 16/16 on the shipped
+outside the folder are all covered by `node tools/e2e/mimir-edit.mjs` — 16/16 on the shipped
 build. **What it deliberately skips is the one thing a person operates:** the folder picker. The test
 writes the folder into the config instead, because the app has no command that takes a folder path —
 by design.
@@ -89,7 +89,7 @@ rename and delete work, deleting something already gone returns `false` rather t
 a record written without the G5/G6 fields still parses. 12 tests cover the record shape, the title
 derivation, the date arithmetic and the path-traversal refusal.
 
-- [ ] **⭐ Close Citadel, reopen it, and continue a conversation.** Ask something, quit, relaunch,
+- [ ] **⭐ Close Mímir, reopen it, and continue a conversation.** Ask something, quit, relaunch,
       hit **History**, open the thread, and ask a follow-up that depends on what was said before.
       **That is the chunk's done-when.**
 - [ ] **Titles derive from the first question.** A list of conversations all called "New
@@ -102,7 +102,7 @@ derivation, the date arithmetic and the path-traversal refusal.
 - [ ] **Look at a file.** `%APPDATA%\odin\conversations\` — it should be readable JSON, with
       `model` recorded on assistant turns and `images`/`tool_calls` absent until G5 and G6 fill them.
 
-## Open — G3, Warden follows the app, 2026-09-19
+## Open — G3, Heimdall follows the app, 2026-09-19
 
 **This is the chunk that answers the original question**, and its checks are the ones that matter
 most in Stage G — two of them are about whether a new app broke a finished one.
@@ -112,20 +112,20 @@ most in Stage G — two of them are about whether a new app broke a finished one
 3.02 ms round trip into a **4.10 µs** lookup — about 700× — which is what keeps the popup instant.
 With no config file present, `config::load()` still yields `qwen3-vl:8b-instruct-q4_K_M` at 32,768.
 
-- [ ] **Switch the model in Citadel, then press `Ctrl+Alt+W` — without restarting Warden.**
-      The popup should answer using the new model. Warden re-reads the config on every summon, so
+- [ ] **Switch the model in Mímir, then press `Ctrl+Alt+W` — without restarting Heimdall.**
+      The popup should answer using the new model. Heimdall re-reads the config on every summon, so
       there is no IPC, no file watching and no daemon; it simply looks when it wakes up.
-- [ ] **Pick `llama3.1:8b` in Citadel and press the hotkey.** The popup must say
+- [ ] **Pick `llama3.1:8b` in Mímir and press the hotkey.** The popup must say
       **`cannot see images`** in the header and name the model, *instead of* capturing and
       answering. Ollama does not refuse a screenshot sent to a text-only model — it drops the image
       and answers anyway, which is a fluent, confident description of nothing. That is worse than
       an error, because nothing about it looks wrong.
 - [ ] **The tray follows too.** After switching, use the tray's Warm — it should load the model you
-      chose, not the one Warden started with. Confirm with `odin status` in a terminal.
+      chose, not the one Heimdall started with. Confirm with `odin status` in a terminal.
 - [x] **⭐ Delete `%APPDATA%\odin\config.json` entirely and press the hotkey.** The popup must
       answer normally on its built-in default, **with no error and no stall**. This is decision #5
       and the single most important check in the stage: it is the one that says **a new app did not
-      break the finished one**. Warden must work on a machine where Citadel was never installed.
+      break the finished one**. Heimdall must work on a machine where Mímir was never installed.
       **Passed 2026-09-25**, config renamed away: answered in ~6s on `qwen3-vl:8b-instruct-q4_K_M`,
       no warning, and the file was not recreated. Pressed with a synthetic keypress and read over
       the debug port rather than by eye.
@@ -156,15 +156,15 @@ What is open is the panel itself.
 
 ## Open — G1, 2026-09-19
 
-Citadel builds, launches, and shows a window titled **Citadel** alongside a running Warden. What no
+Mímir builds, launches, and shows a window titled **Mímir** alongside a running Heimdall. What no
 tool call can do is type in it.
 
 **Already proven mechanically**, so only the wiring is open: a three-message conversation through
 `odin_core::chat::stream` correctly recalled both facts from turn one — *"Your dog is called
 Bramble, and you mentioned the colour vermilion."* The stream delivers separate fragments (8 for a
-count to eight), Warden still compiles and runs, and both guards pass.
+count to eight), Heimdall still compiles and runs, and both guards pass.
 
-- [ ] **Hold a real conversation.** Launch `target\debug\citadel.exe`, ask something, then ask a
+- [ ] **Hold a real conversation.** Launch `target\debug\mimir.exe`, ask something, then ask a
       follow-up that only makes sense given the first — "what did I just ask you?". **This is the
       chunk's done-when.**
 - [ ] **Watch it stream.** Tokens should appear progressively, *not* all at once. Arriving whole is
@@ -179,9 +179,9 @@ count to eight), Warden still compiles and runs, and both guards pass.
 - [ ] **Fill the context** — paste something long, repeatedly — and confirm
       `⋯ n earlier turns dropped to make room` appears in the thread rather than the conversation
       quietly going strange.
-- [ ] **Warden is undisturbed.** `Ctrl+Alt+W` still answers with Citadel open.
+- [ ] **Heimdall is undisturbed.** `Ctrl+Alt+W` still answers with Mímir open.
 
-> **Expect Smart App Control to refuse `citadel.exe` at some point.** It did not on the first
+> **Expect Smart App Control to refuse `mimir.exe` at some point.** It did not on the first
 > launch, but a new binary is a fresh verdict; a rebuild for a new hash clears it (PLAN.md §3).
 
 ## Open — Before G0 step 3, 2026-09-19
@@ -191,13 +191,13 @@ exit 0; a file with a distinctive prompt reaches the model; renaming it away fal
 without forcing a reload. `odin warm` then `odin` now reports **`load 0.00s`**, where the same
 sequence cost 3.09s before. What none of that exercises is the popup.
 
-- [ ] **Does Warden read the config too?** Write `%APPDATA%\odin\config.json` with an obvious
+- [ ] **Does Heimdall read the config too?** Write `%APPDATA%\odin\config.json` with an obvious
       prompt — `{"model":"qwen3-vl:8b-instruct-q4_K_M","prompt":"Say only the word BANANA.","num_ctx":32768}`
       — then press `Ctrl+Alt+W`. The popup should answer `BANANA`.
 - [x] **Then delete the file and press it again.** *(Passed 2026-09-25 — the ⭐ check under G3.)*
       The popup must answer normally on the built-in default, **with no error and no stall**. This is the one that matters: PLAN.md decision #5
-      says a missing config is a normal state, and it is what keeps Warden working on a machine
-      where Citadel was never installed.
+      says a missing config is a normal state, and it is what keeps Heimdall working on a machine
+      where Mímir was never installed.
 - [ ] **Warm survives the hotkey.** `odin warm`, then `Ctrl+Alt+W`. The popup should not show
       "Warming the model…" — the tray and the CLI now load at the same `num_ctx` the popup asks
       with, so the runner is no longer torn down between them.
@@ -221,17 +221,17 @@ sequence cost 3.09s before. What none of that exercises is the popup.
       **The three rules deliberately left in `App.css`** are the ones to suspect if the *collapse*
       or `Ctrl+Alt+Z`'s highlight misbehave rather than the prose: `.answer > .copy-pick` and the
       two `.content.collapsed .answer…` rules. They select `.answer` descendants but encode
-      Warden's behaviour, not the renderer's.
+      Heimdall's behaviour, not the renderer's.
 
 ## Cleared 2026-09-25 — the rename
 
-- [x] **1h — rename the repo root** `C:\Users\you\source\repos\warden` → `…\repos\odin`.
-      **Done 2026-09-25.** Closing VS Code was not enough: **Ollama was holding the folder.** Warden
+- [x] **1h — rename the repo root** `C:\Users\you\source\repos\heimdall` → `…\repos\odin`.
+      **Done 2026-09-25.** Closing VS Code was not enough: **Ollama was holding the folder.** Heimdall
       had started `ollama serve` on 09-17, it inherited the repo as its working directory, and so
       did every model runner it spawned. odin-core now starts Ollama from the temp directory, so a
       future rename only needs the editor and the apps closed. **After a rename, `cargo clean`
       first:** Tauri's build scripts cache absolute paths, so the next build fails reading
-      `…\warden\target\…\permissions\…` rather than rebuilding.
+      `…\heimdall\target\…\permissions\…` rather than rebuilding.
 - [x] **Re-run `node tools/shortcuts.mjs`.** **Done 2026-09-25** — `--check` shows all four, Desktop
       and Start Menu, at the new path.
 - [x] **`gh repo rename odin`**, then update `origin`. **Done 2026-09-25** — the repo is
@@ -281,7 +281,7 @@ this file.)*
 
 **RESOLVED 2026-09-17 — `npm run app`.** The app needed a terminal running Vite to work at all: `cargo build` bakes `devUrl` into debug
 builds, and the debug build is the only one Smart App Control lets run. That breaks C5's premise —
-"you open Warden when you want the hotkey live" — because right now you also have to keep a dev
+"you open Heimdall when you want the hotkey live" — because right now you also have to keep a dev
 server up.
 
 Fixed by `npm run app` (`tauri build --debug --no-bundle`), plus suppressing the console so the app
@@ -292,6 +292,6 @@ at all. Verified: runs with no dev server, survives closing VS Code and every te
 
 Not a bug, but worth a decision:
 
-- [ ] Zoom lists **"Warden"** by name in its share picker, with a black thumbnail. Contents never
+- [ ] Zoom lists **"Heimdall"** by name in its share picker, with a black thumbnail. Contents never
       leak; the window's *existence* does. Left as-is deliberately — renaming is obscurity, and the
       app only runs when you open it. Revisit only if a picker leaks more than the name.

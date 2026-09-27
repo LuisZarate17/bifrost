@@ -1,0 +1,41 @@
+[package]
+name = "heimdall"
+version = "0.1.0"
+description = "Press a hotkey, get an answer about whatever is on screen, from a model that never leaves the machine."
+authors = ["LuisZarate17"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "heimdall_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-opener = "2"
+odin-core = { path = "../../../crates/odin-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "json", "stream"] }
+futures-util = "0.3"
+base64 = "0.22"
+windows-capture = "2.0.1"
+image = "0.25.10"
+tauri-plugin-global-shortcut = "2.3.2"
+tauri-plugin-clipboard-manager = "2"
+
+
+# The [profile.release] that used to live here moved to the workspace root at
+# Before-G0 step 1d. Cargo ignores profiles on non-root packages and says so only
+# as a warning, so leaving it here would have silently dropped Heimdall's release
+# optimizations rather than failing.
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_Console", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }

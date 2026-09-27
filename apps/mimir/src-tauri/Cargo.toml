@@ -1,0 +1,39 @@
+[package]
+name = "mimir"
+version = "0.1.0"
+description = "A local chat app. Every token stays on this machine."
+authors = ["LuisZarate17"]
+edition = "2021"
+
+# Deliberately NOT a copy of Heimdall's dependency list. Mímir is an ordinary
+# window, so it needs none of the Win32 work that makes the popup click-through
+# and invisible to screen capture: no `windows` crate, no `windows-capture`, no
+# global-shortcut plugin, no tray. Adding any of them here would be a bug.
+
+[lib]
+# The `_lib` suffix is not redundant: on Windows a lib and a bin cannot share a
+# name (rust-lang/cargo#8519). Same reason Heimdall's is `heimdall_lib`.
+name = "mimir_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+odin-core = { path = "../../../crates/odin-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Attachments arrive from the webview already base64-encoded.
+base64 = "0.22"
+# The native folder picker, used only from Rust by choose_project_folder. It
+# depends on tauri-plugin-fs, which is deliberately not registered: the webview
+# gets no file access from either, and no dialog permission in capabilities.
+tauri-plugin-dialog = "2"
+
+# For suppressing the console and pointing stdout at a file, and for reading the
+# Windows accent colour for "Match Windows" (one registry value, read-only).
+# Deliberately three features, not Heimdall’s eight - none of the capture, hook or
+# window machinery belongs in an ordinary window.
+[target."cfg(windows)".dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_Registry"] }

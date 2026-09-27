@@ -20,8 +20,8 @@ mod power;
 use odin_core::{config, ollama};
 
 // DEFAULT_MODEL and NUM_CTX moved to odin-core::config at Before-G0 step 3.
-// They were duplicated here and in Warden, and the num_ctx copies had already
-// drifted apart - this one said 8192 while Warden said 32768, so `odin warm`
+// They were duplicated here and in Heimdall, and the num_ctx copies had already
+// drifted apart - this one said 8192 while Heimdall said 32768, so `odin warm`
 // loaded a runner the hotkey then threw away. Measured 2026-09-19: switching
 // context cost a 3.09s reload every time.
 

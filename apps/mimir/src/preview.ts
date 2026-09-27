@@ -1,0 +1,369 @@
+// Dev-only. `?preview` seeds a realistic thread so every state of the UI can be
+// looked at — and screenshotted over CDP — without loading an 8 GB model or
+// writing a conversation to disk. Loaded through a dynamic import behind
+// `import.meta.env.DEV`, so none of this reaches the built app.
+//
+// Same idea as Heimdall's `?preview` and its sample-answer.ts.
+//
+//   ?preview          a finished exchange, ending on a tool call awaiting approval
+//   ?preview=stream   the same thread, with an answer still being waited on
+//   ?preview=edit     the file-editing flow: an undoable edit, a rejection, a diff to review
+//   ?preview=empty    a new chat, with the sidebar and models filled in
+//   ?preview=appearance  the thread, with the Appearance dialog open over it
+//   ?preview=models   the thread, with the models dialog open over it
+//   &accent=dc2f3c    any of the above in another accent, applied but not saved
+//
+// It also stands in for Rust: `installPreviewIpc` answers every `invoke` from
+// memory, so a plain browser tab shows models, a GPU meter and a conversation
+// list instead of "Cannot read properties of undefined (reading 'invoke')".
+
+import { mockIPC } from "@tauri-apps/api/mocks";
+import type { Channel } from "@tauri-apps/api/core";
+import type { Entry } from "./App";
+import { applyTheme, makeTheme } from "./accent";
+import type { Summary } from "./Conversations";
+import type { CardState, ModelInfo } from "./Switchboard";
+
+const MODELS: ModelInfo[] = [
+  {
+    name: "qwen3-vl:8b-instruct-q4_K_M",
+    size: 6_136_000_000,
+    parameterSize: "8.8B",
+    quantization: "Q4_K_M",
+    isCurrent: true,
+    isResident: true,
+    residentMib: 8_120,
+    capabilities: ["completion", "vision", "tools"],
+    maxContext: 262_144,
+    error: null,
+  },
+  {
+    name: "qwen3-vl:4b-instruct-q8_0",
+    size: 5_070_000_000,
+    parameterSize: "4.4B",
+    quantization: "Q8_0",
+    isCurrent: false,
+    isResident: false,
+    residentMib: 0,
+    capabilities: ["completion", "vision", "tools"],
+    maxContext: 262_144,
+    error: null,
+  },
+  {
+    name: "llama3.2:3b",
+    size: 2_019_000_000,
+    parameterSize: "3.2B",
+    quantization: "Q4_K_M",
+    isCurrent: false,
+    isResident: false,
+    residentMib: 0,
+    capabilities: ["completion", "tools"],
+    maxContext: 131_072,
+    error: null,
+  },
+];
+
+const CARD: CardState = {
+  usedMib: 8_890,
+  totalMib: 16_376,
+  name: "Preview GPU",
+  model: MODELS[0].name,
+  numCtx: 32_768,
+};
+
+const RECENT = [
+  { path: "C:\\Users\\you\\source\\repos\\demo", name: "demo" },
+  { path: "C:\\Users\\you\\source\\repos\\odin", name: "odin" },
+  { path: "C:\\Users\\you\\practice", name: "practice" },
+];
+
+/** Spread across every recency bucket, so the grouping is on screen too. */
+function seedConversations(): Summary[] {
+  const ago = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
+  return [
+    { id: "p1", title: "Borrow checker E0502", updatedAt: ago(0.2), messageCount: 8 },
+    { id: "p2", title: "What's in the root Cargo.toml", updatedAt: ago(2), messageCount: 4 },
+    { id: "p3", title: "Summarise docs/PLAN.md", updatedAt: ago(5), messageCount: 2 },
+    { id: "p4", title: "Port 3000 in src/config.rs", updatedAt: ago(26), messageCount: 6 },
+    { id: "p5", title: "Rename greet to welcome", updatedAt: ago(60), messageCount: 10 },
+    { id: "p6", title: "Why Ollama starts in the temp directory", updatedAt: ago(100), messageCount: 4 },
+    { id: "p7", title: "Sitka or Georgia for long answers", updatedAt: ago(300), messageCount: 12 },
+    { id: "p8", title: "NVML versus ollama ps", updatedAt: ago(900), messageCount: 6 },
+  ];
+}
+
+const STREAMED = `Here is the short version of **docs/PLAN.md**:
+
+1. **Heimdall** answers about whatever is on screen, in a popup no screen-share can see.
+2. **Mímir** is the chat window, sharing Heimdall's model and deciding which one is loaded.
+3. Both run on one machine, and nothing leaves it.
+
+The model holds about 8 GB while resident, which is why \`warm\` and \`off\` are explicit.`;
+
+/** `&accent=rrggbb`: preview another accent without touching the stored one. */
+export function previewAccent() {
+  const hex = new URLSearchParams(location.search).get("accent");
+  if (hex) applyTheme(makeTheme("#" + hex.replace(/^#/, ""), "custom", "system"));
+}
+
+/** Fake the Rust side for a browser tab. Call before the first render. */
+export function installPreviewIpc() {
+  let convos = seedConversations();
+  // The same numbering lib.rs uses: a stop reaches the answers already started.
+  let sends = 0;
+  let stopAt = 0;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  mockIPC(async (cmd, payload) => {
+    const args = (payload ?? {}) as Record<string, unknown>;
+    switch (cmd) {
+      case "models":
+        return MODELS;
+      case "card":
+        return CARD;
+      case "conversations":
+        return convos;
+      case "project_folder":
+      case "clear_project_folder":
+        return null;
+      case "choose_project_folder":
+        return RECENT[0];
+      case "recent_folders":
+        return RECENT;
+      case "use_recent_folder":
+        return RECENT[Number(args.index)];
+      case "open_conversation": {
+        const c = convos.find((x) => x.id === args.id);
+        return {
+          id: args.id,
+          title: c?.title ?? "",
+          created_at: "",
+          updated_at: c?.updatedAt ?? "",
+          messages: [
+            { role: "user", content: c?.title ?? "" },
+            { role: "assistant", content: "A stored conversation, as `?preview` imagines it.", model: MODELS[0].name },
+          ],
+        };
+      }
+      case "save_conversation": {
+        const conv = args.conversation as { id: string; messages: { role: string; content: string }[] };
+        const id = conv.id || `new-${Date.now()}`;
+        const title = conv.messages.find((m) => m.role === "user")?.content.slice(0, 60) ?? "Untitled";
+        convos = [
+          { id, title, updatedAt: new Date().toISOString(), messageCount: conv.messages.length },
+          ...convos.filter((x) => x.id !== id),
+        ];
+        return { ...conv, id, title };
+      }
+      case "rename_conversation":
+        convos = convos.map((x) => (x.id === args.id ? { ...x, title: String(args.title) } : x));
+        return null;
+      case "delete_conversation":
+        convos = convos.filter((x) => x.id !== args.id);
+        return null;
+      case "send": {
+        // Streams a canned answer through the real Channel, so sending a message
+        // exercises the waiting state, the token-by-token render and the stats.
+        const channel = args.onEvent as Channel<unknown>;
+        const emit = (m: unknown) => channel.onmessage(m);
+        const mine = ++sends;
+        emit({ event: "warming" });
+        await sleep(700);
+        for (const word of STREAMED.split(/(?<= )/)) {
+          if (stopAt >= mine) return null;
+          emit({ event: "token", data: { text: word } });
+          await sleep(60);
+        }
+        emit({ event: "done", data: { promptEvalCount: 3_620, evalCount: 96, totalMs: 3_400, ttftMs: 740, loadMs: 0 } });
+        return null;
+      }
+      case "stop":
+        stopAt = sends;
+        return null;
+      case "ask_with_tools":
+        await sleep(600);
+        return { kind: "answer", content: "In preview, tools answer straight away.", promptEvalCount: 3_620, evalCount: 12 };
+      case "run_tool":
+        return { result: "(preview) nothing was read or written" };
+      case "undo_edit":
+        return "undone";
+      case "load_model":
+        await sleep(900);
+        return 2.4;
+      case "unload_model":
+        return true;
+      case "set_model":
+        return null;
+      case "system_accent":
+        return "#018574";
+      case "put_attachment":
+        return `preview-${Date.now()}.png`;
+      case "get_attachment":
+        return "";
+      default:
+        throw new Error(`?preview has no stand-in for "${cmd}"`);
+    }
+  });
+}
+
+const ANSWER = `This is **E0502** — you are holding an immutable borrow of \`scores\` while trying to mutate it. \`first\` points *into* the vector, and \`push\` may reallocate, which would leave \`first\` dangling.
+
+### The fix
+
+End the borrow before the push by copying the value out:
+
+\`\`\`rust
+fn main() {
+    let mut scores = vec![10, 20, 30];
+    let first = scores[0]; // a copy — no borrow survives this line
+    scores.push(40);
+    println!("first = {first}, len = {}", scores.len());
+}
+\`\`\`
+
+Three things worth knowing:
+
+1. \`i32\` is \`Copy\`, so \`scores[0]\` copies rather than borrows. With a \`String\` you would need \`.clone()\`.
+2. Reserving capacity does **not** fix it. The borrow checker reasons about types, not about whether a reallocation actually happens.
+3. Reading \`first\` *before* the push also compiles — the borrow ends at its last use.`;
+
+const FILE = `[workspace]
+resolver = "3"
+members = [
+    "crates/odin-core",
+    "crates/odin-cli",
+    "crates/bench",
+    "apps/heimdall/src-tauri",
+    "apps/mimir/src-tauri",
+]`;
+
+const SECOND = `Five members. \`apps/heimdall/src-tauri\` and \`apps/mimir/src-tauri\` are the two apps; the rest are the shared crate, the CLI, and the bench harness.
+
+Because they share one \`target/\`, a plain \`cargo build\` at the root rebuilds **both** apps without their frontend embedded. Build them with \`npm run app\` and \`npm run app:mimir\` instead.`;
+
+/** An edit as Rust would plan it: the real shape of odin_core::edit's diff. */
+const RENAME_DIFF = {
+  create: false,
+  added: 2,
+  removed: 2,
+  hunks: [
+    {
+      lines: [
+        { tag: " " as const, text: "mod config;", old: 1, new: 1 },
+        { tag: " " as const, text: "", old: 2, new: 2 },
+        { tag: "-" as const, text: "fn greet(name: &str) -> String {", old: 3, new: null },
+        { tag: "+" as const, text: "fn welcome(name: &str) -> String {", old: null, new: 3 },
+        { tag: " " as const, text: '    format!("Hello, {name}!")', old: 4, new: 4 },
+        { tag: " " as const, text: "}", old: 5, new: 5 },
+        { tag: " " as const, text: "", old: 6, new: 6 },
+        { tag: " " as const, text: "fn main() {", old: 7, new: 7 },
+        { tag: "-" as const, text: '    println!("{}", greet("world"));', old: 8, new: null },
+        { tag: "+" as const, text: '    println!("{}", welcome("world"));', old: null, new: 8 },
+        { tag: " " as const, text: '    println!("listening on {}", config::address());', old: 9, new: 9 },
+        { tag: " " as const, text: "}", old: 10, new: 10 },
+      ],
+    },
+  ],
+};
+
+const PORT_DIFF = {
+  create: false,
+  added: 1,
+  removed: 1,
+  hunks: [
+    {
+      lines: [
+        { tag: "-" as const, text: "pub const PORT: u16 = 8080;", old: 1, new: null },
+        { tag: "+" as const, text: "pub const PORT: u16 = 3000;", old: null, new: 1 },
+        { tag: " " as const, text: 'pub const HOST: &str = "127.0.0.1";', old: 2, new: 2 },
+        { tag: " " as const, text: "", old: 3, new: 3 },
+        { tag: " " as const, text: "pub fn address() -> String {", old: 4, new: 4 },
+      ],
+    },
+  ],
+};
+
+export type Preview = {
+  entries: Entry[];
+  status: string;
+  stats: string;
+  /** Which seeded conversation the thread is, so the sidebar and title agree. */
+  convoId: string | null;
+  /** Tokens the last request spent, for the context bar. */
+  spent: number;
+};
+
+export function previewThread(mode: string): Preview {
+  if (mode === "empty") {
+    return { entries: [], status: "", stats: "", convoId: null, spent: 0 };
+  }
+
+  // ?preview=edit — the file-editing flow: a finished edit you can undo, a
+  // request that went straight back to the model, and one awaiting your review.
+  if (mode === "edit") {
+    return {
+      entries: [
+        { kind: "turn", role: "user", content: "Change the port in src/config.rs to 3000." },
+        { kind: "tool", name: "read_file", path: "C:\\Users\\you\\source\\repos\\demo\\src\\config.rs", state: "ran", result: "pub const PORT: u16 = 8080;\n" },
+        { kind: "tool", name: "edit_file", path: "src/config.rs", state: "ran", diff: PORT_DIFF, undo: "18f3a2", result: "Edited src/config.rs: 1 line removed, 1 added." },
+        { kind: "turn", role: "assistant", content: "Done — `PORT` in `src/config.rs` is now **3000**.", model: "qwen3-vl:8b-instruct-q4_K_M" },
+        { kind: "turn", role: "user", content: "Now rename greet to welcome in src/main.rs, and where it's called." },
+        { kind: "tool", name: "edit_file", path: "src/main.rs", state: "rejected", error: "error: old_text was not found in src/main.rs. It must match the file exactly, including indentation. The closest text in the file is lines 3–5:\nfn greet(name: &str) -> String {\n    format!(\"Hello, {name}!\")\n}\nCopy it exactly as old_text." },
+        { kind: "tool", name: "edit_file", path: "src/main.rs", state: "pending", diff: RENAME_DIFF },
+      ],
+      status: "",
+      stats: "",
+      convoId: "p4",
+      spent: 3_214,
+    };
+  }
+
+  const base: Entry[] = [
+    {
+      kind: "turn",
+      role: "user",
+      content: "Why won't this compile?\n\nlet first = &scores[0];\nscores.push(40);",
+    },
+    { kind: "turn", role: "assistant", content: ANSWER, model: "qwen3-vl:8b-instruct-q4_K_M" },
+    { kind: "turn", role: "user", content: "What's in the root Cargo.toml?" },
+    {
+      kind: "tool",
+      name: "read_file",
+      path: "C:\\Users\\you\\source\\repos\\odin\\Cargo.toml",
+      state: "ran",
+      result: FILE,
+    },
+    { kind: "turn", role: "assistant", content: SECOND, model: "qwen3-vl:8b-instruct-q4_K_M" },
+  ];
+
+  if (mode === "stream") {
+    return {
+      entries: [
+        ...base,
+        { kind: "turn", role: "user", content: "Can you summarise docs/PLAN.md for me?" },
+        { kind: "turn", role: "assistant", content: "" },
+      ],
+      status: "Warming the model…",
+      stats: "",
+      convoId: "p1",
+      spent: 3_214,
+    };
+  }
+
+  return {
+    entries: [
+      ...base,
+      { kind: "turn", role: "user", content: "Can you summarise docs/PLAN.md for me?" },
+      {
+        kind: "tool",
+        name: "read_file",
+        path: "C:\\Users\\you\\source\\repos\\odin\\docs\\PLAN.md",
+        state: "pending",
+      },
+    ],
+    status: "",
+    stats: "3,214 in · 402 out · 1.21s to first · 4.8s total",
+    convoId: "p1",
+    spent: 3_214,
+  };
+}

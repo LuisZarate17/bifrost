@@ -1,6 +1,6 @@
-// The shared renderer, used by Warden's popup and (from G1) by Citadel.
+// The shared renderer, used by Heimdall's popup and (from G1) by Mímir.
 //
-// Extracted at Before-G0 step 1e, deliberately while Warden was still its only
+// Extracted at Before-G0 step 1e, deliberately while Heimdall was still its only
 // consumer: a move you can verify against one app is far safer than the same
 // move with two.
 //

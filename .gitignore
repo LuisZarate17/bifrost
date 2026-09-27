@@ -17,7 +17,7 @@ dist
 /captures/
 /evals/out/
 /evals/shots/
-# tools/practice.mjs rebuilds it, and Citadel's edits to it are meant to be thrown away.
+# tools/practice.mjs rebuilds it, and Mímir's edits to it are meant to be thrown away.
 /practice/
 /evals/**/*.png
 /*.png

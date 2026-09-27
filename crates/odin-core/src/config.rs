@@ -3,7 +3,7 @@
 //! **A missing file is a normal state, not an error.** `load()` cannot fail: no
 //! file, unreadable file, or malformed JSON all yield the built-in defaults, and
 //! nothing here prints or panics. That is deliberate and load-bearing — PLAN.md
-//! decision #5 requires Warden to keep working on a machine where Citadel was
+//! decision #5 requires Heimdall to keep working on a machine where Mímir was
 //! never installed, so "no config" has to be the ordinary path rather than an
 //! error anyone has to handle.
 //!
@@ -28,18 +28,18 @@ pub const DEFAULT_MODEL: &str = "qwen3-vl:8b-instruct-q4_K_M";
 ///
 /// **This is the only copy in source.** It used to exist here, in the CLI's
 /// `prompt.txt`, as an inline fallback in the CLI's `main.rs`, and as a `const`
-/// in Warden's `App.tsx` — four places to keep in step, which nothing enforced.
+/// in Heimdall's `App.tsx` — four places to keep in step, which nothing enforced.
 /// `evals/prompts/current.txt` is byte-identical and stays, because that one is
 /// measured input for the bench rather than a copy of this.
 pub const DEFAULT_PROMPT: &str =
     "What am I looking at? If there's an error or something broken, explain it \
      and the fix. Otherwise explain what matters here.";
 
-/// Warden's value, and now everyone's.
+/// Heimdall's value, and now everyone's.
 ///
 /// **Measured 2026-09-19.** Ollama keys a loaded runner by the model *and* by
 /// `num_ctx`, so asking at a different context than you warmed at tears the
-/// runner down and rebuilds it. The CLI used to warm at 8192 while Warden asked
+/// runner down and rebuilds it. The CLI used to warm at 8192 while Heimdall asked
 /// at 32768, and every switch between them cost about three seconds:
 ///
 /// | request | `load_duration` |
@@ -49,7 +49,7 @@ pub const DEFAULT_PROMPT: &str =
 /// | ask at 32768 | **3.09s** — reloaded |
 /// | back to 8192 | **2.86s** — reloaded again |
 ///
-/// **Why 32768 and not less, carried over from Warden where this used to live.**
+/// **Why 32768 and not less, carried over from Heimdall where this used to live.**
 /// A 1080p screen costs ~2,070 image tokens — measured at A2 as 2,042, and
 /// confirmed at 2,056/4,132/6,208/8,284 for one through four shots. Ollama
 /// derives its own default from detected VRAM and lands at 4k on this card,
@@ -67,7 +67,7 @@ pub const DEFAULT_PROMPT: &str =
 /// | 65536   | 12.74 GB | **no** — spills to system RAM |
 ///
 /// 32768 is the last rung before the cliff, and room for far more context than
-/// Warden's four-screenshot cap will ever use.
+/// Heimdall's four-screenshot cap will ever use.
 ///
 /// `crates/bench` deliberately keeps its own 8192 constant instead of reading
 /// this: it is a measurement harness, and changing its context would make F1's
@@ -75,7 +75,7 @@ pub const DEFAULT_PROMPT: &str =
 pub const DEFAULT_NUM_CTX: u32 = 32768;
 
 /// What the apps agree on. Extended rather than replaced as Stage G lands —
-/// G2 writes `model` here when you pick one, and Warden reads it on every summon.
+/// G2 writes `model` here when you pick one, and Heimdall reads it on every summon.
 ///
 /// `#[serde(default)]` on the struct means a file missing any field fills that
 /// field from `Default` rather than failing to parse. So a config written before
@@ -87,12 +87,12 @@ pub struct Config {
     pub model: String,
     pub prompt: String,
     pub num_ctx: u32,
-    /// The one folder Citadel may change files in, or `None` for no editing at
+    /// The one folder Mímir may change files in, or `None` for no editing at
     /// all. Set only through a native folder picker the user operates — there is
     /// no command that takes a path for it, so nothing reaching the app's IPC can
-    /// widen it. Warden and the CLI ignore it.
+    /// widen it. Heimdall and the CLI ignore it.
     pub workspace: Option<String>,
-    /// Folders chosen before, newest first, for Citadel's new-chat screen. Only
+    /// Folders chosen before, newest first, for Mímir's new-chat screen. Only
     /// the picker adds to it, and the webview can pick an entry only by its
     /// position — so choosing a recent folder never lets a path in from outside,
     /// and `workspace` stays something the user picked with their own hands.

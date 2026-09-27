@@ -42,10 +42,10 @@ impl Card {
     /// `Nvml::init` is the expensive part, so a command opens the card once and
     /// samples it repeatedly.
     ///
-    /// `WARDEN_NVML_PATH` overrides the library location. It exists so the
+    /// `HEIMDALL_NVML_PATH` overrides the library location. It exists so the
     /// "readout unavailable" path can be exercised without touching the system.
     pub fn open() -> Result<Self, String> {
-        let nvml = match std::env::var("WARDEN_NVML_PATH") {
+        let nvml = match std::env::var("HEIMDALL_NVML_PATH") {
             Ok(path) => Nvml::builder()
                 .lib_path(path.as_ref())
                 .init()

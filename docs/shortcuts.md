@@ -1,6 +1,6 @@
-# Warden — shortcuts
+# Heimdall — shortcuts
 
-Every control Warden has. There is no menu, no tray item and no window chrome, so this is the
+Every control Heimdall has. There is no menu, no tray item and no window chrome, so this is the
 whole interface.
 
 ---
@@ -9,8 +9,8 @@ whole interface.
 
 | Shortcut | What it does | Live when |
 |---|---|---|
-| **`Ctrl+Alt+W`** | Summon the popup and ask about the screen. Press again to dismiss. | Always, while Warden is running |
-| **Mouse side button** | The same thing, in one press. `XBUTTON2` — the *front* thumb button, which Windows calls Forward | Always, while Warden is running |
+| **`Ctrl+Alt+W`** | Summon the popup and ask about the screen. Press again to dismiss. | Always, while Heimdall is running |
+| **Mouse side button** | The same thing, in one press. `XBUTTON2` — the *front* thumb button, which Windows calls Forward | Always, while Heimdall is running |
 | `Ctrl+Alt+Space` | The same thing — **only** used if `Ctrl+Alt+W` could not be claimed at startup | Always, as a fallback |
 | **`Ctrl+Alt`+wheel** | Scroll the answer — or, while picking, move the pick | Only while the popup is on screen |
 | **`Ctrl+Alt+Z`** | Pick a block of the answer; press again to **copy** it | Only while the popup is on screen |
@@ -121,7 +121,7 @@ nothing — there is no way to keep the wheel while the pointer passes through �
 | A bare wheel scrolling the popup | `Ctrl+Alt`+wheel, via a low-level mouse hook |
 | Selecting and copying by hand | `Ctrl+Alt+Z` — see **Copying** below |
 
-`WARDEN_NO_CLICKTHROUGH=1` puts the mouse back on the popup — wheel, selection and all.
+`HEIMDALL_NO_CLICKTHROUGH=1` puts the mouse back on the popup — wheel, selection and all.
 
 ### It moves out of the pointer's way
 
@@ -212,11 +212,11 @@ What is still gated is the *wheel*: the hook ignores it unless an answer is on s
 
 **The press is swallowed.** `XBUTTON2` is Forward in most applications, and a summon that also
 navigated the window behind it would be worse than no summon. Verified with a second, downstream
-hook installed before Warden's: `XBUTTON1` reached it, `XBUTTON2` did not.
+hook installed before Heimdall's: `XBUTTON1` reached it, `XBUTTON2` did not.
 
 `XBUTTON2` is the default precisely *because* it is swallowed — of the two thumb buttons, Forward is
-the one almost nobody uses. `WARDEN_MOUSE_BUTTON=1` moves it to the rear button (Back),
-and `WARDEN_MOUSE_BUTTON=off` disables it and leaves both alone.
+the one almost nobody uses. `HEIMDALL_MOUSE_BUTTON=1` moves it to the rear button (Back),
+and `HEIMDALL_MOUSE_BUTTON=off` disables it and leaves both alone.
 
 The hook is built to be invisible: its callback does nothing but compare a couple of integers and
 add to a counter. Windows silently removes a low-level hook whose callback overruns
@@ -225,13 +225,13 @@ make, all day. A separate thread drains the counter and does the talking — whi
 hook cannot share the window animator's thread, which blocks on `SetWindowPos` by design.
 
 > If the main thread ever stalls past that timeout the hook is dropped and the side button goes
-> quiet until Warden restarts. `Ctrl+Alt+W` is unaffected, so the failure is a degraded summon
+> quiet until Heimdall restarts. `Ctrl+Alt+W` is unaffected, so the failure is a degraded summon
 > rather than a lost one.
 
 ## Why `Ctrl+Alt+Z` comes and goes
 
 It is taken when the popup appears and released when it is dismissed, rather than held for the life
-of the process. Warden sits in the background all day, and a hidden overlay with nothing on screen
+of the process. Heimdall sits in the background all day, and a hidden overlay with nothing on screen
 has no business owning `Ctrl+Alt+Z` session-wide.
 
 **The side effect that matters: while the popup is on screen, `Ctrl+Alt+Z` and `Ctrl+Alt`+wheel do
@@ -245,7 +245,7 @@ popup releases them immediately.
 Global shortcuts are first-come-first-served across the whole session, so another application may
 already hold one.
 
-- **`Ctrl+Alt+W` unavailable** → Warden falls back to `Ctrl+Alt+Space` and prints which one bound.
+- **`Ctrl+Alt+W` unavailable** → Heimdall falls back to `Ctrl+Alt+Space` and prints which one bound.
   If neither binds, the popup's header reads **"no hotkey bound"** rather than leaving you to guess
   why nothing happens.
 - **`Ctrl+Alt+Z` unavailable** → a warning is printed and the popup doesn't offer it. The hint in the
@@ -266,7 +266,7 @@ there is more answer than fits — and the summon hotkey the rest of the time.
 
 ---
 
-## `WARDEN_NO_CLICKTHROUGH`
+## `HEIMDALL_NO_CLICKTHROUGH`
 
 Not a shortcut, but it decides what the mouse does. Set it to anything and the popup goes back to
 catching the pointer: the wheel scrolls it and its text selects and copies by hand.

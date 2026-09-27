@@ -1,0 +1,179 @@
+/* Heimdall's popup chrome. The renderer's own styles moved to @odin/ui at
+   Before-G0 step 1e and are imported by App.tsx as "@odin/ui/answer.css" —
+   look there for anything matching .answer, .code, .inline-code or .link-text.
+
+   Three rules here do select .answer descendants and stay on purpose: the
+   pick-and-copy overlay and the two collapse rules are Heimdall behaviours, not
+   renderer ones. Mímir will want the renderer without any of them. */
+
+/* The window is transparent and the page paints its own background, so every
+   layer above has to stay genuinely see-through. No DWM backdrop is involved —
+   acrylic can't go dark and mica can't show what's behind it (established at B4). */
+:root,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  color: #e9e9ee;
+  font-family: "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.popup {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  box-sizing: border-box;
+  padding: 11px 13px 9px;
+  gap: 7px;
+  /* `transparent: true` lets the webview composite with alpha; this supplies it.
+     Dark enough that code stays legible over a bright window behind, light
+     enough to still see through. */
+  background: rgba(14, 14, 20, 0.62);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+}
+
+header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex: none;
+}
+
+.mark {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+}
+.hint {
+  font-size: 11px;
+  opacity: 0.42;
+  font-variant-numeric: tabular-nums;
+}
+.hint.warn {
+  color: #ff9b9b;
+  opacity: 0.9;
+}
+.hint.ok {
+  color: #9fd0ff;
+  opacity: 0.95;
+}
+
+/* The block Ctrl+Alt+C would take. Marked with a background and an inset rail
+   rather than a border or outline: a border would add height and shove the rest
+   of the answer around every time the pick moves, which is the one thing a
+   selection marker must not do. */
+.answer > .copy-pick {
+  background: rgba(120, 170, 255, 0.13);
+  box-shadow: inset 2px 0 0 rgba(140, 185, 255, 0.85);
+  border-radius: 3px;
+}
+
+.status,
+.idle {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.55;
+  line-height: 1.5;
+}
+.idle {
+  margin: auto 0;
+}
+
+/* `overflow-anchor` is Chromium, so WebView2 honours it — it keeps the viewport
+   stable as content grows above the scroll position. */
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-anchor: auto;
+  user-select: text;
+  padding-right: 3px;
+}
+/* `flow-root` establishes a block formatting context, so the last paragraph's
+   bottom margin is measured as part of this element instead of collapsing out
+   through it — otherwise the window is asked for 8px less than it needs and the
+   answer sits one margin short of fitting. */
+.content {
+  display: flow-root;
+}
+
+/* Collapsed: show the verdict, keep the working. The rest of the blocks stay in
+   the DOM rather than being unmounted, so `Ctrl+Alt+Z` can still pick across the
+   whole answer and the measured height is right the instant it expands. */
+.content.collapsed .answer > *:not(:first-child) {
+  display: none;
+}
+
+/* A fade at the foot of the collapsed block, so it reads as "there is more"
+   rather than as the whole answer. */
+.content.collapsed .answer::after {
+  content: "";
+  display: block;
+  margin-top: 6px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(159, 208, 255, 0.35) 30%,
+    rgba(159, 208, 255, 0.35) 70%,
+    transparent
+  );
+}
+
+.scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
+}
+
+.stats {
+  flex: none;
+  margin: 0;
+  font-size: 10px;
+  opacity: 0.38;
+  font-variant-numeric: tabular-nums;
+}
+
+.error {
+  margin: 0;
+  color: #ff9b9b;
+  font-size: 11px;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+/* The follow-up box. Only on screen while the popup is holding the caret —
+   every other moment this window is untouchable and unfocusable, so this is the
+   one control in the whole app that behaves like an ordinary input. */
+.ask {
+  flex: none;
+  display: flex;
+}
+.ask input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text, #e9e9ee);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  padding: 6px 9px;
+  outline: none;
+}
+.ask input::placeholder {
+  color: rgba(233, 233, 238, 0.38);
+}
+/* Focus is the whole point here — it is the only time the window has it. */
+.ask input:focus {
+  border-color: rgba(255, 255, 255, 0.34);
+  background: rgba(255, 255, 255, 0.09);
+}

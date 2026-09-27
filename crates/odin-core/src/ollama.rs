@@ -424,7 +424,7 @@ pub fn show(tag: &str) -> Result<ModelDetail, String> {
 
 /// [`show`], remembered per tag.
 ///
-/// **A model's capabilities do not change between calls**, and Warden asks on
+/// **A model's capabilities do not change between calls**, and Heimdall asks on
 /// every summon — where the popup's whole appeal is that it is instant, and an
 /// extra round trip before the screenshot even goes out is exactly the wrong
 /// place to spend one.
@@ -491,7 +491,7 @@ pub fn tags() -> Result<Vec<InstalledModel>, String> {
 /// first-run GUI and the caller would wait forever on a window nobody asked for.
 /// Recorded in PLAN.md §8 after it cost real time.
 ///
-/// Detached deliberately: Warden may be closed while Ollama keeps serving, and a
+/// Detached deliberately: Heimdall may be closed while Ollama keeps serving, and a
 /// server that dies with the thing that happened to start it is worse than one
 /// you started yourself.
 pub fn ensure_running() -> Result<Option<Duration>, String> {
@@ -525,7 +525,7 @@ fn spawn_detached() -> Result<(), String> {
     // practice was put a console window on screen, which is the one thing this
     // flag existed to prevent.
     //
-    // Nothing is lost by dropping DETACHED_PROCESS: Warden is a windows-subsystem
+    // Nothing is lost by dropping DETACHED_PROCESS: Heimdall is a windows-subsystem
     // application with no console of its own, so there is none for the child to
     // inherit or be tied to.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;

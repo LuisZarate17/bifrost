@@ -1,7 +1,7 @@
 # ODIN — Build Plan
 
-Companion to [PLAN.md](PLAN.md). Stages A-F built **Warden**, the overlay, in nineteen chunks;
-Stage G builds **Citadel** and is tracked in its own packet. **Each chunk is one sitting
+Companion to [PLAN.md](PLAN.md). Stages A-F built **Heimdall**, the overlay, in nineteen chunks;
+Stage G builds **Mímir** and is tracked in its own packet. **Each chunk is one sitting
 and one execution chat.** Every one ends in something observable, so you can always stop.
 
 Author has read about Rust but never written it. Chunks are sized for that.
@@ -10,8 +10,8 @@ Author has read about Rust but never written it. Chunks are sized for that.
 
 ## Where this stands — 2026-09-25
 
-**Stages A–C complete; Warden is finished and in daily use. Stage G is built** — the groundwork
-that turned this repo into a workspace two apps can live in, and **Citadel**, the local chat app,
+**Stages A–C complete; Heimdall is finished and in daily use. Stage G is built** — the groundwork
+that turned this repo into a workspace two apps can live in, and **Mímir**, the local chat app,
 through G7 — which now edits files. What remains is the testing round, in
 [PENDING-CHECKS.md](PENDING-CHECKS.md). Chunk-by-chunk detail is in
 [`../stages/STAGE-G.md`](../stages/STAGE-G.md); this is the summary.
@@ -20,7 +20,7 @@ through G7 — which now edits files. What remains is the testing round, in
 
 | | | |
 |---|---|---|
-| **1a–1d** | ✅ | Repo restructured. Crates under `crates/`, `warden-core` → `odin-core`, Warden into `apps/warden/`, four Cargo projects merged into one workspace |
+| **1a–1d** | ✅ | Repo restructured. Crates under `crates/`, `heimdall-core` → `odin-core`, Heimdall into `apps/heimdall/`, four Cargo projects merged into one workspace |
 | **1e** | ✅ | Renderer extracted to `@odin/ui`, stylesheet split with it. *(Visual check still open)* |
 | **1f** | ✅ | ~30 stale doc paths fixed, `tools/shortcuts.mjs` written, ~17,200 stale build files swept |
 | **1g** | ✅ | Shortcuts repointed; GitHub repo renamed to `LuisZarate17/odin` on 2026-09-25 |
@@ -28,13 +28,13 @@ through G7 — which now edits files. What remains is the testing round, in
 | **Step 2** | ✅ | Five false claims corrected across the docs |
 | **Step 3** | ✅ | Shared config at `%APPDATA%\odin\config.json`; six duplicated constants removed |
 | **G0** | ✅ | Tool-call probe. **[G0-results.md](results/G0-results.md)** — `qwen3-vl:8b` 10/10, `llama3.1:8b` 6/10 |
-| **G1** | ✅ | **Citadel** — one window, one conversation, `/api/chat` streamed over a `Channel`, rendered with `@odin/ui`. **[G1-results.md](results/G1-results.md)** — turn two knows turn one; 4 dependencies against Warden’s 12 |
+| **G1** | ✅ | **Mímir** — one window, one conversation, `/api/chat` streamed over a `Channel`, rendered with `@odin/ui`. **[G1-results.md](results/G1-results.md)** — turn two knows turn one; 4 dependencies against Heimdall’s 12 |
 | **G2** | ✅ | The switchboard — capability-labelled picker, load/unload, choice written to the shared config. **[G2-results.md](results/G2-results.md)** — `load_duration 0.00s` after a switchboard load; the card and `ollama ps` disagree by ~2,100 MiB |
-| **G3** | ✅ | Warden reads the config on every summon and refuses cleanly when the model has no `vision`. **[G3-results.md](results/G3-results.md)** — a model without vision answers anyway; `/api/show` 3.02ms uncached, 4.10µs cached |
+| **G3** | ✅ | Heimdall reads the config on every summon and refuses cleanly when the model has no `vision`. **[G3-results.md](results/G3-results.md)** — a model without vision answers anyway; `/api/show` 3.02ms uncached, 4.10µs cached |
 | **G4** | ✅ | Persistence — one JSON file per conversation; list, rename, delete. **[G4-results.md](results/G4-results.md)** — byte-identical round trip; fields carried before they are read |
 | **G5** | ✅ | Attachments — images as base64 on the message, bytes in their own files; text files folded in. **[G5-results.md](results/G5-results.md)** — 51 KB PNG → 68 KB base64; ~2,042 tokens per image whatever it shows |
 | **G6** | ✅ | The tool loop — one hardcoded tool, off by default, every call approved individually. **[G6-results.md](results/G6-results.md)** — approval is a one-shot ticket redeemed in Rust; bounded at 4 rounds |
-| **UI** | ✅ | Citadel redesigned after Claude's desktop app — sidebar grouped by date, centred reading column, serif answers (Sitka Text, a Windows font, so nothing is downloaded), Models dialog, GPU meter, light and dark. Chat logic byte-identical before and after |
+| **UI** | ✅ | Mímir redesigned after Claude's desktop app — sidebar grouped by date, centred reading column, serif answers (Sitka Text, a Windows font, so nothing is downloaded), Models dialog, GPU meter, light and dark. Chat logic byte-identical before and after |
 | **G7** | ✅ | **Editing files**, confined to one folder picked with the system dialog; a diff you approve, a backup, and Undo. **[G7-results.md](results/G7-results.md)** — probe **76% → 98%** byte-exact over three rounds; end-to-end **16/16** on the shipped build. Found and worked around an Ollama crash on the model's own tool calls |
 
 G5 and G6 close the packet. Its bar is *you keep it open, and reach for it instead of a browser
@@ -42,11 +42,11 @@ tab* — which only using it can settle, so **built is not the same as done**.
 
 **What the groundwork actually found**, none of which a build would have caught:
 
-- **`num_ctx` had diverged** between the CLI (8192) and Warden (32768). Ollama keys a runner by
+- **`num_ctx` had diverged** between the CLI (8192) and Heimdall (32768). Ollama keys a runner by
   model *and* context, so `odin warm` was being thrown away and the model reloaded — measured at
   ~3s in **both** directions. Now one value in one place; the same sequence reads `load 0.00s`.
 - **`[profile.release]` stopped applying** the moment the workspace appeared. Cargo only honours
-  profiles at the workspace root and demotes a package-level one to a *warning*, so Warden's `lto`,
+  profiles at the workspace root and demotes a package-level one to a *warning*, so Heimdall's `lto`,
   `strip` and `panic = "abort"` were silently ignored.
 - **Both Desktop shortcuts had been dead for three chunks**, pointing at a path that stopped
   existing. A broken shortcut does nothing and says nothing.
@@ -72,8 +72,8 @@ verification round 2026-09-17. **Stage C is complete.**
 > existing reference stays valid.
 
 > **Correction, 2026-09-15: nothing is blocked.** The **debug build runs** with Smart App Control
-> enforced — `target/debug/warden.exe` launches, and C2 was verified against Discord, Zoom and
-> Teams using it. Only `target/release/warden.exe` is refused: *"An Application Control policy has
+> enforced — `target/debug/heimdall.exe` launches, and C2 was verified against Discord, Zoom and
+> Teams using it. Only `target/release/heimdall.exe` is refused: *"An Application Control policy has
 > blocked this file."*
 >
 > Six chunks were listed as blocked on code signing and were not. **Signing is a shipping problem,
@@ -234,7 +234,7 @@ Three findings that change later chunks:
   silence then a dump; `BufReader::lines()` gave first text at 1.5 s. Note `stdout().flush()`
   after each token is not optional — stdout is line-buffered and rebuilds the bug without it.
 
-**Warden found its own bug.** On the first end-to-end run it read a Windows Security toast off the
+**Heimdall found its own bug.** On the first end-to-end run it read a Windows Security toast off the
 screen and corrected a misdiagnosis of the proc-macro failure. The thesis works.
 
 ---
@@ -242,8 +242,8 @@ screen and corrected a misdiagnosis of the proc-macro failure. The thesis works.
 ## Stage B — The app shell
 
 ### B1 — Tauri opens a window — DONE 2026-09-12
-Tauri 2.11.5 + React + TypeScript at the repo root, window titled **Warden**, identifier
-`com.warden.app`. First build 55 s, 362 units. Full write-up: **[B1-results.md](results/B1-results.md)**.
+Tauri 2.11.5 + React + TypeScript at the repo root, window titled **Heimdall**, identifier
+`com.heimdall.app`. First build 55 s, 362 units. Full write-up: **[B1-results.md](results/B1-results.md)**.
 
 > **Never run `create-tauri-app` at the repo root.** Passing `.` and accepting the overwrite
 > prompt **recursively deletes everything except `.git`** — verified in its source. `evals/shots/`
@@ -307,7 +307,7 @@ Three findings that change later chunks:
 - **An auto-hiding taskbar does not change the work area.** Position against `Shell_TrayWnd`'s
   live rect, not `work_area`, or the popup sits under the bar.
 
-> **BLOCKED AFTER THIS CHUNK.** Smart App Control now refuses to run `warden.exe` � content-based,
+> **BLOCKED AFTER THIS CHUNK.** Smart App Control now refuses to run `heimdall.exe` � content-based,
 > retroactive, no workaround. **This blocks the rest of C, all of D, and E1.** The CLI is
 > unaffected. See [PLAN.md §3](PLAN.md) for the full analysis and the four options.
 
@@ -374,7 +374,7 @@ callback overruns `LowLevelHooksTimeout` (300 ms), and this one sits in front of
 in the session. A separate thread drains it, separate because the window animator blocks on
 `SetWindowPos` by design.
 
-**Escape hatches:** `WARDEN_NO_CLICKTHROUGH=1` puts the mouse back on the popup, and
+**Escape hatches:** `HEIMDALL_NO_CLICKTHROUGH=1` puts the mouse back on the popup, and
 inspecting how it *looks* means temporarily giving that up.
 
 **Watch for:** the obvious fix for verbosity is a terser prompt — **don't.** A2 tested exactly that
@@ -387,7 +387,7 @@ must not autofocus anything, or C1's no-focus-steal guarantee breaks.
 Results: [C2-results.md](results/C2-results.md).
 
 **One finding worth carrying into D1.** The exclusion hides a window's *contents*, not its
-*existence* — **Zoom's share picker lists "Warden" by name** with a black thumbnail, and will let
+*existence* — **Zoom's share picker lists "Heimdall" by name** with a black thumbnail, and will let
 you share it (the recipient sees an empty rectangle). Nothing it says leaks; that it exists does.
 So D1 should record two answers per app, not one: can it **see** the window, and does it **list**
 it.
@@ -466,7 +466,7 @@ The original was *"launch on login, `Esc` dismisses, tray menu tidy."* Taken apa
 
 | Part | Where it went |
 |---|---|
-| **Launch on login** | **Cut deliberately.** You open Warden when you want the hotkey live. This is *more* faithful to PLAN.md §0's **"summoned, never ambient"** than autostart was — and it shrinks the window in which the app needs to run at all |
+| **Launch on login** | **Cut deliberately.** You open Heimdall when you want the hotkey live. This is *more* faithful to PLAN.md §0's **"summoned, never ambient"** than autostart was — and it shrinks the window in which the app needs to run at all |
 | **`Esc` dismisses** | **Already impossible, resolved at B4.** A `focusable: false` window never receives key events, so Esc can't reach it. The hotkey toggles instead. C3 owns the focus transition when typing arrives |
 | **Tray menu tidy** | **C4.** That chunk already builds a tray showing Off / Warming / Ready |
 | **Ollama has no autostart** | **The `capture warm`/`off`/`status` work**, which runs today, plus C4's tray later. Still a real gap — it just never needed its own chunk |
@@ -510,7 +510,7 @@ every one.** Assume nothing; test each.
 | Xbox Game Bar capture | native | ☐ |
 | Steam broadcast | injected | ☐ |
 
-**Also:** trigger a follow-up capture with the popup open and confirm Warden's own last answer
+**Also:** trigger a follow-up capture with the popup open and confirm Heimdall's own last answer
 is not in the new screenshot.
 
 **If any row fails:** that app is a known gap. Write it down in the README rather than pretending
