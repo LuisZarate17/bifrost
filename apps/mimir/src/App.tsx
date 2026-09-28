@@ -452,6 +452,31 @@ function App() {
     [refreshConvos],
   );
 
+  /**
+   * Apply an update to the thread and resolve with exactly what it became.
+   *
+   * For saving right after a change. The ref cannot be read for that: an update
+   * queued with setEntries has not run yet when the next line executes, so a save
+   * from the ref missed a tool turn's answer, and the model stamped on every
+   * streamed one. This waits for React to run the updater, after anything queued
+   * before it such as the last tokens, and hands back the result. Resolving is
+   * one-shot, so development's second updater call cannot save twice.
+   */
+  const settle = useCallback(
+    (update: (prev: Entry[]) => Entry[]) =>
+      new Promise<Entry[]>((resolve) => {
+        setEntries((prev) => {
+          const out = update(prev);
+          resolve(out);
+          return out;
+        });
+      }).then((out) => {
+        entriesRef.current = out;
+        return out;
+      }),
+    [],
+  );
+
   const openConvo = useCallback(
     async (id: string) => {
       try {
@@ -863,7 +888,7 @@ function App() {
         if (live()) {
           setStreaming(false);
           composerRef.current?.focus();
-          await persist(entriesRef.current, convoId);
+          await persist(await settle((all) => all), convoId);
         }
       }
       return;
@@ -915,21 +940,16 @@ function App() {
       if (!live()) return;
       setStreaming(false);
       composerRef.current?.focus();
-      // Stamp the model onto the turn it actually answered, then save the whole
-      // thread from the ref - reading it inside a state updater would run the
-      // save twice in development.
-      setEntries((prev) => {
-        const out = [...prev];
-        const last = out[out.length - 1];
-        if (last?.kind === "turn" && last.role === "assistant" && model) {
-          out[out.length - 1] = { ...last, model };
-        }
-        entriesRef.current = out;
-        return out;
+      // Stamp the model onto the turn it actually answered, then save the thread
+      // as it now stands.
+      const out = await settle((prev) => {
+        const last = prev[prev.length - 1];
+        if (!(last?.kind === "turn" && last.role === "assistant" && model)) return prev;
+        return [...prev.slice(0, -1), { ...last, model }];
       });
-      await persist(entriesRef.current, convoId);
+      await persist(out, convoId);
     }
-  }, [draft, streaming, entries, model, card, planSend, staged, persist, convoId, toolsOn, askWithTools, toWire]);
+  }, [draft, streaming, entries, model, card, planSend, staged, persist, settle, convoId, toolsOn, askWithTools, toWire]);
 
   /**
    * Stop the answer being written, and keep what has arrived.
@@ -975,19 +995,15 @@ function App() {
       if (!e || e.kind !== "tool" || !e.undo) return;
       try {
         await invoke<string>("undo_edit", { id: e.undo });
-        setEntries((prev) => {
-          const next = prev.map((x, i) =>
-            i === index && x.kind === "tool" ? { ...x, state: "undone" as const } : x,
-          );
-          entriesRef.current = next;
-          return next;
-        });
-        await persist(entriesRef.current, convoId);
+        const next = await settle((prev) =>
+          prev.map((x, i) => (i === index && x.kind === "tool" ? { ...x, state: "undone" as const } : x)),
+        );
+        await persist(next, convoId);
       } catch (err) {
         setError(String(err));
       }
     },
-    [persist, convoId],
+    [persist, settle, convoId],
   );
 
   const take = useCallback(async (files: FileList | File[]) => {

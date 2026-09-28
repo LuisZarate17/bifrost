@@ -575,7 +575,7 @@ async fn ask_with_tools(
         return Ok(serde_json::json!({
             "kind": "stuck",
             "error": format!(
-                "the model kept repeating a {} call that could not be carried out, so it was stopped",
+                "the model kept repeating a call to {} that could not be carried out, so it was stopped",
                 call.function.name
             ),
         }));
