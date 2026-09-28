@@ -51,8 +51,12 @@ if (process.argv.includes("--path")) {
   process.exit(0);
 }
 
+// A folder made before the apps were renamed carries the old marker, and is
+// still a practice folder.
+const MARKERS = [MARKER, ".citadel-practice"];
+
 if (fs.existsSync(DIR)) {
-  if (!fs.existsSync(path.join(DIR, MARKER))) {
+  if (!MARKERS.some((m) => fs.existsSync(path.join(DIR, m)))) {
     console.error(`${DIR} exists and is not a practice folder — leaving it alone.`);
     process.exit(1);
   }

@@ -55,15 +55,17 @@ is on.
 - [ ] **Cancel keeps it.** Click `practice` to open the picker again, then **Cancel**.
       **Expect:** it still reads `practice`. Cancelling is not clearing.
 - [ ] **A one-line edit.** Type:
-      `In greet.rs, change the greeting from "Hello" to "Good morning".`
-      **Expect:** first a **Read file** card for `greet.rs` (the model reads before it edits) —
-      click **Allow once**. Then an **Edit file** card, marked **+1 −1**, showing only line 2:
-      `format!("Hello, {name}!")` becoming `format!("Good morning, {name}!")`. Both line-number
-      columns say 2. Nothing else in the diff.
+      `In shopping.md, change bread to rice.`
+      **Expect:** first a **Read file** card for `shopping.md` (the model reads before it edits) —
+      click **Allow once**. Then an **Edit file** card, marked **+1 −1**, showing only line 4:
+      `- bread` becoming `- rice`. Both line-number columns say 4. Nothing else in the diff.
+
+      *Not* `greet.rs`'s "Hello": qwen3-vl adds a semicolon that line doesn't have, every time
+      (4 of 4, 2026-09-27), so Mímir rightly refuses it. bread → rice went 5 of 5.
 - [ ] **Apply it.** Click **Apply edit**. **Expect:** the card says **Applied**. Open
-      `greet.rs` in VS Code: line 2 says Good morning, and nothing else changed.
+      `shopping.md` in VS Code: line 4 says rice, and nothing else changed.
 - [ ] **Undo it.** Click **Undo** on the card. **Expect:** *Undone — the file is back as it was.*
-      In VS Code, `greet.rs` says Hello again.
+      In VS Code, `shopping.md` says bread again.
 - [ ] **Deny an edit.** Type: `Add eggs to the list in shopping.md.`
       Allow the read, then click **Deny** on the edit. **Expect:** *You declined. Nothing was
       written, and the model was told.* `shopping.md` still has three items.
@@ -104,7 +106,8 @@ Tools on. The folder does not matter; reads are allowed anywhere, one approval a
       Allow it. **Expect:** the card says **Failed**, and the model says the file doesn't exist and
       carries on, rather than the chat breaking.
 - [ ] **Tools off.** Turn **Tools** off, new chat, ask the practice-code question again.
-      **Expect:** no card at all, and no 4417-AMBER. It should say it can't read files.
+      **Expect:** no card at all, and no 4417-AMBER. It may guess at what the file is rather
+      than saying it can't read files.
 
 ---
 
@@ -186,8 +189,8 @@ Click the bottom of the sidebar, where the loaded model and the GPU meter are.
 - [ ] **Heimdall with Mímir open.** Both running, `Ctrl+Alt+W` still answers.
 
 **Optional.** Fill Mímir's context by pasting a long document several times. **Expect:**
-*⋯ n earlier turns dropped to make room* in the thread, rather than the chat quietly going
-strange.
+*The last request left out n earlier turns to fit the context. They are still saved.* in the
+thread, rather than the chat quietly going strange.
 
 ---
 
