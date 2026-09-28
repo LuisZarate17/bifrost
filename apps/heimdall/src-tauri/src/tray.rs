@@ -189,8 +189,10 @@ pub fn warm<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) {
         // Already resident? Say so. The CLI prints "already resident - nothing to
         // do"; the tray previously just called load, which returned in 0.0s and
         // looked from the outside like the click had done nothing at all.
+        // Resident *and pinned*: a model a chat loaded is resident too, but due
+        // to unload in minutes, and ticking Loaded over that would be a lie.
         let already = ollama::ps()
-            .map(|m| ollama::find(&m, &power.model()).is_some())
+            .map(|m| ollama::find(&m, &power.model()).is_some_and(|m| m.pinned()))
             .unwrap_or(false);
         if already {
             power.end_warming();

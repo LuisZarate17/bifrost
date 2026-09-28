@@ -117,9 +117,15 @@ pub fn warm(tag: &str, num_ctx: u32) -> Result<(), String> {
         println!("started Ollama in {:.1}s", took.as_secs_f64());
     }
 
-    if ollama::find(&ollama::ps()?, tag).is_some() {
-        println!("already resident — nothing to do");
-        return status(tag);
+    match ollama::find(&ollama::ps()?, tag) {
+        Some(m) if m.pinned() => {
+            println!("already resident — nothing to do");
+            return status(tag);
+        }
+        // Loaded by a chat, so due to unload in minutes. Pinning a resident
+        // model is instant, and it is what "warm" promises.
+        Some(_) => println!("resident but not pinned — pinning it"),
+        None => {}
     }
 
     let card = card();

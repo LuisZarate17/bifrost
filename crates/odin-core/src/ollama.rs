@@ -57,6 +57,22 @@ impl LoadedModel {
     pub fn size_vram_mib(&self) -> Option<u64> {
         self.size_vram.map(|b| b / (1024 * 1024))
     }
+
+    /// Whether the model is pinned — loaded with `keep_alive: -1`, as [`load`]
+    /// does — rather than due to unload a few minutes after its last request.
+    ///
+    /// Ollama reports a pin as an expiry roughly 290 years out (2318 on
+    /// 2026-09-27), and an ordinary request as minutes from now. A chat that loads
+    /// the model leaves it resident but not pinned, so "resident" alone is not
+    /// enough to skip warming: that is how `odin warm` and the tray came to say a
+    /// model was ready while it was five minutes from being dropped.
+    pub fn pinned(&self) -> bool {
+        self.expires_at
+            .as_deref()
+            .and_then(|s| s.get(..4))
+            .and_then(|year| year.parse::<u32>().ok())
+            .is_some_and(|year| year >= 2200)
+    }
 }
 
 #[derive(Deserialize)]
@@ -579,4 +595,31 @@ fn spawn_detached() -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("could not start Ollama: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loaded(expires_at: Option<&str>) -> LoadedModel {
+        LoadedModel {
+            name: Some("qwen3-vl:8b-instruct-q4_K_M".into()),
+            model: None,
+            size_vram: None,
+            expires_at: expires_at.map(String::from),
+        }
+    }
+
+    #[test]
+    fn a_pin_is_an_expiry_centuries_out() {
+        // Both read from /api/ps on 2026-09-27: after `load`, and after a chat.
+        assert!(loaded(Some("2319-01-06T22:13:05.123-08:00")).pinned());
+        assert!(!loaded(Some("2026-09-26T23:31:09.5835022-07:00")).pinned());
+    }
+
+    #[test]
+    fn no_expiry_is_not_a_pin() {
+        assert!(!loaded(None).pinned());
+        assert!(!loaded(Some("")).pinned());
+    }
 }
