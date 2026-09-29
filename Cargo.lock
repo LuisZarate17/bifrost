@@ -3044,6 +3044,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar",
+ "windows 0.61.3",
 ]
 
 [[package]]

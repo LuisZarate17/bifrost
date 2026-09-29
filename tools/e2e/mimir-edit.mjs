@@ -114,7 +114,7 @@ async function untilEditCard(js) {
     const s = await js(`(() => {
       const edit = document.querySelector(".tool.edit.pending");
       if (edit) return { edit: true, add: [...edit.querySelectorAll(".dl.add .dl-text")].map(e => e.textContent), del: [...edit.querySelectorAll(".dl.del .dl-text")].map(e => e.textContent) };
-      const read = document.querySelector(".tool.pending");
+      const read = document.querySelector(".tool.read.pending");
       if (read) { read.querySelector(".btn.primary").click(); return { read: true }; }
       const t = document.querySelector(".composer textarea");
       if (t && !t.disabled) return { done: true };
@@ -136,7 +136,7 @@ async function settle(js, what) {
     const s = await js(`(() => {
       const edit = document.querySelector(".tool.edit.pending");
       if (edit) { [...edit.querySelectorAll(".btn")].find(b => b.textContent === "Deny").click(); return "declined another edit"; }
-      const read = document.querySelector(".tool.pending");
+      const read = document.querySelector(".tool.read.pending");
       if (read) { read.querySelector(".btn.primary").click(); return "allowed a read"; }
       const t = document.querySelector(".composer textarea");
       return t && !t.disabled ? "idle" : null;

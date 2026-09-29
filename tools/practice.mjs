@@ -40,6 +40,20 @@ fn main() {
   // an answer without it after a Deny proves it was not.
   "facts.txt": `The practice code is 4417-AMBER.
 `,
+  // Makes greet.rs a project `cargo check` can build, so Mímir offers a check
+  // here. The empty [workspace] makes this folder its own workspace: without
+  // it, cargo finds odin's Cargo.toml above and refuses to build.
+  "Cargo.toml": `[package]
+name = "greet"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "greet"
+path = "greet.rs"
+
+[workspace]
+`,
 };
 
 // The smallest valid zip: an empty archive, just the end-of-directory record.

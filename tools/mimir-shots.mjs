@@ -22,6 +22,7 @@ const STATES = {
   thread: "?preview",
   stream: "?preview=stream",
   edit: "?preview=edit",
+  check: "?preview=check",
   empty: "?preview=empty",
   appearance: "?preview=appearance",
   models: "?preview=models",

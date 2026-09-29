@@ -6,6 +6,21 @@ machine.
 **To work through Stage G's checks, use [G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
+## Open — H1, the check command, 2026-09-29
+
+**Already proven mechanically.** `node tools/e2e/mimir-check.mjs` — 18/18 on the built app: a
+Cargo project offers `cargo check` and `cargo test`; a check card runs nothing until allowed, and a
+denied one runs nothing at all; output reaches the card and the model; a failing command shows red
+and the model quotes its error; Stop turns the card to *Stopped* in about 400 ms and leaves no
+child process running; and a type change whose first edit breaks the build ends, through the
+check, in a build that passes. `mimir-edit.mjs` still 16/16. **What it skips is what a person
+operates** — the picker on the chip, and whether a window flashes.
+
+- [ ] **Choose the check from the chip.** Only detected commands are offered, nothing can be typed,
+      and the choice is remembered per folder. [G-testing.md §8](G-testing.md)
+- [ ] **No console window flashes** while a check runs.
+- [ ] **Stop with Esc** during a real `cargo check` leaves no `cargo.exe` or `rustc.exe` behind.
+
 ## Open — G7, editing files, 2026-09-24
 
 The model, the diff, the approval, Undo, Deny, a file changed behind the diff's back and a path

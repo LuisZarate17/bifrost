@@ -14,12 +14,15 @@
 //! - [`store`] — conversations on disk. A file format, kept deliberately
 //!   separate from `chat`'s wire format so a change to one is not silently a
 //!   migration of the other
-//! - [`tools`] — the one local tool the model may ask for, and the rule that
+//! - [`tools`] — the local tools the model may ask for, and the rule that
 //!   nothing runs without an explicit per-call approval
+//! - [`check`] — running the one check command chosen for the project folder,
+//!   stoppable and with its output capped. Added at H1
 //!
 //! Nothing here prints or panics. Callers format, and a tray has no stdout.
 
 pub mod chat;
+pub mod check;
 pub mod config;
 pub mod edit;
 pub mod ollama;

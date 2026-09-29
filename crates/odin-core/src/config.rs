@@ -15,6 +15,7 @@
 //! Blocking, like the rest of this crate. Tauri callers go through
 //! `spawn_blocking`.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -97,6 +98,60 @@ pub struct Config {
     /// position — so choosing a recent folder never lets a path in from outside,
     /// and `workspace` stays something the user picked with their own hands.
     pub recent_workspaces: Vec<String>,
+    /// The check command for each folder, keyed by the folder as `workspace`
+    /// stores it — the command the model may run to find out whether its edits
+    /// broke the build. Mímir writes an entry only from the candidates
+    /// `check::candidates` detected, chosen by position, so no command typed in
+    /// the window reaches this map. Anything else is added by hand. Look an entry
+    /// up with [`Config::check_for`], which ignores case the way Windows paths do.
+    ///
+    /// **Read leniently**, because this is the one field people type by hand: an
+    /// entry that is not a list of strings is dropped rather than failing the
+    /// whole file — which would reset the model, the folder and everything else
+    /// to defaults, and the next save would write that over the file.
+    #[serde(deserialize_with = "lenient_checks")]
+    pub checks: BTreeMap<String, Vec<String>>,
+}
+
+/// `checks`, keeping only entries that are a folder mapped to a list of strings.
+fn lenient_checks<'de, D>(d: D) -> Result<BTreeMap<String, Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(d)?;
+    let Some(map) = value.as_object() else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(map
+        .iter()
+        .filter_map(|(folder, argv)| {
+            let argv: Vec<String> = argv
+                .as_array()?
+                .iter()
+                .map(|a| a.as_str().map(str::to_string))
+                .collect::<Option<_>>()?;
+            Some((folder.clone(), argv))
+        })
+        .collect())
+}
+
+impl Config {
+    /// The check command set for this folder, if any.
+    pub fn check_for(&self, root: &str) -> Option<&Vec<String>> {
+        self.checks
+            .iter()
+            .find(|(k, v)| k.eq_ignore_ascii_case(root) && !v.is_empty())
+            .map(|(_, v)| v)
+    }
+
+    /// Set or clear this folder's check, replacing any entry that differs only
+    /// in case.
+    pub fn set_check(&mut self, root: &str, argv: Option<Vec<String>>) {
+        self.checks.retain(|k, _| !k.eq_ignore_ascii_case(root));
+        if let Some(argv) = argv {
+            self.checks.insert(root.to_string(), argv);
+        }
+    }
 }
 
 impl Default for Config {
@@ -107,6 +162,7 @@ impl Default for Config {
             num_ctx: DEFAULT_NUM_CTX,
             workspace: None,
             recent_workspaces: Vec::new(),
+            checks: BTreeMap::new(),
         }
     }
 }
@@ -182,8 +238,59 @@ mod tests {
             num_ctx: 4096,
             workspace: Some(r"C:\work\demo".into()),
             recent_workspaces: vec![r"C:\work\demo".into(), r"C:\work\older".into()],
+            checks: BTreeMap::from([(r"C:\work\demo".into(), vec!["cargo".into(), "check".into()])]),
         };
         let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(c, back);
+    }
+
+    /// Windows paths ignore case, and the folder can reach the config spelled
+    /// either way — from the picker, or typed by hand into `checks`.
+    #[test]
+    fn a_check_is_found_whatever_the_case_of_its_folder() {
+        let mut c = Config::default();
+        c.set_check(r"C:\Work\Demo", Some(vec!["cargo".into(), "check".into()]));
+        assert_eq!(c.check_for(r"c:\work\demo").map(|v| v.join(" ")), Some("cargo check".into()));
+        assert_eq!(c.check_for(r"C:\work\other"), None);
+    }
+
+    #[test]
+    fn setting_a_check_replaces_one_that_differs_only_in_case() {
+        let mut c = Config::default();
+        c.set_check(r"C:\Work\Demo", Some(vec!["cargo".into(), "check".into()]));
+        c.set_check(r"c:\work\demo", Some(vec!["cargo".into(), "test".into()]));
+        assert_eq!(c.checks.len(), 1);
+        c.set_check(r"C:\WORK\DEMO", None);
+        assert!(c.checks.is_empty());
+    }
+
+    /// **A typo in a hand-typed check costs that check, not the whole file.**
+    /// `"cargo clippy"` as a string instead of a list used to fail the parse,
+    /// and every setting fell back to its default.
+    #[test]
+    fn a_malformed_check_is_dropped_and_everything_else_survives() {
+        let c: Config = serde_json::from_str(
+            r#"{"model":"llama3.1:8b","workspace":"C:\\w","checks":{
+                "C:\\a":"cargo clippy",
+                "C:\\b":["cargo",1],
+                "C:\\c":["cargo","check"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.model, "llama3.1:8b");
+        assert_eq!(c.workspace.as_deref(), Some(r"C:\w"));
+        assert_eq!(c.checks.len(), 1);
+        assert!(c.check_for(r"C:\c").is_some());
+        // Not even a map: no checks, and still no reset.
+        let c: Config = serde_json::from_str(r#"{"model":"x","checks":"oops"}"#).unwrap();
+        assert_eq!((c.model.as_str(), c.checks.len()), ("x", 0));
+    }
+
+    /// An empty command is no command: a hand-edited `"C:\\x": []` must not
+    /// offer the model a check that cannot run.
+    #[test]
+    fn an_empty_command_is_not_a_check() {
+        let mut c = Config::default();
+        c.checks.insert(r"C:\x".into(), vec![]);
+        assert_eq!(c.check_for(r"C:\x"), None);
     }
 }

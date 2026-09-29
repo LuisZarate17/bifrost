@@ -71,13 +71,25 @@ export type Entry =
   | {
       kind: "tool";
       name: string;
+      /** What the card names: the file for a read or an edit, the command for a
+       *  check. */
       path: string;
-      /** pending: waiting on you. ran: done. denied: you said no. rejected: it
-       *  could never have worked (an edit whose text is not in the file) and
-       *  went straight back to the model. failed: approved, but refused at the
-       *  last moment — the file changed after the diff was shown. undone: an
-       *  edit you reversed. */
-      state: "pending" | "ran" | "denied" | "rejected" | "failed" | "undone";
+      /** The arguments the model sent, replayed as sent. Rebuilding them from
+       *  `path` taught the model a shape no tool takes — and it copies what it
+       *  sees. Not kept for edits, whose text can be the size of a file. */
+      args?: Record<string, unknown>;
+      /** pending: waiting on you. running: approved and under way. ran: done.
+       *  denied: you said no. rejected: it could never have worked (an edit
+       *  whose text is not in the file) and went straight back to the model.
+       *  failed: approved, but refused at the last moment — the file changed
+       *  after the diff was shown. undone: an edit you reversed. stopped: a
+       *  check ended by Stop. */
+      state: "pending" | "running" | "ran" | "denied" | "rejected" | "failed" | "undone" | "stopped";
+      /** Whether it worked, as Rust reported it. A check that finds a broken
+       *  build ran fine and still failed. */
+      ok?: boolean;
+      /** For a check: build files an edit changed earlier in the turn. */
+      changedBuildFiles?: string[];
       result?: string;
       /** The diff you approve, for an edit. Computed by the same plan that is
        *  written, so it cannot disagree with what lands on disk. */
@@ -89,13 +101,30 @@ export type Entry =
 
 export type DiffLine = { tag: " " | "-" | "+"; text: string; old: number | null; new: number | null };
 export type DiffView = { hunks: { lines: DiffLine[] }[]; added: number; removed: number; create: boolean };
-type Folder = { path: string; name: string };
+/** `check` is the command chosen for the folder, if any, as a person reads it. */
+type Folder = { path: string; name: string; check?: string | null };
 
 /** Matches odin_core::tools::MAX_ROUNDS. G7 measured a two-file change taking
  *  five rounds, one more than G6's old bound of four allowed. */
 const MAX_ROUNDS = 10;
 
 const isEdit = (name: string) => name === "edit_file" || name === "create_file";
+
+/** What the model is told when you say no, in terms of what it asked for. */
+function refusalFor(name: string, path: string): string {
+  if (isEdit(name)) return `The user declined this change to ${path}. Nothing was written.`;
+  if (name === "run_check") return `The user declined to run \`${path}\`. Nothing was run.`;
+  return `The user declined to let you read ${path}.`;
+}
+
+/** The arguments to replay for a call: the model's own, for the calls whose
+ *  arguments are what they were about — a check's, a search's. Not an edit's,
+ *  whose text can be the size of the file, and not a read's, whose card holds
+ *  the full path that was read: the model's relative one would name a file in
+ *  whatever folder is chosen *now*. */
+function replayArgs(e: Extract<Entry, { kind: "tool" }>): Record<string, unknown> {
+  return isEdit(e.name) || e.name === "read_file" || !e.args ? { path: e.path } : e.args;
+}
 
 /**
  * Leave this much of the context for the answer.
@@ -273,6 +302,23 @@ function App() {
    *  development, which saved the conversation twice and created two files on
    *  the first save. A ref gives the same value without the side effect. */
   const entriesRef = useRef<Entry[]>([]);
+  /** The file this thread saves to, the moment it is known — for a save that
+   *  cannot wait for a render, like a tool result that lands after Stop. */
+  const convoIdRef = useRef<string | null>(null);
+  /** The save in flight. A later save waits behind it: two saves racing on a
+   *  new thread would each create a file. */
+  const saving = useRef<Promise<unknown>>(Promise.resolve());
+  /** Which thread is on screen. Bumped whenever another one replaces it, so a
+   *  tool result that arrives late can tell whether its card is still there —
+   *  or whether the same position now belongs to a different conversation. */
+  const threadGen = useRef(0);
+  /** What Stop saved, for a result that lands after the thread has changed:
+   *  the thread as it stood, which thread it was, and the file it went to. */
+  const stopSave = useRef<{ gen: number; entries: Entry[]; saved: Promise<string | null> } | null>(null);
+
+  useEffect(() => {
+    convoIdRef.current = convoId;
+  }, [convoId]);
 
   const refreshModels = useCallback(() => {
     setLoadingModels(true);
@@ -352,6 +398,33 @@ function App() {
     }
   }, []);
 
+  // The check commands this folder could use, as Rust detected them. Only ever
+  // shown and chosen by position: no command typed here can reach Rust.
+  const [checkOptions, setCheckOptions] = useState<string[]>([]);
+  useEffect(() => {
+    if (!toolsOn || !folder) {
+      setCheckOptions([]);
+      return;
+    }
+    invoke<string[]>("check_options")
+      .then(setCheckOptions)
+      .catch(() => setCheckOptions([]));
+  }, [toolsOn, folder?.path]);
+
+  const chooseCheck = useCallback(
+    async (label: string) => {
+      try {
+        const f = label
+          ? await invoke<Folder>("set_check", { index: checkOptions.indexOf(label), label })
+          : await invoke<Folder>("clear_check");
+        setFolder(f);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [checkOptions],
+  );
+
   // Dev-only fixture: `?preview` seeds a thread so the UI can be inspected
   // without a model. The dynamic import keeps it out of the production bundle.
   useEffect(() => {
@@ -373,6 +446,10 @@ function App() {
         setToolsOn(true);
         setFolder({ path: "C:\\Users\\you\\source\\repos\\demo", name: "demo" });
       }
+      if (mode === "check") {
+        setToolsOn(true);
+        setFolder({ path: "C:\\Users\\you\\source\\repos\\demo", name: "demo", check: "cargo check" });
+      }
     });
   }, []);
 
@@ -389,7 +466,9 @@ function App() {
    * rather than an answer with no visible source.
    */
   const persist = useCallback(
-    async (all: Entry[], id: string | null) => {
+    /** Resolves with the file it saved to. `adopt: false` saves without making
+     *  that the open thread — for a thread that is no longer on screen. */
+    async (all: Entry[], id: string | null, adopt = true): Promise<string | null> => {
       const messages: StoredMessage[] = all.flatMap((e): StoredMessage[] => {
         if (e.kind === "tool") {
           // Only a call that actually ran is worth recording; a denial or a
@@ -407,6 +486,8 @@ function App() {
                     name: e.name,
                     arguments: {
                       path: e.path,
+                      ...(e.args && !isEdit(e.name) ? { args: e.args } : {}),
+                      ...(e.ok === false ? { ok: false } : {}),
                       ...(e.diff ? { diff: e.diff } : {}),
                       ...(e.undo ? { undo: e.undo } : {}),
                       ...(e.state === "undone" ? { undone: true } : {}),
@@ -430,7 +511,7 @@ function App() {
           },
         ];
       });
-      if (messages.length === 0) return;
+      if (messages.length === 0) return id;
 
       try {
         const saved = await invoke<Conversation>("save_conversation", {
@@ -442,11 +523,16 @@ function App() {
             messages,
           },
         });
-        setConvoId(saved.id);
+        if (adopt) {
+          convoIdRef.current = saved.id;
+          setConvoId(saved.id);
+        }
         refreshConvos();
+        return saved.id;
       } catch (e) {
         // A failed save must not eat the conversation that is on screen.
         setError(`could not save: ${e}`);
+        return id;
       }
     },
     [refreshConvos],
@@ -481,13 +567,21 @@ function App() {
     async (id: string) => {
       try {
         const c = await invoke<Conversation>("open_conversation", { id });
+        threadGen.current++;
         setEntries(
           c.messages.map((m): Entry => {
             if (m.role === "tool") {
               const call = (m.tool_calls?.[0] ?? {}) as {
                 function?: {
                   name?: string;
-                  arguments?: { path?: string; diff?: DiffView; undo?: string; undone?: boolean };
+                  arguments?: {
+                    path?: string;
+                    args?: Record<string, unknown>;
+                    ok?: boolean;
+                    diff?: DiffView;
+                    undo?: string;
+                    undone?: boolean;
+                  };
                 };
               };
               const args = call.function?.arguments ?? {};
@@ -497,6 +591,8 @@ function App() {
                 path: args.path ?? "",
                 state: args.undone ? "undone" : "ran",
                 result: m.content,
+                ...(args.args ? { args: args.args } : {}),
+                ...(args.ok === false ? { ok: false } : {}),
                 ...(args.diff ? { diff: args.diff } : {}),
                 ...(args.undo ? { undo: args.undo } : {}),
               };
@@ -511,6 +607,7 @@ function App() {
           }),
         );
         setDropped(0);
+        convoIdRef.current = c.id;
         setConvoId(c.id);
         setSpent(0);
         setStats("");
@@ -526,7 +623,9 @@ function App() {
   );
 
   const newConvo = useCallback(() => {
+    threadGen.current++;
     setEntries([]);
+    convoIdRef.current = null;
     setConvoId(null);
     setDropped(0);
     setSpent(0);
@@ -652,7 +751,7 @@ function App() {
           out.push({
             role: "assistant",
             content: "",
-            tool_calls: [{ function: { name: e.name, arguments: { path: e.path } } }],
+            tool_calls: [{ function: { name: e.name, arguments: replayArgs(e) } }],
           });
           // The model is told an edit was undone, or it will reason from a file
           // that is no longer what it thinks.
@@ -683,6 +782,9 @@ function App() {
   const askWithTools = useCallback(
     async (history: Array<Record<string, unknown>>, live: () => boolean) => {
       let convo = [...history];
+      // The thread this turn belongs to. Once Stop has freed the window,
+      // another conversation can be opened in its place.
+      const gen = threadGen.current;
 
       // A bound, not a timeout. Without one, a model that keeps asking loops
       // forever and the only symptom is the app getting warm.
@@ -694,7 +796,7 @@ function App() {
           | { kind: "answer"; content: string; promptEvalCount: number; evalCount: number }
           | {
               kind: "call";
-              call: { name: string; path: string; token: string; diff?: DiffView };
+              call: { name: string; path: string; token: string; diff?: DiffView; changedBuildFiles?: string[] };
               rawCall: Record<string, unknown>;
             }
           | { kind: "rejected"; name: string; path: string; error: string; rawCall: Record<string, unknown> }
@@ -749,17 +851,33 @@ function App() {
         }
 
         // Show exactly what would happen — the path for a read, the diff for an
-        // edit — and stop. Nothing is read or written until it is approved, and
-        // what is approved is what runs: the ticket carries the whole plan.
-        const { name, path, token, diff } = out.call;
-        setEntries((prev) => {
-          const next: Entry[] = [
-            ...prev,
-            { kind: "tool", name, path, state: "pending", ...(diff ? { diff } : {}) },
-          ];
-          entriesRef.current = next;
-          return next;
-        });
+        // edit, the command for a check — and stop. Nothing is read, written or
+        // run until it is approved, and what is approved is what runs: the
+        // ticket carries the whole plan.
+        const { name, path, token, diff, changedBuildFiles } = out.call;
+        // Always an object: a call with no arguments at all (a check, say) is
+        // replayed as `{}`, not rebuilt as `{path}`.
+        const args =
+          (out.rawCall as { function?: { arguments?: Record<string, unknown> } }).function?.arguments ?? {};
+        const card: Entry = {
+          kind: "tool",
+          name,
+          path,
+          state: "pending",
+          args,
+          ...(diff ? { diff } : {}),
+          ...(changedBuildFiles?.length ? { changedBuildFiles } : {}),
+        };
+        // The card is updated by its position, not as "the last entry": a
+        // result that lands after Stop can find a new request's turns after it.
+        // And only while its own thread is on screen — the same position in a
+        // conversation opened since is someone else's card.
+        const at = (await settle((prev) => [...prev, card])).length - 1;
+        type Patch = Partial<Extract<Entry, { kind: "tool" }>>;
+        const patchAt = (all: Entry[], patch: Patch) =>
+          all.map((e, i) => (i === at && e.kind === "tool" ? { ...e, ...patch } : e));
+        const update = (patch: Patch) =>
+          threadGen.current === gen ? settle((prev) => patchAt(prev, patch)) : Promise.resolve(entriesRef.current);
 
         const approved = await new Promise<boolean>((resolve) => {
           pendingDecision.current = resolve;
@@ -767,46 +885,67 @@ function App() {
         pendingDecision.current = null;
 
         if (!approved) {
-          setEntries((prev) =>
-            prev.map((e, i) =>
-              i === prev.length - 1 && e.kind === "tool" ? { ...e, state: "denied" } : e,
-            ),
-          );
+          await update({ state: "denied" });
           // The model is told, rather than left waiting on a call that silently
           // never happened. The assistant turn that asked has to go back too, or
           // the refusal answers a question it cannot see itself having asked.
-          const refusal = isEdit(name)
-            ? `The user declined this change to ${path}. Nothing was written.`
-            : `The user declined to let you read ${path}.`;
           convo = [
             ...convo,
             out.rawCall
               ? { role: "assistant", content: "", tool_calls: [out.rawCall] }
               : { role: "assistant", content: "" },
-            { role: "tool", content: refusal, tool_name: name },
+            { role: "tool", content: refusalFor(name, path), tool_name: name },
           ];
           continue;
         }
 
-        const ran = await invoke<{ result: string; undo?: string }>("run_tool", { name, path, token });
-        // Refused at the last moment — the file changed after the diff was
-        // shown — comes back as an error for the model, and shows as failed.
-        const failed = isEdit(name) && ran.result.startsWith("error:");
-        setEntries((prev) => {
-          const next = prev.map((e, i) =>
-            i === prev.length - 1 && e.kind === "tool"
-              ? {
-                  ...e,
-                  state: failed ? ("failed" as const) : ("ran" as const),
-                  result: ran.result,
-                  ...(failed ? { error: ran.result } : {}),
-                  ...(ran.undo ? { undo: ran.undo } : {}),
-                }
-              : e,
-          );
-          entriesRef.current = next;
-          return next;
-        });
+        // Stopped between Allow and here: nothing has run, and nothing will.
+        if (!live()) {
+          await update({ state: "stopped" });
+          return;
+        }
+        // The buttons go at once. A check can take minutes, and a card still
+        // offering Allow would invite a second click on a spent ticket.
+        await update({ state: "running" });
+        let ran: { result: string; ok: boolean; stopped: boolean; undo?: string };
+        try {
+          ran = await invoke("run_tool", { name, path, token });
+        } catch (e) {
+          // It could not be run at all. The card says so rather than spinning.
+          await update({ state: "failed", ok: false, error: String(e) });
+          throw e;
+        }
+        // An edit refused at the last moment — the file changed after the diff
+        // was shown — is failed: nothing was written. A check that finds errors
+        // is not: it ran, and `ok` says it did not pass.
+        const failed = isEdit(name) && !ran.ok;
+        const patch: Patch = {
+          state: ran.stopped ? "stopped" : failed ? "failed" : "ran",
+          ok: ran.ok,
+          result: ran.result,
+          ...(failed ? { error: ran.result } : {}),
+          ...(ran.undo ? { undo: ran.undo } : {}),
+        };
+
+        // Stopped while it ran. What is left is saving the result — an edit
+        // that was written has an undo handle worth keeping — behind the save
+        // Stop already started, so the two cannot race into two files.
+        if (!live()) {
+          await saving.current;
+          if (threadGen.current === gen) {
+            // Still on screen: the card shows it, and the thread is saved as
+            // it now stands.
+            await persist(await update(patch), convoIdRef.current);
+          } else if (stopSave.current?.gen === gen) {
+            // Another conversation is open. It is not touched; the stopped one
+            // is saved again, as Stop left it plus this result, to its own file.
+            const snap = stopSave.current;
+            const id = await snap.saved;
+            if (id) await persist(patchAt(snap.entries, patch), id, false);
+          }
+          return;
+        }
+        await update(patch);
 
         // assistant(tool_calls) then tool(result) - the pair Ollama expects.
         // Sending only the result left the model looking at an answer to a
@@ -824,7 +963,7 @@ function App() {
 
       setError(`the model kept asking for tools; stopped after ${MAX_ROUNDS} rounds`);
     },
-    [model],
+    [model, settle, persist],
   );
 
   const send = useCallback(async () => {
@@ -979,7 +1118,9 @@ function App() {
     setStatus("");
     setStreaming(false);
     composerRef.current?.focus();
-    void persist(out, convoId);
+    const saved = persist(out, convoId);
+    saving.current = saved;
+    stopSave.current = { gen: threadGen.current, entries: out, saved };
   }, [streaming, model, persist, convoId]);
 
   /**
@@ -1368,6 +1509,36 @@ function App() {
                       Choose folder
                     </button>
                   ))}
+                {/* The command the model may run to check its work. Offered
+                    only from what Rust found in the folder, and every run is
+                    still approved on its card. */}
+                {toolsOn && folder && (checkOptions.length > 0 || folder.check) && (
+                  <label
+                    className={"check-chip" + (folder.check ? " on" : "")}
+                    title="The command the model may run to check its work. You approve each run."
+                  >
+                    <I.Terminal width={14} height={14} />
+                    <select
+                      value={folder.check ?? ""}
+                      onChange={(e) => void chooseCheck(e.target.value)}
+                      disabled={streaming}
+                      aria-label="Check command"
+                    >
+                      <option value="">No check</option>
+                      {checkOptions.map((o) => (
+                        <option key={o} value={o}>
+                          {o}
+                        </option>
+                      ))}
+                      {/* One set by hand in config.json, which Rust did not
+                          detect: shown, so the chip does not lie about it. */}
+                      {folder.check && !checkOptions.includes(folder.check) && (
+                        <option value={folder.check}>{folder.check}</option>
+                      )}
+                    </select>
+                    <I.Chevron width={14} height={14} />
+                  </label>
+                )}
 
                 <span className="spacer" />
 

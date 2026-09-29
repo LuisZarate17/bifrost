@@ -1019,6 +1019,55 @@ kbd {
   color: var(--danger);
 }
 
+/* ── checks ─────────────────────────────────────────────────────────────── */
+
+/* A check that ran and found errors is not the tool failing — it is the
+   news. Red says "the build is broken", not "something went wrong here". */
+.tool.check.ran.fail .tool-state {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.tool.check.running .tool-state,
+.tool.check.stopped .tool-state {
+  background: var(--bg-sunk);
+  color: var(--text-2);
+}
+.tool.check.running .tool-state::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 1px;
+  animation: check-pulse 1.2s var(--ease) infinite;
+}
+@keyframes check-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tool.check.running .tool-state::before {
+    animation: none;
+  }
+}
+.tool.check.stopped {
+  border-style: dashed;
+  background: transparent;
+}
+.tool-warn {
+  margin: 0;
+  padding: 0 12px 10px 37px;
+  color: var(--danger);
+  line-height: 1.5;
+}
+.tool-warn code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .counts {
   flex: none;
   display: inline-flex;
@@ -1200,6 +1249,52 @@ kbd {
 .folder-x:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text);
+}
+
+/* The folder's check command. Dashed and quiet until one is chosen, like the
+   empty folder chip — a check is an offer, not a default. */
+.check-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  max-width: 210px;
+  padding: 0 8px 0 12px;
+  border: 1px dashed var(--border-2);
+  border-radius: 999px;
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 500;
+}
+.check-chip.on {
+  border-style: solid;
+  color: var(--text);
+}
+.check-chip:hover:has(select:not(:disabled)) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.check-chip:has(select:focus-visible) {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.check-chip select {
+  min-width: 0;
+  max-width: 160px;
+  padding: 0;
+  border: none;
+  outline: none;
+  /* The app's own chevron follows it; the native arrow is heavier than every
+     other one on screen. */
+  appearance: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.check-chip select:disabled {
+  cursor: default;
 }
 
 /* ── dock: error, composer ──────────────────────────────────────────────── */

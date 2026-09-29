@@ -49,6 +49,15 @@ export const Wrench = (p: P) => (
   </svg>
 );
 
+/** A prompt in a window: a command that runs. For the check, which is a command
+ *  and not a verdict — a tick would read as "passed" on a check that failed. */
+export const Terminal = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2" />
+    <path d="m4.75 6.25 2 1.75-2 1.75M8.5 10h2.75" />
+  </svg>
+);
+
 export const File = (p: P) => (
   <svg {...base(p)}>
     <path d="M9 2H4.75A1.25 1.25 0 0 0 3.5 3.25v9.5A1.25 1.25 0 0 0 4.75 14h6.5a1.25 1.25 0 0 0 1.25-1.25V5.5L9 2Z" />

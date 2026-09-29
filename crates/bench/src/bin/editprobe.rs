@@ -28,16 +28,22 @@
 //!
 //! The loop mirrors the app's: only the first tool call in a reply is run, the
 //! assistant turn that asked for it goes back first, and every call is approved
-//! automatically — the probe measures the model, not the person.
+//! automatically — the probe measures the model, not the person. The loop itself
+//! is `probe.rs`, shared with every later probe since H1.
+
+#[path = "../probe.rs"]
+mod probe;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use odin_core::chat::{self, Message, Options, Tool};
-use odin_core::edit::{self, Workspace};
-use odin_core::tools::{self, Request};
+use odin_core::chat::{Message, Options, Tool};
+use odin_core::edit::Workspace;
+use odin_core::tools;
 use odin_core::{config, ollama};
+
+use probe::{Setup, Transport};
 
 type Files = BTreeMap<String, String>;
 
@@ -251,7 +257,7 @@ impl Format {
     }
 
     fn tools(self) -> Vec<Tool> {
-        let mut t = tools::available(true);
+        let mut t = tools::available(true, None);
         if self == Format::Rewrite {
             t.retain(|t| t.function.name != "edit_file");
             t.insert(1, tools::rewrite_tool());
@@ -260,32 +266,13 @@ impl Format {
     }
 
     fn system(self, ws: &Workspace) -> String {
-        let s = tools::system_prompt(ws);
+        let s = tools::system_prompt(ws, false);
         match self {
             Format::Replace => s,
             Format::Rewrite => s.replace(
                 "then use edit_file with text copied exactly from what you read",
                 "then use write_file to send back the complete file with your change made",
             ),
-        }
-    }
-}
-
-/// How tool calls travel. **native**: Ollama parses them, and a call it cannot
-/// parse fails the turn (G6, round 1). **recover**: `chat::chat_tools` — native
-/// first, and when Ollama rejects a malformed call, the turn is re-asked raw and
-/// the call repaired. The fix for the `"{` escaping failure round 1 found.
-#[derive(Clone, Copy, PartialEq)]
-enum Transport {
-    Native,
-    Recover,
-}
-
-impl Transport {
-    fn name(self) -> &'static str {
-        match self {
-            Transport::Native => "native",
-            Transport::Recover => "recover",
         }
     }
 }
@@ -431,26 +418,6 @@ fn judge(task: &Task, before: &Files, after: &BTreeMap<String, Vec<u8>>, answer:
     }
 }
 
-fn execute(call: &chat::ToolCall, ws: &Workspace, backups: &Path) -> (String, bool) {
-    let edit_result = |r: Result<edit::Plan, String>| match r.and_then(|p| edit::apply(&p, backups)) {
-        Ok(a) => (tools::applied_message(&a), false),
-        Err(e) => (format!("error: {e}"), true),
-    };
-    if call.function.name == chat::INVALID_TOOL_CALL {
-        let why = call.function.arguments["error"].as_str().unwrap_or("unreadable");
-        return (format!("error: {why}. Send the call again as valid JSON."), true);
-    }
-    match tools::interpret(call) {
-        Err(e) => (format!("error: {e}"), true),
-        Ok(Request::Read { path }) => (tools::run_read_file(&tools::read_target(&path, Some(ws))), false),
-        Ok(Request::Edit { path, old_text, new_text }) => {
-            edit_result(edit::plan_replace(ws, &path, &old_text, &new_text))
-        }
-        Ok(Request::Create { path, content }) => edit_result(edit::plan_create(ws, &path, &content)),
-        Ok(Request::Rewrite { path, content }) => edit_result(edit::plan_rewrite(ws, &path, &content)),
-    }
-}
-
 fn run(model: &str, task: &Task, format: Format, transport: Transport, opts: &Options, scratch: &Path) -> Outcome {
     let started = Instant::now();
     let dir = scratch.join("project");
@@ -466,95 +433,44 @@ fn run(model: &str, task: &Task, format: Format, transport: Transport, opts: &Op
     let tools = format.tools();
 
     let mut messages = vec![Message::system(format.system(&ws)), Message::user(task.prompt)];
-    let mut calls = Vec::new();
-    let mut edit_errors = 0;
-    let mut answer = String::new();
-    let mut hit_bound = true;
-    let mut rounds = 0;
-    let mut log = Vec::new();
-    let mut recovered = 0;
-    let mut stopped = false;
+    let setup = Setup { ws: &ws, backups: &backups, check: None };
+    let r = probe::run_loop(model, &mut messages, &tools, *opts, transport, tools::MAX_ROUNDS, &setup);
+    let secs = started.elapsed().as_secs_f64();
 
-    for _ in 0..tools::MAX_ROUNDS {
-        rounds += 1;
-        let sent = match transport {
-            Transport::Native => chat::chat(model, &messages, &tools, *opts),
-            Transport::Recover => chat::chat_tools(model, &messages, &tools, *opts),
+    if let Some(e) = r.error {
+        return Outcome {
+            verdict: Verdict::Error,
+            why: e,
+            calls: r.calls,
+            edit_errors: r.edit_errors,
+            rounds: r.rounds,
+            hit_bound: false,
+            secs,
+            log: r.log,
+            recovered: r.recovered,
         };
-        let reply = match sent {
-            Ok(r) => r,
-            Err(e) => {
-                return Outcome {
-                    verdict: Verdict::Error,
-                    why: e,
-                    calls,
-                    edit_errors,
-                    rounds,
-                    hit_bound: false,
-                    secs: started.elapsed().as_secs_f64(),
-                    log,
-                    recovered,
-                };
-            }
-        };
-        if reply.recovered {
-            recovered += 1;
-            log.push("(ollama rejected a malformed call; recovered through the raw retry)".into());
-        }
-        let Some(call) = reply.tool_calls().first().cloned() else {
-            let said: String = reply.message.content.chars().take(300).collect();
-            log.push(format!("answer: {}", said.replace('\n', "⏎")));
-            answer = reply.message.content.clone();
-            hit_bound = false;
-            break;
-        };
-        calls.push(call.function.name.clone());
-        // The app's loop-breaking, measured rather than assumed: the third
-        // identical failure ends the turn instead of burning every round.
-        let prior = tools::prior_failures(&messages, &call);
-        if prior + 1 >= tools::MAX_IDENTICAL_FAILURES {
-            log.push(format!("stopped: {} sent identically after failing {prior} times", call.function.name));
-            stopped = true;
-            hit_bound = false;
-            break;
-        }
-        // Exactly what the app sends back: the asking turn with only the call
-        // that ran, then its result.
-        messages.push(Message {
-            role: "assistant".into(),
-            content: String::new(),
-            images: None,
-            tool_calls: Some(vec![call.clone()]),
-            tool_name: None,
-        });
-        let (result, failed) = execute(&call, &ws, &backups);
-        let result = if failed && prior > 0 { format!("{result}{}", tools::REPEATED_NOTE) } else { result };
-        let short = |s: &str, n: usize| {
-            let one = s.replace('\n', "⏎");
-            if one.chars().count() > n { format!("{}…", one.chars().take(n).collect::<String>()) } else { one }
-        };
-        log.push(format!(
-            "{}({}) → {}",
-            call.function.name,
-            short(&call.function.arguments.to_string(), 140),
-            short(&result, 140)
-        ));
-        if failed && call.function.name != "read_file" {
-            edit_errors += 1;
-        }
-        messages.push(Message::tool_result(call.function.name.clone(), result));
     }
 
-    let (mut verdict, mut why) = judge(task, &before, &tree(&dir), &answer);
-    if stopped && verdict != Verdict::Pass {
+    let (mut verdict, mut why) = judge(task, &before, &tree(&dir), &r.answer);
+    if r.stopped && verdict != Verdict::Pass {
         why = format!("stopped after repeating a failing call — {why}");
     }
-    if hit_bound && verdict == Verdict::Pass {
+    if r.hit_bound && verdict == Verdict::Pass {
         // Right files, but the app would have stopped it with an error.
         verdict = Verdict::Fail;
         why = format!("still calling tools after {} rounds", tools::MAX_ROUNDS);
     }
-    Outcome { verdict, why, calls, edit_errors, rounds, hit_bound, secs: started.elapsed().as_secs_f64(), log, recovered }
+    Outcome {
+        verdict,
+        why,
+        calls: r.calls,
+        edit_errors: r.edit_errors,
+        rounds: r.rounds,
+        hit_bound: r.hit_bound,
+        secs,
+        log: r.log,
+        recovered: r.recovered,
+    }
 }
 
 // ── main ────────────────────────────────────────────────────────────────────

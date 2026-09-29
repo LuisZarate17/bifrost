@@ -8,6 +8,7 @@
 //   ?preview          a finished exchange, ending on a tool call awaiting approval
 //   ?preview=stream   the same thread, with an answer still being waited on
 //   ?preview=edit     the file-editing flow: an undoable edit, a rejection, a diff to review
+//   ?preview=check    the check flow: a failed build, the fix, and a check awaiting approval
 //   ?preview=empty    a new chat, with the sidebar and models filled in
 //   ?preview=appearance  the thread, with the Appearance dialog open over it
 //   ?preview=models   the thread, with the models dialog open over it
@@ -126,6 +127,12 @@ export function installPreviewIpc() {
       case "project_folder":
       case "clear_project_folder":
         return null;
+      case "check_options":
+        return ["cargo check", "cargo test"];
+      case "set_check":
+        return { ...RECENT[0], check: String(args.label) };
+      case "clear_check":
+        return { ...RECENT[0], check: null };
       case "choose_project_folder":
         return RECENT[0];
       case "recent_folders":
@@ -184,7 +191,7 @@ export function installPreviewIpc() {
         await sleep(600);
         return { kind: "answer", content: "In preview, tools answer straight away.", promptEvalCount: 3_620, evalCount: 12 };
       case "run_tool":
-        return { result: "(preview) nothing was read or written" };
+        return { result: "(preview) nothing was read, written or run", ok: true, stopped: false };
       case "undo_edit":
         return "undone";
       case "load_model":
@@ -283,6 +290,22 @@ const PORT_DIFF = {
   ],
 };
 
+/** What `check::for_model` says about a build the rename broke. */
+const BROKEN_BUILD = `\`cargo check\` failed (exit 101, 1.9 s). Output:
+
+    Checking demo v0.1.0 (C:\\Users\\you\\source\\repos\\demo)
+error[E0425]: cannot find function \`greet\` in this scope
+ --> src\\main.rs:8:20
+  |
+3 | fn welcome(name: &str) -> String {
+  | -------------------------------- similarly named function \`welcome\` defined here
+...
+8 |     println!("{}", greet("world"));
+  |                    ^^^^^ help: a function with a similar name exists: \`welcome\`
+
+For more information about this error, try \`rustc --explain E0425\`.
+error: could not compile \`demo\` (bin "demo") due to 1 previous error`;
+
 export type Preview = {
   entries: Entry[];
   status: string;
@@ -315,6 +338,41 @@ export function previewThread(mode: string): Preview {
       stats: "",
       convoId: "p4",
       spent: 3_214,
+    };
+  }
+
+  // ?preview=check — the loop a check makes possible: an edit that breaks the
+  // build, the check that says so, the fix, a pass; then a build file changed
+  // and a check waiting for approval, which names it.
+  if (mode === "check") {
+    const DEF_DIFF = {
+      create: false,
+      added: 1,
+      removed: 1,
+      hunks: [{ lines: RENAME_DIFF.hunks[0].lines.slice(0, 7) }],
+    };
+    const CALL_DIFF = {
+      create: false,
+      added: 1,
+      removed: 1,
+      hunks: [{ lines: RENAME_DIFF.hunks[0].lines.slice(7) }],
+    };
+    return {
+      entries: [
+        { kind: "turn", role: "user", content: "Rename greet to welcome in src/main.rs." },
+        { kind: "tool", name: "edit_file", path: "src/main.rs", state: "ran", diff: DEF_DIFF, undo: "18f3b1", result: "Edited src/main.rs: 1 line removed, 1 added." },
+        { kind: "tool", name: "run_check", path: "cargo check", args: {}, state: "ran", ok: false, result: BROKEN_BUILD },
+        { kind: "tool", name: "edit_file", path: "src/main.rs", state: "ran", diff: CALL_DIFF, undo: "18f3b2", result: "Edited src/main.rs: 1 line removed, 1 added." },
+        { kind: "tool", name: "run_check", path: "cargo check", args: {}, state: "ran", ok: true, result: "`cargo check` passed (exit 0, 1.4 s). Output:\n\n    Checking demo v0.1.0 (C:\\Users\\you\\source\\repos\\demo)\n    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.38s" },
+        { kind: "turn", role: "assistant", content: "Renamed `greet` to `welcome`, and fixed the call in `main` that the check caught. `cargo check` passes.", model: "qwen3-vl:8b-instruct-q4_K_M" },
+        { kind: "turn", role: "user", content: "Add anyhow 1 to Cargo.toml and make sure it still builds." },
+        { kind: "tool", name: "edit_file", path: "Cargo.toml", state: "ran", undo: "18f3b3", result: "Edited Cargo.toml: 0 lines removed, 1 added." },
+        { kind: "tool", name: "run_check", path: "cargo check", args: {}, state: "pending", changedBuildFiles: ["Cargo.toml"] },
+      ],
+      status: "",
+      stats: "",
+      convoId: "p5",
+      spent: 4_102,
     };
   }
 

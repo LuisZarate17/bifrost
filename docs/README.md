@@ -47,6 +47,8 @@ records of what happened.
 - **[STAGE-B.md](../stages/STAGE-B.md)** — the app shell. Complete.
 - **[STAGE-G.md](../stages/STAGE-G.md)** — **Mímir**, the local chat app sharing Heimdall's
   model. Built through G7 (editing files); the testing round is open.
+- **[STAGE-H.md](../stages/STAGE-H.md)** — Mímir learns to find code, check its work and run
+  longer: ten chunks in four phases, each gated on a measurement. H1 (the check command) built.
 
 ---
 
@@ -71,6 +73,9 @@ names don't, so grep the name if a number has gone stale.
   `system_prompt()`, `interpret()`, `prior_failures()` (loop-breaking)
 - **Recovering a tool call Ollama could not parse** — `chat.rs` → `chat_tools()`, and
   `toolcall.rs` → `render_chatml()`, `parse_call()`. The G7 `"{` escaping failure, and its fix
+- **Running the folder's check command** — `check.rs` → `candidates()`, `run()` (stoppable, kills
+  the whole tree, output capped), `for_model()` (never reads as a failed call; names a Smart App
+  Control block for what it is)
 
 > Everything here is **blocking by design**. Calling it from an `async` Tauri command drops a tokio
 > runtime inside an async context and kills the worker. Go through `spawn_blocking`.
@@ -200,6 +205,8 @@ Finished chunks: what was built, what was measured, what the measurement changed
 - **[G7](results/G7-results.md)** — editing files. **76% → 98% byte-exact** over three probe
   rounds; search-and-replace beat whole-file rewrite, which corrupted lines it was never asked to
   touch. Found Ollama crashing on the model's own tool calls, and recovered them
+- **[H1](results/H1-results.md)** — the check command. **33% → 79%** on edits whose obvious form
+  breaks the build, once the model can run `cargo check` and read what it says
 
 **Stage F — keep testing models**
 

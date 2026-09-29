@@ -141,6 +141,12 @@ impl Workspace {
     /// The containment check. `real` is already canonical, so `..`, symlinks and
     /// junctions have all been resolved to where they actually point.
     fn contain(&self, real: &Path, requested: &str) -> Result<(), String> {
+        self.contain_with(real, requested, app_data().as_deref())
+    }
+
+    /// [`contain`](Self::contain), with Mímir's own folder passed in so a test
+    /// can stand one up without touching the real `%APPDATA%`.
+    fn contain_with(&self, real: &Path, requested: &str, app_data: Option<&Path>) -> Result<(), String> {
         if !real.starts_with(&self.root) {
             return Err(format!(
                 "{} is outside the project folder ({}). Only files inside it can be changed.",
@@ -157,8 +163,53 @@ impl Workspace {
         {
             return Err(format!("{} is inside .git, which is never edited", clean(requested)));
         }
+        // The check command is one a person chose, but cargo and npm take their
+        // settings from the project they run in. A model that could edit
+        // `.cargo/config.toml` (a `rustc-wrapper`), `rust-toolchain.toml` (a
+        // toolchain `path`) or `.npmrc` (a `script-shell`) could decide what that
+        // command really executes.
+        // `name:stream` is the same file on NTFS, reached another way —
+        // `.npmrc::$DATA` writes `.npmrc`. No file a project is made of needs a
+        // colon in its name, so none gets one, and none slips past the rules
+        // above or below by using one.
+        if inside
+            .components()
+            .any(|c| matches!(c, Component::Normal(n) if n.to_string_lossy().contains(':')))
+        {
+            return Err(format!("{} names a file stream, which is never edited", clean(requested)));
+        }
+        if decides_what_the_check_runs(inside) {
+            return Err(format!(
+                "{} decides what the check command runs, so it is never edited",
+                clean(requested)
+            ));
+        }
+        // Mímir's settings and undo records. Only reachable when the folder you
+        // chose contains %APPDATA% — your home folder, say — and then editing
+        // `config.json` would let the model choose its own check command.
+        if app_data.is_some_and(|d| real.starts_with(d)) {
+            return Err(format!(
+                "{} is inside Mímir's own settings folder, which is never edited",
+                clean(requested)
+            ));
+        }
         Ok(())
     }
+}
+
+/// `.cargo/…`, `rust-toolchain(.toml)` and `.npmrc`, anywhere in the folder.
+fn decides_what_the_check_runs(inside: &Path) -> bool {
+    let named = |n: &std::ffi::OsStr, what: &str| n.eq_ignore_ascii_case(what);
+    inside.components().any(|c| matches!(c, Component::Normal(n) if named(n, ".cargo")))
+        || inside.file_name().is_some_and(|n| {
+            named(n, "rust-toolchain") || named(n, "rust-toolchain.toml") || named(n, ".npmrc")
+        })
+}
+
+/// `%APPDATA%\odin`, canonical, if it exists.
+fn app_data() -> Option<PathBuf> {
+    let dir = PathBuf::from(std::env::var_os("APPDATA")?).join("odin");
+    std::fs::canonicalize(dir).ok()
 }
 
 /// Models wrap paths in quotes or backticks surprisingly often.
@@ -170,9 +221,14 @@ fn clean(requested: &str) -> String {
         .to_string()
 }
 
-/// `\\?\C:\x` → `C:\x`, for anything a person reads.
+/// `\\?\C:\x` → `C:\x`, and `\\?\UNC\server\share` → `\\server\share`, for
+/// anything a person reads — and anything handed to a program as a folder,
+/// which the verbatim form of a network share would reach as a relative path.
 fn plain(p: &Path) -> String {
     let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
     s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or_else(|| s.into_owned())
 }
 
@@ -800,6 +856,60 @@ mod tests {
         assert!(err.contains("outside"), "{err}");
         let err = ws.resolve_new("link/new.txt").unwrap_err();
         assert!(err.contains("outside"), "{err}");
+    }
+
+    #[test]
+    fn files_that_decide_what_the_check_runs_are_never_edited() {
+        let s = Sandbox::new("checkcfg");
+        let ws = s.ws();
+        s.write(".cargo/config.toml", b"[build]\n");
+        s.write("rust-toolchain.toml", b"[toolchain]\n");
+        s.write("web/.npmrc", b"x=1\n");
+        for p in [".cargo/config.toml", "rust-toolchain.toml", "web/.npmrc"] {
+            let err = ws.resolve_existing(p).unwrap_err();
+            assert!(err.contains("decides what the check command runs"), "{p}: {err}");
+        }
+        // Creating one is refused too — including `.cargo/config` without the
+        // extension, which cargo also reads.
+        assert!(ws.resolve_new(".cargo/config").is_err());
+        assert!(ws.resolve_new("RUST-TOOLCHAIN").is_err());
+        // The files a project is made of are not caught by it.
+        s.write("Cargo.toml", b"[package]\n");
+        s.write("src/cargo_helpers.rs", b"\n");
+        assert!(ws.resolve_existing("Cargo.toml").is_ok());
+        assert!(ws.resolve_existing("src/cargo_helpers.rs").is_ok());
+    }
+
+    #[test]
+    fn a_file_stream_is_never_edited() {
+        let s = Sandbox::new("stream");
+        let ws = s.ws();
+        s.write("notes.txt", b"x");
+        let err = ws.resolve_new(".npmrc::$DATA").unwrap_err();
+        assert!(err.contains("file stream"), "{err}");
+        let err = ws.resolve_new("notes.txt:hidden").unwrap_err();
+        assert!(err.contains("file stream"), "{err}");
+    }
+
+    #[test]
+    fn a_network_share_reads_as_one() {
+        assert_eq!(plain(Path::new(r"\\?\UNC\server\share\proj")), r"\\server\share\proj");
+        assert_eq!(plain(Path::new(r"\\?\C:\proj")), r"C:\proj");
+    }
+
+    #[test]
+    fn mimirs_own_folder_is_never_edited_even_inside_the_project() {
+        // As when the chosen folder is the home folder, which holds %APPDATA%.
+        let s = Sandbox::new("appdata");
+        let ws = s.ws();
+        let cfg = s.write("AppData/Roaming/odin/config.json", b"{}");
+        let app = std::fs::canonicalize(s.dir.join("project/AppData/Roaming/odin")).unwrap();
+        let real = std::fs::canonicalize(&cfg).unwrap();
+        let err = ws.contain_with(&real, "AppData/Roaming/odin/config.json", Some(&app)).unwrap_err();
+        assert!(err.contains("Mímir's own settings"), "{err}");
+        // Its neighbours are ordinary files.
+        let other = std::fs::canonicalize(s.write("AppData/Roaming/other/x.txt", b"x")).unwrap();
+        assert!(ws.contain_with(&other, "AppData/Roaming/other/x.txt", Some(&app)).is_ok());
     }
 
     #[test]

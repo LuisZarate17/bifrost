@@ -350,7 +350,7 @@ mod tests {
     use serde_json::json;
 
     fn tools() -> Vec<Tool> {
-        crate::tools::available(true)
+        crate::tools::available(true, Some("cargo check"))
     }
 
     fn arg(c: &ToolCall, k: &str) -> String {

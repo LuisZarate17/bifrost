@@ -22,7 +22,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 
 use odin_core::chat::{self, Message, Options, StreamChunk};
-use odin_core::{config, edit, ollama, store, tools, vram};
+use odin_core::{check, config, edit, ollama, store, tools, vram};
 
 /// One message pushed up to the UI.
 ///
@@ -418,6 +418,10 @@ struct PendingCall {
     /// so what is approved and what is written cannot disagree.
     #[serde(skip_serializing_if = "Option::is_none")]
     diff: Option<DiffView>,
+    /// For a check: build files an edit changed earlier in this turn. A check
+    /// runs them, so the card names them before you approve it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    changed_build_files: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -435,12 +439,25 @@ struct DiffView {
 /// write, the hash of the file it was planned against. `run_tool` redeems the
 /// ticket and applies *this*. Nothing about the edit is taken back from the
 /// webview, so a compromised or buggy page cannot approve one thing and write
-/// another.
+/// another. **For a check, the folder and the exact argv live here**, for the
+/// same reason: what runs is what the card showed, even if the config changes
+/// while it is on screen.
 struct Armed {
     token: String,
     name: String,
     path: String,
-    plan: Option<edit::Plan>,
+    payload: Option<Payload>,
+}
+
+/// What an approval carries beyond its name and path.
+#[derive(Debug, Clone, PartialEq)]
+enum Payload {
+    Edit(edit::Plan),
+    /// `stop` is this check's number on the Stop counter, taken **when the card
+    /// is shown** rather than when the command starts: a Stop pressed between
+    /// Allow and the start — while the approval is still on its way — must
+    /// reach it too, or it would run with nothing left to stop it.
+    Check { root: String, argv: Vec<String>, stop: u64 },
 }
 
 /// The one call currently awaiting approval.
@@ -455,7 +472,7 @@ fn pending() -> &'static std::sync::Mutex<Option<Armed>> {
 }
 
 /// Issue a ticket for a call, replacing any outstanding one.
-fn arm(name: &str, path: &str, plan: Option<edit::Plan>) -> String {
+fn arm(name: &str, path: &str, payload: Option<Payload>) -> String {
     let token = format!(
         "{:x}",
         std::time::SystemTime::now()
@@ -464,7 +481,7 @@ fn arm(name: &str, path: &str, plan: Option<edit::Plan>) -> String {
             .unwrap_or_default()
     );
     if let Ok(mut slot) = pending().lock() {
-        *slot = Some(Armed { token: token.clone(), name: name.into(), path: path.into(), plan });
+        *slot = Some(Armed { token: token.clone(), name: name.into(), path: path.into(), payload });
     }
     token
 }
@@ -479,15 +496,15 @@ fn redeem_in(
     token: &str,
     name: &str,
     path: &str,
-) -> Result<Option<edit::Plan>, String> {
+) -> Result<Option<Payload>, String> {
     match slot.take() {
-        Some(a) if a.token == token && a.name == name && a.path == path => Ok(a.plan),
+        Some(a) if a.token == token && a.name == name && a.path == path => Ok(a.payload),
         _ => Err("this call was not approved".to_string()),
     }
 }
 
 /// Spend a ticket. Fails unless it matches the exact call that was approved.
-fn redeem(token: &str, name: &str, path: &str) -> Result<Option<edit::Plan>, String> {
+fn redeem(token: &str, name: &str, path: &str) -> Result<Option<Payload>, String> {
     let mut slot = pending().lock().map_err(|_| "approval state poisoned")?;
     redeem_in(&mut slot, token, name, path)
 }
@@ -536,16 +553,22 @@ async fn ask_with_tools(
     })
     .await
     .unwrap_or(None);
+    // The folder's check command, if one was chosen for it. Read with the folder,
+    // so a check can never be offered for a folder other than the one in force.
+    let check: Option<Vec<String>> =
+        ws.as_ref().and_then(|ws| cfg.check_for(&ws.root_display()).cloned());
+    let check_label = check.as_deref().map(check::label);
+
     // The folder and the read-before-edit habit, stated once. Added here rather
     // than stored in the thread, so it always names the folder chosen *now*.
     if let Some(ws) = &ws {
-        messages.insert(0, Message::system(tools::system_prompt(ws)));
+        messages.insert(0, Message::system(tools::system_prompt(ws, check.is_some())));
     }
 
     // Kept for counting repeats: the history the model has already seen.
     let history = messages.clone();
     let num_ctx = cfg.num_ctx;
-    let offered = tools::available(ws.is_some());
+    let offered = tools::available(ws.is_some(), check_label.as_deref());
     let reply = tauri::async_runtime::spawn_blocking(move || {
         chat::chat_tools(&model, &messages, &offered, Options::new(num_ctx))
     })
@@ -584,7 +607,7 @@ async fn ask_with_tools(
     // Rejected without asking anyone: the reason goes back to the model. The raw
     // call goes with it, so the conversation shows the model its own attempt.
     let reject = |name: &str, path: &str, why: String| {
-        let why = if prior > 0 { format!("{why}{}", tools::REPEATED_NOTE) } else { why };
+        let why = if prior > 0 { format!("{why}{}", tools::repeated_note(name)) } else { why };
         serde_json::json!({
             "kind": "rejected",
             "name": name,
@@ -603,11 +626,33 @@ async fn ask_with_tools(
         Err(e) => return Ok(reject(&call.function.name, "", e)),
     };
 
-    let (name, path, plan) = match request {
+    let (name, path, payload) = match request {
         tools::Request::Read { path } => {
             let target = tools::read_target(&path, ws.as_ref());
             ("read_file", target, None)
         }
+        // The model can call it from history, or invent it. Either way there is
+        // only something to run when a person chose a command for this folder.
+        tools::Request::Check => match (&ws, &check) {
+            (Some(ws), Some(argv)) => (
+                "run_check",
+                check::label(argv),
+                Some(Payload::Check {
+                    root: ws.root_display(),
+                    argv: argv.clone(),
+                    stop: STREAMS_STARTED.fetch_add(1, Ordering::SeqCst) + 1,
+                }),
+            ),
+            _ => {
+                return Ok(reject(
+                    "run_check",
+                    "",
+                    "error: run_check is not available — no check command is set for this folder. \
+                     Carry on without it, and tell the user they can choose one."
+                        .into(),
+                ));
+            }
+        },
         tools::Request::Rewrite { path, .. } => {
             return Ok(reject("write_file", &path, "no such tool: write_file — use edit_file".into()));
         }
@@ -626,7 +671,7 @@ async fn ask_with_tools(
             .await
             .map_err(|e| format!("planning the edit failed: {e}"))?;
             match planned {
-                Ok(p) => ("edit_file", p.display.clone(), Some(p)),
+                Ok(p) => ("edit_file", p.display.clone(), Some(Payload::Edit(p))),
                 Err(e) => return Ok(reject("edit_file", request_path(&call), format!("error: {e}"))),
             }
         }
@@ -637,21 +682,32 @@ async fn ask_with_tools(
                     .await
                     .map_err(|e| format!("planning the new file failed: {e}"))?;
             match planned {
-                Ok(p) => ("create_file", p.display.clone(), Some(p)),
+                Ok(p) => ("create_file", p.display.clone(), Some(Payload::Edit(p))),
                 Err(e) => return Ok(reject("create_file", request_path(&call), format!("error: {e}"))),
             }
         }
     };
 
-    let diff = plan.as_ref().map(|p| DiffView {
-        hunks: p.hunks.clone(),
-        added: p.added,
-        removed: p.removed,
-        create: p.create,
-    });
+    let diff = match &payload {
+        Some(Payload::Edit(p)) => Some(DiffView {
+            hunks: p.hunks.clone(),
+            added: p.added,
+            removed: p.removed,
+            create: p.create,
+        }),
+        _ => None,
+    };
+    let changed_build_files =
+        if name == "run_check" { tools::build_files_changed(&history) } else { Vec::new() };
     Ok(serde_json::json!({
         "kind": "call",
-        "call": PendingCall { token: arm(name, &path, plan), name: name.to_string(), path, diff },
+        "call": PendingCall {
+            token: arm(name, &path, payload),
+            name: name.to_string(),
+            path,
+            diff,
+            changed_build_files,
+        },
         // The raw call, so the caller can put the assistant turn that asked
         // for it back into the conversation before the tool result.
         //
@@ -672,31 +728,72 @@ fn request_path(call: &chat::ToolCall) -> &str {
 struct Ran {
     /// Goes back to the model.
     result: String,
+    /// Whether it worked. **Said here, not inferred from the text:** a check
+    /// that fails has a result that does not start with `error:` — it worked,
+    /// and what it found is the news — and the card must still show it failed.
+    ok: bool,
+    /// Ended by Stop rather than finishing.
+    stopped: bool,
     /// For an edit that was written: the handle to undo it.
     #[serde(skip_serializing_if = "Option::is_none")]
     undo: Option<String>,
 }
 
+impl Ran {
+    fn text(result: String) -> Self {
+        let ok = !result.starts_with("error:");
+        Self { result, ok, stopped: false, undo: None }
+    }
+}
+
 /// Run a call the user has just approved.
 ///
 /// Redeems the ticket and runs **what the ticket holds** — for an edit, the plan
-/// computed when the diff was shown. The webview names the call it approved;
-/// it never supplies what to write.
+/// computed when the diff was shown; for a check, the folder and argv the card
+/// showed. The webview names the call it approved; it never supplies what to
+/// write or what to run.
+///
+/// **A check can be stopped.** Its ticket holds a number from the same counter as
+/// a streamed answer, so the Stop button that ends an answer ends a check too —
+/// including one stopped before it had started.
 #[tauri::command]
 async fn run_tool(name: String, path: String, token: String) -> Result<Ran, String> {
     // Before anything touches the disk. The ticket was issued when the UI was
     // shown this exact call, and is spent here - so what runs is what was
     // approved, and it runs once.
-    let plan = redeem(&token, &name, &path)?;
-    tauri::async_runtime::spawn_blocking(move || match (name.as_str(), plan) {
-        ("read_file", None) => Ok(Ran { result: tools::run_read_file(&path), undo: None }),
-        ("edit_file" | "create_file", Some(plan)) => {
+    let payload = redeem(&token, &name, &path)?;
+    tauri::async_runtime::spawn_blocking(move || match (name.as_str(), payload) {
+        ("read_file", None) => Ok(Ran::text(tools::run_read_file(&path))),
+        ("edit_file" | "create_file", Some(Payload::Edit(plan))) => {
             let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
             // A file changed since the diff was shown is refused, not written:
             // the model is told, and can read it again.
             Ok(match edit::apply(&plan, &backups) {
-                Ok(done) => Ran { result: tools::applied_message(&done), undo: Some(done.id) },
-                Err(e) => Ran { result: format!("error: {e}"), undo: None },
+                Ok(done) => {
+                    let said = tools::applied_message(&done);
+                    Ran { undo: Some(done.id), ..Ran::text(said) }
+                }
+                Err(e) => Ran::text(format!("error: {e}")),
+            })
+        }
+        ("run_check", Some(Payload::Check { root, argv, stop })) => {
+            if stopped(stop) {
+                return Ok(Ran {
+                    result: format!("`{}` was stopped by the user before it ran.", check::label(&argv)),
+                    ok: false,
+                    stopped: true,
+                    undo: None,
+                });
+            }
+            let root = std::path::PathBuf::from(root);
+            Ok(match check::run(&root, &argv, check::timeout_for(&argv), &[], || stopped(stop)) {
+                Ok(o) => Ran {
+                    result: check::for_model(&argv, &o),
+                    ok: o.passed(),
+                    stopped: o.ended == check::Ended::Stopped,
+                    undo: None,
+                },
+                Err(e) => Ran::text(format!("error: {e}")),
             })
         }
         (other, _) => Err(format!("no such tool: {other}")),
@@ -725,23 +822,29 @@ async fn undo_edit(id: String) -> Result<String, String> {
 struct Folder {
     path: String,
     name: String,
+    /// The check command chosen for this folder, as a person reads it.
+    check: Option<String>,
 }
 
-fn folder(ws: &edit::Workspace) -> Folder {
+fn folder(ws: &edit::Workspace, cfg: &config::Config) -> Folder {
     let path = ws.root_display();
     let name = std::path::Path::new(&path)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.clone());
-    Folder { path, name }
+    let check = cfg.check_for(&path).map(|argv| check::label(argv));
+    Folder { path, name, check }
 }
 
 /// The folder edits are confined to, or `None` when editing is off.
 #[tauri::command]
 async fn project_folder() -> Result<Option<Folder>, String> {
-    tauri::async_runtime::spawn_blocking(|| workspace(&config::load()).map(|ws| folder(&ws)))
-        .await
-        .map_err(|e| format!("reading the project folder failed: {e}"))
+    tauri::async_runtime::spawn_blocking(|| {
+        let cfg = config::load();
+        workspace(&cfg).map(|ws| folder(&ws, &cfg))
+    })
+    .await
+    .map_err(|e| format!("reading the project folder failed: {e}"))
 }
 
 /// Choose the project folder **with the system's own folder picker.**
@@ -771,7 +874,7 @@ async fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<Folder>, 
         remember(&mut cfg, &root);
         cfg.workspace = Some(root);
         config::save(&cfg)?;
-        Ok(Some(folder(&ws)))
+        Ok(Some(folder(&ws, &cfg)))
     })
     .await
     .map_err(|e| format!("saving the project folder failed: {e}"))?
@@ -794,11 +897,11 @@ fn remember(cfg: &mut config::Config, root: &str) {
 #[tauri::command]
 async fn recent_folders() -> Result<Vec<Folder>, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        config::load()
-            .recent_workspaces
+        let cfg = config::load();
+        cfg.recent_workspaces
             .iter()
             .filter_map(|p| edit::Workspace::open(p).ok())
-            .map(|ws| folder(&ws))
+            .map(|ws| folder(&ws, &cfg))
             .collect()
     })
     .await
@@ -825,10 +928,65 @@ async fn use_recent_folder(index: usize) -> Result<Folder, String> {
         remember(&mut cfg, &root);
         cfg.workspace = Some(root);
         config::save(&cfg)?;
-        Ok(folder(&ws))
+        Ok(folder(&ws, &cfg))
     })
     .await
     .map_err(|e| format!("reopening the folder failed: {e}"))?
+}
+
+// ── the check command ───────────────────────────────────────────────────────
+
+/// The check commands this folder could use, as a person reads them.
+///
+/// Detected by Rust from the folder's own manifests. The webview can only show
+/// them and pick one **by position** — there is no command that takes a command,
+/// so nothing reaching the IPC boundary can choose what runs.
+#[tauri::command]
+async fn check_options() -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let ws = workspace(&config::load()).ok_or("no project folder is chosen")?;
+        Ok(check::candidates(&ws).iter().map(|argv| check::label(argv)).collect())
+    })
+    .await
+    .map_err(|e| format!("reading the check commands failed: {e}"))?
+}
+
+/// Use the check at this position for the current folder.
+///
+/// The candidates are detected again here rather than trusted from the list the
+/// webview was shown, and `label` must still match: if the folder or its
+/// manifests changed in between, the position could now mean a different
+/// command, and choosing one thing must never run another.
+#[tauri::command]
+async fn set_check(index: usize, label: String) -> Result<Folder, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cfg = config::load();
+        let ws = workspace(&cfg).ok_or("no project folder is chosen")?;
+        let argv = check::candidates(&ws)
+            .into_iter()
+            .nth(index)
+            .filter(|argv| check::label(argv) == label)
+            .ok_or("that check is no longer offered for this folder — choose again")?;
+        cfg.set_check(&ws.root_display(), Some(argv));
+        config::save(&cfg)?;
+        Ok(folder(&ws, &cfg))
+    })
+    .await
+    .map_err(|e| format!("choosing the check failed: {e}"))?
+}
+
+/// Stop offering the model a check in the current folder.
+#[tauri::command]
+async fn clear_check() -> Result<Folder, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut cfg = config::load();
+        let ws = workspace(&cfg).ok_or("no project folder is chosen")?;
+        cfg.set_check(&ws.root_display(), None);
+        config::save(&cfg)?;
+        Ok(folder(&ws, &cfg))
+    })
+    .await
+    .map_err(|e| format!("clearing the check failed: {e}"))?
 }
 
 /// Turn editing off. Reads keep working, one approved file at a time.
@@ -992,6 +1150,9 @@ pub fn run() {
             system_accent,
             recent_folders,
             use_recent_folder,
+            check_options,
+            set_check,
+            clear_check,
             stop
         ])
         .run(tauri::generate_context!())
@@ -1013,7 +1174,7 @@ mod tests {
     fn armed(name: &str, path: &str) -> (Option<Armed>, String) {
         let token = "ticket-1".to_string();
         (
-            Some(Armed { token: token.clone(), name: name.into(), path: path.into(), plan: None }),
+            Some(Armed { token: token.clone(), name: name.into(), path: path.into(), payload: None }),
             token,
         )
     }
@@ -1071,9 +1232,14 @@ mod tests {
 ").unwrap();
         let ws = edit::Workspace::open(&dir).unwrap();
         let plan = edit::plan_replace(&ws, "a.txt", "one", "two").unwrap();
-        let mut slot = Some(Armed { token: "t".into(), name: "edit_file".into(), path: "a.txt".into(), plan: Some(plan.clone()) });
+        let mut slot = Some(Armed {
+            token: "t".into(),
+            name: "edit_file".into(),
+            path: "a.txt".into(),
+            payload: Some(Payload::Edit(plan.clone())),
+        });
         let got = redeem_in(&mut slot, "t", "edit_file", "a.txt").unwrap();
-        assert_eq!(got, Some(plan));
+        assert_eq!(got, Some(Payload::Edit(plan)));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1081,7 +1247,44 @@ mod tests {
     fn an_edit_ticket_cannot_be_redeemed_as_a_read() {
         // Same token and path, different tool: a read must not get the plan, and
         // must not be allowed to run on an edit's approval.
-        let mut slot = Some(Armed { token: "t".into(), name: "edit_file".into(), path: "a.txt".into(), plan: None });
+        let mut slot = Some(Armed { token: "t".into(), name: "edit_file".into(), path: "a.txt".into(), payload: None });
         assert!(redeem_in(&mut slot, "t", "read_file", "a.txt").is_err());
+    }
+
+    fn check_ticket() -> Option<Armed> {
+        Some(Armed {
+            token: "t".into(),
+            name: "run_check".into(),
+            path: "cargo check".into(),
+            payload: Some(Payload::Check {
+                root: r"C:\work\demo".into(),
+                argv: vec!["cargo".into(), "check".into()],
+                stop: 7,
+            }),
+        })
+    }
+
+    /// **The command that runs is the one the card showed** — folder, argv and
+    /// its place on the Stop counter come back from the ticket, and nothing
+    /// about them comes from the caller.
+    #[test]
+    fn a_check_ticket_redeems_the_command_it_was_armed_with() {
+        let mut slot = check_ticket();
+        let got = redeem_in(&mut slot, "t", "run_check", "cargo check").unwrap();
+        assert_eq!(
+            got,
+            Some(Payload::Check {
+                root: r"C:\work\demo".into(),
+                argv: vec!["cargo".into(), "check".into()],
+                stop: 7
+            })
+        );
+    }
+
+    #[test]
+    fn a_check_ticket_cannot_be_redeemed_as_a_read() {
+        // A read of a file called "cargo check" must not run on a check's approval.
+        let mut slot = check_ticket();
+        assert!(redeem_in(&mut slot, "t", "read_file", "cargo check").is_err());
     }
 }

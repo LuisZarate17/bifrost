@@ -41,11 +41,15 @@ function reasonOf(error = ""): string {
   if (/appears \d+ times/.test(error)) return "that text appears in more than one place";
   if (error.includes("identical")) return "the change would not have changed anything";
   if (error.includes("outside the project folder")) return "that file is outside the project folder";
-  if (error.includes(".git")) return "files inside .git are never edited";
+  if (error.includes("inside .git")) return "files inside .git are never edited";
+  if (error.includes("file stream")) return "that names a file stream";
   if (error.includes("editing is off")) return "no project folder is chosen";
   if (error.includes("already exists")) return "that file already exists";
   if (error.includes("could not be read") || error.includes("valid JSON")) return "the request was malformed";
   if (error.includes("does not exist")) return "that file doesn't exist";
+  if (error.includes("decides what the check command runs")) return "that file decides what the check runs";
+  if (error.includes("own settings folder")) return "that is Mímir's own settings folder";
+  if (error.includes("no check command is set")) return "no check command is chosen for this folder";
   return "it could not be carried out";
 }
 
@@ -53,7 +57,86 @@ const VERB: Record<string, string> = {
   edit_file: "Couldn't edit",
   create_file: "Couldn't create",
   read_file: "Couldn't read",
+  run_check: "Couldn't run the check",
 };
+
+/**
+ * A check the model wants to run: the folder's own command, never one the model
+ * wrote. The card names it, says when build files changed first, and shows what
+ * came back. Red for a failed build is the result, not a fault in the tool.
+ */
+function CheckCard({ entry, onAllow, onDeny }: { entry: ToolEntry; onAllow: () => void; onDeny: () => void }) {
+  const { path, state } = entry;
+  const passed = entry.ok !== false;
+  const label =
+    state === "pending"
+      ? "Needs approval"
+      : state === "running"
+        ? "Running"
+        : state === "stopped"
+          ? "Stopped"
+          : state === "denied"
+            ? "Denied"
+            : passed
+              ? "Passed"
+              : "Failed";
+  const changed = entry.changedBuildFiles ?? [];
+
+  return (
+    <div className={"tool check " + state + (state === "ran" && !passed ? " fail" : "")}>
+      <div className="tool-head">
+        <span className="tool-icon">
+          <I.Terminal />
+        </span>
+        <span className="tool-name">Run check</span>
+        <code className="tool-path" title={path}>
+          {path}
+        </code>
+        <span className="tool-state">{label}</span>
+      </div>
+
+      {state === "pending" && (
+        <>
+          {changed.length > 0 && (
+            <p className="tool-warn">
+              Changed earlier in this answer, and the check will run{" "}
+              {changed.length === 1 ? "it" : "them"}:{" "}
+              {changed.map((f, i) => (
+                <span key={f}>
+                  {i > 0 && ", "}
+                  <code>{f}</code>
+                </span>
+              ))}
+              .
+            </p>
+          )}
+          <div className="tool-ask">
+            <p>
+              The model wants to run this in the project folder. Nothing has run yet — it runs only if
+              you allow it.
+            </p>
+            <div className="tool-buttons">
+              <button className="btn primary sm" onClick={onAllow}>
+                Run once
+              </button>
+              <button className="btn ghost sm" onClick={onDeny}>
+                Deny
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+      {state === "running" && <p className="tool-note">Running in the project folder. Stop ends it.</p>}
+      {state === "denied" && <p className="tool-note">You declined. Nothing was run, and the model was told.</p>}
+      {(state === "ran" || state === "stopped") && entry.result && (
+        <details className="tool-result">
+          <summary>Show output</summary>
+          <pre>{entry.result}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
 
 export function ToolCard({
   entry,
@@ -86,12 +169,15 @@ export function ToolCard({
     );
   }
 
+  if (name === "run_check") return <CheckCard entry={entry} onAllow={onAllow} onDeny={onDeny} />;
+
   const edit = name === "edit_file" || name === "create_file";
 
   if (!edit) {
-    const failed = entry.result?.startsWith("error:");
+    // `ok` from Rust; a thread saved before it existed says so only in the text.
+    const failed = entry.ok === false || entry.result?.startsWith("error:");
     return (
-      <div className={"tool " + state + (failed ? " failed" : "")}>
+      <div className={"tool read " + state + (failed ? " failed" : "")}>
         <div className="tool-head">
           <span className="tool-icon">
             <I.File />
@@ -103,11 +189,15 @@ export function ToolCard({
           <span className="tool-state">
             {state === "pending"
               ? "Needs approval"
-              : state === "denied"
-                ? "Denied"
-                : failed
-                  ? "Failed"
-                  : `${(entry.result?.length ?? 0).toLocaleString()} chars`}
+              : state === "running"
+                ? "Reading"
+                : state === "stopped"
+                  ? "Stopped"
+                  : state === "denied"
+                    ? "Denied"
+                    : failed
+                      ? "Failed"
+                      : `${(entry.result?.length ?? 0).toLocaleString()} chars`}
           </span>
         </div>
 
@@ -142,13 +232,17 @@ export function ToolCard({
   const label =
     state === "pending"
       ? "Review"
-      : state === "ran"
-        ? "Applied"
-        : state === "failed"
-          ? "Not written"
-          : state === "undone"
-            ? "Undone"
-            : "Declined";
+      : state === "running"
+        ? "Applying"
+        : state === "ran"
+          ? "Applied"
+          : state === "failed"
+            ? "Not written"
+            : state === "undone"
+              ? "Undone"
+              : state === "stopped"
+                ? "Stopped"
+                : "Declined";
 
   return (
     <div className={"tool edit " + state}>

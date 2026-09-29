@@ -9,10 +9,12 @@
 //! no allowlist, no "always allow". The app shows exactly what will happen —
 //! the path for a read, the diff for an edit — and waits.
 //!
-//! **Three tools, and only the first is always offered.** `read_file` can read
+//! **Four tools, and only the first is always offered.** `read_file` can read
 //! anywhere, one approved file at a time. `edit_file` and `create_file` exist
 //! only once a project folder has been chosen, and cannot reach outside it —
-//! see [`crate::edit`] for how that is enforced.
+//! see [`crate::edit`] for how that is enforced. `run_check` exists only once
+//! that folder also has a check command chosen for it, and runs exactly that
+//! command — see [`crate::check`].
 //!
 //! The descriptions and the system prompt live here, not in the app, so the G7
 //! probe measures the exact words the app ships with. A probe that tested
@@ -90,6 +92,21 @@ fn create_tool() -> Tool {
     )
 }
 
+/// The folder's check command, named in the description so the model knows what
+/// it will run. **No arguments**: the command was chosen by a person, and the
+/// model's only decision is when.
+fn check_tool(label: &str) -> Tool {
+    Tool::function(
+        "run_check",
+        format!(
+            "Run the project's check command, `{label}`, in the project folder. Returns whether \
+             it passed and its output. Run it after changing code, and fix what it reports. \
+             Takes no arguments. The user approves each run."
+        ),
+        json!({ "type": "object", "properties": {} }),
+    )
+}
+
 /// Whole-file rewrite. **Never offered by the app** — only the G7 probe uses it,
 /// to measure search-and-replace against the obvious alternative.
 pub fn rewrite_tool() -> Tool {
@@ -109,29 +126,44 @@ pub fn rewrite_tool() -> Tool {
 }
 
 /// The tools offered to the model. Editing tools only when there is a folder
-/// they are confined to.
-pub fn available(editing: bool) -> Vec<Tool> {
+/// they are confined to; `run_check` only when that folder has a check, named
+/// here by its label.
+pub fn available(editing: bool, check: Option<&str>) -> Vec<Tool> {
+    let mut tools = vec![read_tool()];
     if editing {
-        vec![read_tool(), edit_tool(), create_tool()]
-    } else {
-        vec![read_tool()]
+        tools.push(edit_tool());
+        tools.push(create_tool());
+        if let Some(label) = check {
+            tools.push(check_tool(label));
+        }
     }
+    tools
 }
 
 /// What the model is told about the folder, when editing is on.
 ///
 /// Kept short. The tool descriptions carry the mechanics; this carries the one
-/// thing only the app knows — where the folder is — and the habit that makes
-/// search-and-replace work at all: read before you edit.
-pub fn system_prompt(ws: &Workspace) -> String {
-    format!(
+/// thing only the app knows — where the folder is — and the habits that make
+/// the tools work at all: read before you edit, and check before you say done.
+///
+/// **The editprobe's Rewrite format replaces the read-then-edit sentence word for
+/// word**, so that sentence must not change without changing the probe.
+pub fn system_prompt(ws: &Workspace, check: bool) -> String {
+    let mut s = format!(
         "You can read and change files in the user's project folder: {}\n\
          Use paths relative to that folder. To answer a question about a file, read it — never \
          guess what it says. To change a file, read it with read_file first, then use edit_file \
          with text copied exactly from what you read. Only change what the user asked for. When \
          you are done, say briefly what you changed.",
         ws.root_display()
-    )
+    );
+    if check {
+        s.push_str(
+            " After changing code, run run_check. If it fails, read the error, fix the code, and \
+             run it again before you say you are done.",
+        );
+    }
+    s
 }
 
 /// What the model asked for, in a form the UI can show before anything happens.
@@ -140,6 +172,9 @@ pub enum Request {
     Read { path: String },
     Edit { path: String, old_text: String, new_text: String },
     Create { path: String, content: String },
+    /// Run the folder's check command. Carries nothing: what runs was chosen by
+    /// a person, not by the model.
+    Check,
     /// Probe only — see [`rewrite_tool`].
     Rewrite { path: String, content: String },
 }
@@ -150,16 +185,19 @@ impl Request {
             Request::Read { .. } => "read_file",
             Request::Edit { .. } => "edit_file",
             Request::Create { .. } => "create_file",
+            Request::Check => "run_check",
             Request::Rewrite { .. } => "write_file",
         }
     }
 
+    /// The file a request is about, or `""` for one that is not about a file.
     pub fn path(&self) -> &str {
         match self {
             Request::Read { path }
             | Request::Edit { path, .. }
             | Request::Create { path, .. }
             | Request::Rewrite { path, .. } => path,
+            Request::Check => "",
         }
     }
 }
@@ -194,6 +232,9 @@ pub fn interpret(call: &ToolCall) -> Result<Request, String> {
             path,
             content: arg(call, "content").ok_or("write_file was called without content")?,
         }),
+        // Any arguments the model sends are ignored: there is nothing it may
+        // choose about what runs.
+        "run_check" => Ok(Request::Check),
         other => Err(format!("no such tool: {other}")),
     }
 }
@@ -245,6 +286,16 @@ pub fn run_read_file(path: &str) -> String {
 pub const REPEATED_NOTE: &str = " You already sent exactly this call and it failed the same way. \
      Change it before trying again — copy the text from the file.";
 
+/// The same, for a call that has nothing in it to change. Telling the model to
+/// copy text from a file would send it looking for a mistake it did not make.
+const REPEATED_CHECK_NOTE: &str = " You already sent this call and it failed the same way. Do not \
+     call it again — tell the user what happened.";
+
+/// Which repeat note fits this tool.
+pub fn repeated_note(name: &str) -> &'static str {
+    if name == "run_check" { REPEATED_CHECK_NOTE } else { REPEATED_NOTE }
+}
+
 /// The third identical failure stops the loop.
 ///
 /// **Measured at G7:** the model re-sent the same impossible edit — once eight
@@ -277,6 +328,45 @@ pub fn prior_failures(history: &[Message], call: &ToolCall) -> usize {
         }
     }
     count
+}
+
+/// Build files changed by an edit since the user's last message: `build.rs`,
+/// `Cargo.toml`, `package.json`.
+///
+/// **A check runs them.** `build.rs` is compiled and executed; the manifests say
+/// what else runs. The model may have good reason to change them, so they are
+/// not refused like `.cargo/` — but the card asking you to run the check names
+/// them, because approving a check after one changed is approving whatever the
+/// check now does.
+pub fn build_files_changed(history: &[Message]) -> Vec<String> {
+    const BUILD_FILES: [&str; 3] = ["build.rs", "cargo.toml", "package.json"];
+    let since = history.iter().rposition(|m| m.role == "user").map_or(0, |i| i + 1);
+    let turns = &history[since..];
+    let mut out: Vec<String> = Vec::new();
+    for (i, m) in turns.iter().enumerate() {
+        let Some(call) = m.tool_calls.as_deref().and_then(|c| c.first()) else { continue };
+        if m.role != "assistant" || !matches!(call.function.name.as_str(), "edit_file" | "create_file") {
+            continue;
+        }
+        // Only what was actually written: `applied_message` is the only result
+        // that says so. A refusal, a denial or a rejection says something else.
+        let written = turns.get(i + 1).is_some_and(|r| {
+            r.role == "tool" && (r.content.starts_with("Edited ") || r.content.starts_with("Created "))
+        });
+        // Cleaned the way `edit` cleans it before writing, so a path the model
+        // wrapped in quotes or backticks is still recognised.
+        let path = arg(call, "path")
+            .unwrap_or_default()
+            .trim()
+            .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+            .trim()
+            .to_string();
+        let file = path.rsplit(['/', '\\']).next().unwrap_or_default().to_ascii_lowercase();
+        if written && BUILD_FILES.contains(&file.as_str()) && !out.contains(&path) {
+            out.push(path);
+        }
+    }
+    out
 }
 
 /// What the model is told after an edit. Short, and specific enough that it can
@@ -355,10 +445,53 @@ mod tests {
     #[test]
     fn editing_tools_are_offered_only_with_a_folder() {
         let names = |v: Vec<Tool>| v.into_iter().map(|t| t.function.name).collect::<Vec<_>>();
-        assert_eq!(names(available(false)), ["read_file"]);
-        assert_eq!(names(available(true)), ["read_file", "edit_file", "create_file"]);
+        assert_eq!(names(available(false, None)), ["read_file"]);
+        assert_eq!(names(available(true, None)), ["read_file", "edit_file", "create_file"]);
         // The probe-only rewrite is never offered by the app.
-        assert!(!names(available(true)).contains(&"write_file".to_string()));
+        assert!(!names(available(true, None)).contains(&"write_file".to_string()));
+    }
+
+    #[test]
+    fn the_check_is_offered_only_with_a_folder_that_has_one() {
+        let names = |v: Vec<Tool>| v.into_iter().map(|t| t.function.name).collect::<Vec<_>>();
+        assert_eq!(
+            names(available(true, Some("cargo check"))),
+            ["read_file", "edit_file", "create_file", "run_check"]
+        );
+        // A check without a folder has nowhere to run.
+        assert_eq!(names(available(false, Some("cargo check"))), ["read_file"]);
+        // And the model is told what it would run.
+        let tool = available(true, Some("cargo check")).pop().unwrap();
+        assert!(tool.function.description.contains("`cargo check`"));
+    }
+
+    #[test]
+    fn a_check_call_carries_nothing_the_model_chose() {
+        // Arguments are ignored: an argv smuggled in by the model goes nowhere.
+        let r = interpret(&call("run_check", json!({ "command": "del /s C:\\" }))).unwrap();
+        assert_eq!(r, Request::Check);
+        assert_eq!((r.name(), r.path()), ("run_check", ""));
+    }
+
+    #[test]
+    fn the_prompt_asks_for_a_check_only_when_there_is_one() {
+        let dir = std::env::temp_dir().join(format!("odin-prompt-ws-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ws = Workspace::open(&dir).unwrap();
+        assert!(!system_prompt(&ws, false).contains("run_check"));
+        assert!(system_prompt(&ws, true).contains("run_check"));
+        // editprobe's Rewrite format swaps this sentence out word for word.
+        for check in [false, true] {
+            assert!(system_prompt(&ws, check)
+                .contains("then use edit_file with text copied exactly from what you read"));
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_repeated_check_is_not_told_to_copy_text_from_a_file() {
+        assert!(repeated_note("edit_file").contains("copy the text"));
+        assert!(!repeated_note("run_check").contains("copy the text"));
     }
 
     #[test]
@@ -438,6 +571,53 @@ mod tests {
         ];
         assert_eq!(prior_failures(&history, &a), 0, "it worked");
         assert_eq!(prior_failures(&history, &b), 0, "a different call");
+    }
+
+    #[test]
+    fn build_files_edited_this_turn_are_named() {
+        let manifest = call("edit_file", json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }));
+        let script = call("create_file", json!({ "path": "crates/x/build.rs", "content": "fn main() {}" }));
+        let source = call("edit_file", json!({ "path": "src/main.rs", "old_text": "a", "new_text": "b" }));
+        let refused = call("edit_file", json!({ "path": "web/package.json", "old_text": "a", "new_text": "b" }));
+        let history = vec![
+            Message::user("go"),
+            asked(&manifest),
+            Message::tool_result("edit_file", "Edited Cargo.toml: 1 line removed, 1 added."),
+            asked(&script),
+            Message::tool_result("create_file", "Created crates/x/build.rs (1 lines)."),
+            asked(&source),
+            Message::tool_result("edit_file", "Edited src/main.rs: 1 line removed, 1 added."),
+            // Refused, so nothing was written.
+            asked(&refused),
+            Message::tool_result("edit_file", "error: old_text was not found"),
+        ];
+        assert_eq!(build_files_changed(&history), ["Cargo.toml", "crates/x/build.rs"]);
+    }
+
+    #[test]
+    fn a_declined_build_file_edit_is_not_named_but_a_quoted_one_is() {
+        let declined = call("edit_file", json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }));
+        let quoted = call("edit_file", json!({ "path": "`build.rs` ", "old_text": "a", "new_text": "b" }));
+        let history = vec![
+            Message::user("go"),
+            asked(&declined),
+            Message::tool_result("edit_file", "The user declined this change to Cargo.toml. Nothing was written."),
+            asked(&quoted),
+            Message::tool_result("edit_file", "Edited build.rs: 1 line removed, 1 added."),
+        ];
+        assert_eq!(build_files_changed(&history), ["build.rs"]);
+    }
+
+    #[test]
+    fn build_files_from_an_earlier_request_are_not_named() {
+        let manifest = call("edit_file", json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }));
+        let history = vec![
+            Message::user("first"),
+            asked(&manifest),
+            Message::tool_result("edit_file", "Edited Cargo.toml: 1 line removed, 1 added."),
+            Message::user("now check it"),
+        ];
+        assert!(build_files_changed(&history).is_empty());
     }
 
     #[test]
