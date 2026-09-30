@@ -50,6 +50,10 @@ function reasonOf(error = ""): string {
   if (error.includes("decides what the check command runs")) return "that file decides what the check runs";
   if (error.includes("own settings folder")) return "that is Mímir's own settings folder";
   if (error.includes("no check command is set")) return "no check command is chosen for this folder";
+  if (error.includes("no project folder to search")) return "no project folder is chosen";
+  if (error.includes("is not inside the project folder")) return "that pattern reaches outside the project folder";
+  if (error.includes("one line at a time")) return "it searched for more than one line";
+  if (error.includes("without text")) return "it gave nothing to search for";
   return "it could not be carried out";
 }
 
@@ -58,7 +62,71 @@ const VERB: Record<string, string> = {
   create_file: "Couldn't create",
   read_file: "Couldn't read",
   run_check: "Couldn't run the check",
+  search: "Couldn't search",
+  list_files: "Couldn't list files",
 };
+
+/**
+ * A search or a listing the model wants: what it is looking for, and where.
+ * Reads nothing outside the project folder, writes nothing — but it does read
+ * the folder's files, which is why it still asks.
+ */
+function FindCard({ entry, onAllow, onDeny }: { entry: ToolEntry; onAllow: () => void; onDeny: () => void }) {
+  const { name, path, state } = entry;
+  const failed = entry.ok === false;
+  // The result's first line says what was found — "7 matches in 3 files".
+  const found = entry.result?.split("\n")[0].replace(/[:.]$/, "") ?? "";
+  const label =
+    state === "pending"
+      ? "Needs approval"
+      : state === "running"
+        ? "Looking"
+        : state === "stopped"
+          ? "Stopped"
+          : state === "denied"
+            ? "Denied"
+            : failed
+              ? "Failed"
+              : found;
+
+  return (
+    <div className={"tool find " + state + (failed ? " failed" : "")}>
+      <div className="tool-head">
+        <span className="tool-icon">
+          <I.Search />
+        </span>
+        <span className="tool-name">{name === "search" ? "Search" : "List files"}</span>
+        <code className="tool-path" title={path}>
+          <bdi dir="ltr">{path}</bdi>
+        </code>
+        <span className="tool-state">{label}</span>
+      </div>
+      {state === "pending" && (
+        <div className="tool-ask">
+          <p>
+            The model wants to look through the project folder for this. Nothing has been read yet — it
+            looks only if you allow it.
+          </p>
+          <div className="tool-buttons">
+            <button className="btn primary sm" onClick={onAllow}>
+              Allow once
+            </button>
+            <button className="btn ghost sm" onClick={onDeny}>
+              Deny
+            </button>
+          </div>
+        </div>
+      )}
+      {state === "denied" && <p className="tool-note">You declined. Nothing was read, and the model was told.</p>}
+      {(state === "ran" || state === "stopped") && entry.result && (
+        <details className="tool-result">
+          <summary>{failed ? "Why it failed" : "Show what was found"}</summary>
+          <pre>{entry.result}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
 
 /**
  * A check the model wants to run: the folder's own command, never one the model
@@ -90,7 +158,7 @@ function CheckCard({ entry, onAllow, onDeny }: { entry: ToolEntry; onAllow: () =
         </span>
         <span className="tool-name">Run check</span>
         <code className="tool-path" title={path}>
-          {path}
+          <bdi dir="ltr">{path}</bdi>
         </code>
         <span className="tool-state">{label}</span>
       </div>
@@ -170,6 +238,7 @@ export function ToolCard({
   }
 
   if (name === "run_check") return <CheckCard entry={entry} onAllow={onAllow} onDeny={onDeny} />;
+  if (name === "search" || name === "list_files") return <FindCard entry={entry} onAllow={onAllow} onDeny={onDeny} />;
 
   const edit = name === "edit_file" || name === "create_file";
 
@@ -184,7 +253,7 @@ export function ToolCard({
           </span>
           <span className="tool-name">{name === "read_file" ? "Read file" : name}</span>
           <code className="tool-path" title={path}>
-            {path}
+            <bdi dir="ltr">{path}</bdi>
           </code>
           <span className="tool-state">
             {state === "pending"
@@ -250,7 +319,7 @@ export function ToolCard({
         <span className="tool-icon">{create ? <I.Plus /> : <I.Pencil />}</span>
         <span className="tool-name">{create ? "Create file" : "Edit file"}</span>
         <code className="tool-path" title={path}>
-          {path}
+          <bdi dir="ltr">{path}</bdi>
         </code>
         {entry.diff && (
           <span className="counts" aria-label={`${entry.diff.added} lines added, ${entry.diff.removed} removed`}>

@@ -892,6 +892,12 @@ kbd {
   text-align: left;
   user-select: text;
 }
+/* Right-to-left only so a long path loses its start, not its file name. The
+   text itself stays left-to-right: without this isolate, the punctuation at its
+   ends is reordered — `*.rs` shows as `rs.*`. */
+.tool-path bdi {
+  unicode-bidi: isolate;
+}
 .tool-state {
   flex: none;
   padding: 2px 9px;
@@ -1028,11 +1034,14 @@ kbd {
   color: var(--danger);
 }
 .tool.check.running .tool-state,
-.tool.check.stopped .tool-state {
+.tool.check.stopped .tool-state,
+.tool.find.running .tool-state,
+.tool.find.stopped .tool-state {
   background: var(--bg-sunk);
   color: var(--text-2);
 }
-.tool.check.running .tool-state::before {
+.tool.check.running .tool-state::before,
+.tool.find.running .tool-state::before {
   content: "";
   display: inline-block;
   width: 6px;
@@ -1049,11 +1058,13 @@ kbd {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .tool.check.running .tool-state::before {
+  .tool.check.running .tool-state::before,
+  .tool.find.running .tool-state::before {
     animation: none;
   }
 }
-.tool.check.stopped {
+.tool.check.stopped,
+.tool.find.stopped {
   border-style: dashed;
   background: transparent;
 }

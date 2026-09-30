@@ -6,6 +6,20 @@ machine.
 **To work through Stage G's checks, use [G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
+## Open — H2, finding code, 2026-09-29
+
+**Already proven mechanically.** 17 unit tests on the walk itself — `.git` (a folder, or a
+worktree's file), `target/` and `node_modules/` skipped without a `.gitignore`, nested
+`.gitignore` honoured through the `\\?\` root, a junction out of the folder not followed, `../**`
+and drive or UNC patterns refused, Mímir's own folder skipped, answers capped at 8 KB, Stop ending
+a walk. End to end: a search card names what it looks for and what it finds reaches the model; a
+declined listing reads nothing. **What needs a person** is how the cards read.
+
+- [ ] **The cards read well** — a search, a listing, patterns the right way round.
+      [G-testing.md §9](G-testing.md)
+- [ ] **A big folder stays stoppable.** Choose a large folder (your `source\repos`), ask for every
+      file, allow it, press **Esc** — the card says *Stopped*, the window stays responsive.
+
 ## Open — H1, the check command, 2026-09-29
 
 **Already proven mechanically.** `node tools/e2e/mimir-check.mjs` — 18/18 on the built app: a

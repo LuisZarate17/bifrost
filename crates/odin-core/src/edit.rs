@@ -206,8 +206,8 @@ fn decides_what_the_check_runs(inside: &Path) -> bool {
         })
 }
 
-/// `%APPDATA%\odin`, canonical, if it exists.
-fn app_data() -> Option<PathBuf> {
+/// `%APPDATA%\odin`, canonical, if it exists. [`crate::search`] skips it too.
+pub(crate) fn app_data() -> Option<PathBuf> {
     let dir = PathBuf::from(std::env::var_os("APPDATA")?).join("odin");
     std::fs::canonicalize(dir).ok()
 }

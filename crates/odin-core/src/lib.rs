@@ -18,6 +18,8 @@
 //!   nothing runs without an explicit per-call approval
 //! - [`check`] — running the one check command chosen for the project folder,
 //!   stoppable and with its output capped. Added at H1
+//! - [`search`] — which files the project folder has, and which lines hold
+//!   some text: inside the folder only, build output skipped, capped. Added at H2
 //!
 //! Nothing here prints or panics. Callers format, and a tray has no stdout.
 
@@ -26,6 +28,7 @@ pub mod check;
 pub mod config;
 pub mod edit;
 pub mod ollama;
+pub mod search;
 pub mod store;
 pub mod toolcall;
 pub mod tools;

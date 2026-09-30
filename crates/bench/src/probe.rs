@@ -22,8 +22,8 @@
 use std::path::Path;
 
 use odin_core::chat::{self, Message, Options, Tool, ToolCall};
-use odin_core::check;
 use odin_core::edit::{self, Workspace};
+use odin_core::{check, search};
 use odin_core::tools::{self, Request};
 
 /// How tool calls travel. **native**: Ollama parses them, and a call it cannot
@@ -76,6 +76,10 @@ pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
         Ok(a) => text(tools::applied_message(&a), false),
         Err(e) => text(format!("error: {e}"), true),
     };
+    let found = |r: Result<String, String>| match r {
+        Ok(t) => text(t, false),
+        Err(e) => text(format!("error: {e}"), true),
+    };
     if call.function.name == chat::INVALID_TOOL_CALL {
         let why = call.function.arguments["error"].as_str().unwrap_or("unreadable");
         return text(format!("error: {why}. Send the call again as valid JSON."), true);
@@ -87,6 +91,10 @@ pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
             edit_result(edit::plan_replace(s.ws, &path, &old_text, &new_text))
         }
         Ok(Request::Create { path, content }) => edit_result(edit::plan_create(s.ws, &path, &content)),
+        Ok(Request::List { pattern }) => found(search::list(s.ws, pattern.as_deref(), || false)),
+        Ok(Request::Search { text: what, pattern }) => {
+            found(search::search(s.ws, &what, pattern.as_deref(), || false))
+        }
         Ok(Request::Rewrite { path, content }) => edit_result(edit::plan_rewrite(s.ws, &path, &content)),
         Ok(Request::Check) => {
             let Some(c) = s.check else {

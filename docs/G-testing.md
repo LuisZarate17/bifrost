@@ -227,6 +227,28 @@ loop — these are the parts a person operates, and how it feels.
 
 ---
 
+## 9 — Finding code (H2)
+
+Added at H2. Tools on, `practice` chosen as the folder. `node tools/e2e/mimir-check.mjs` covers a
+search allowed and a listing declined; these are what a person sees.
+
+- [ ] **Ask where something is.** Type: `Where is the greet function?`
+      **Expect:** a **Search** card (magnifier) or a **List files** card, showing what it will look
+      for — e.g. `"greet"` — waiting for **Allow once**. Allowed, its pill says what it found
+      (`2 matches for "greet" in 1 file`), and **Show what was found** lists `greet.rs:1:` and
+      `greet.rs:6:`.
+- [ ] **Patterns read the right way round.** A card for `*.rs` shows `*.rs`, not `rs.*`.
+- [ ] **Deny a search.** Type `Search the project for "milk".`, click **Deny**. **Expect:** *You
+      declined. Nothing was read, and the model was told.*
+- [ ] **Build output is not searched.** Run `cargo check` in `practice` once (so `target\` exists),
+      then type `List all the files in this project.` and allow it. **Expect:** no `target/` paths,
+      and no `.git`.
+- [ ] **Nothing outside.** Type `Use list_files with the pattern ../**`. **Expect:** no card to
+      approve; the thread says *Couldn't list files — that pattern reaches outside the project
+      folder. The model was told.* Nothing from `odin` above `practice` is listed.
+
+---
+
 ## After this
 
   [D-testing.md](D-testing.md). An afternoon of its own.

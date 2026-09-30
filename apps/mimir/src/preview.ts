@@ -9,6 +9,7 @@
 //   ?preview=stream   the same thread, with an answer still being waited on
 //   ?preview=edit     the file-editing flow: an undoable edit, a rejection, a diff to review
 //   ?preview=check    the check flow: a failed build, the fix, and a check awaiting approval
+//   ?preview=find     finding code: a listing and a search that ran, and a search awaiting approval
 //   ?preview=empty    a new chat, with the sidebar and models filled in
 //   ?preview=appearance  the thread, with the Appearance dialog open over it
 //   ?preview=models   the thread, with the models dialog open over it
@@ -373,6 +374,26 @@ export function previewThread(mode: string): Preview {
       stats: "",
       convoId: "p5",
       spent: 4_102,
+    };
+  }
+
+  // ?preview=find — the model finding code for itself instead of guessing a
+  // path: a listing, a search, the read it led to, and a search still waiting.
+  if (mode === "find") {
+    return {
+      entries: [
+        { kind: "turn", role: "user", content: "Where does the server decide which port to listen on?" },
+        { kind: "tool", name: "list_files", path: "*.rs", args: { pattern: "*.rs" }, state: "ran", result: "2 files match *.rs:\nsrc/config.rs\nsrc/main.rs" },
+        { kind: "tool", name: "search", path: "\"PORT\"", args: { text: "PORT" }, state: "ran", result: "3 matches for \"PORT\" in 1 file:\nsrc/config.rs:1: pub const PORT: u16 = 8080;\nsrc/config.rs:5:     format!(\"{HOST}:{PORT}\")\nsrc/config.rs:9:     PORT" },
+        { kind: "tool", name: "read_file", path: "C:\\Users\\you\\source\\repos\\demo\\src\\config.rs", state: "ran", result: "pub const PORT: u16 = 8080;\n" },
+        { kind: "turn", role: "assistant", content: "In `src/config.rs`: `PORT` is **8080**, and `address()` joins it to `HOST`.", model: "qwen3-vl:8b-instruct-q4_K_M" },
+        { kind: "turn", role: "user", content: "And where is address() called?" },
+        { kind: "tool", name: "search", path: "\"address(\" in src/**/*.rs", args: { text: "address(", pattern: "src/**/*.rs" }, state: "pending" },
+      ],
+      status: "",
+      stats: "",
+      convoId: "p4",
+      spent: 3_390,
     };
   }
 

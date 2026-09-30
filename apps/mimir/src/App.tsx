@@ -114,6 +114,7 @@ const isEdit = (name: string) => name === "edit_file" || name === "create_file";
 function refusalFor(name: string, path: string): string {
   if (isEdit(name)) return `The user declined this change to ${path}. Nothing was written.`;
   if (name === "run_check") return `The user declined to run \`${path}\`. Nothing was run.`;
+  if (name === "search" || name === "list_files") return `The user declined to let you ${name === "search" ? "search for" : "list"} ${path}.`;
   return `The user declined to let you read ${path}.`;
 }
 
@@ -443,6 +444,10 @@ function App() {
       if (mode === "appearance") setShowAppearance(true);
       if (mode === "models") setShowModels(true);
       if (mode === "edit") {
+        setToolsOn(true);
+        setFolder({ path: "C:\\Users\\you\\source\\repos\\demo", name: "demo" });
+      }
+      if (mode === "find") {
         setToolsOn(true);
         setFolder({ path: "C:\\Users\\you\\source\\repos\\demo", name: "demo" });
       }

@@ -22,7 +22,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 
 use odin_core::chat::{self, Message, Options, StreamChunk};
-use odin_core::{check, config, edit, ollama, store, tools, vram};
+use odin_core::{check, config, edit, ollama, search, store, tools, vram};
 
 /// One message pushed up to the UI.
 ///
@@ -166,6 +166,13 @@ const STOPPED: &str = "stopped";
 
 fn stopped(id: u64) -> bool {
     STREAMS_STOPPED.load(Ordering::SeqCst) >= id
+}
+
+/// A number on the Stop counter for something that has not started yet — a
+/// check or a search waiting on its card. Taken when the card is shown, so a
+/// Stop pressed between Allow and the start still reaches it.
+fn next_stop() -> u64 {
+    STREAMS_STARTED.fetch_add(1, Ordering::SeqCst) + 1
 }
 
 /// Stop the answer that is streaming now.
@@ -458,6 +465,17 @@ enum Payload {
     /// Allow and the start — while the approval is still on its way — must
     /// reach it too, or it would run with nothing left to stop it.
     Check { root: String, argv: Vec<String>, stop: u64 },
+    /// A search or a listing: the folder it was approved for and exactly what
+    /// the card showed, with a place on the Stop counter — a walk of a large
+    /// folder can take a while, and Stop must reach it.
+    Find { root: String, find: Find, stop: u64 },
+}
+
+/// What a finding call looks for.
+#[derive(Debug, Clone, PartialEq)]
+enum Find {
+    List { pattern: Option<String> },
+    Search { text: String, pattern: Option<String> },
 }
 
 /// The one call currently awaiting approval.
@@ -626,10 +644,42 @@ async fn ask_with_tools(
         Err(e) => return Ok(reject(&call.function.name, "", e)),
     };
 
+    // A finding call that could never run — a pattern outside the folder, text
+    // over several lines — goes back to the model with the reason, without
+    // asking anyone to approve something that can only fail.
+    if let (Some(ws), tools::Request::List { pattern } | tools::Request::Search { pattern, .. }) = (&ws, &request) {
+        let text = match &request {
+            tools::Request::Search { text, .. } => Some(text.as_str()),
+            _ => None,
+        };
+        if let Err(e) = search::validate(ws, text, pattern.as_deref()) {
+            return Ok(reject(request.name(), "", format!("error: {e}")));
+        }
+    }
+
     let (name, path, payload) = match request {
         tools::Request::Read { path } => {
             let target = tools::read_target(&path, ws.as_ref());
             ("read_file", target, None)
+        }
+        tools::Request::List { .. } | tools::Request::Search { .. } if ws.is_none() => {
+            return Ok(reject(
+                request.name(),
+                "",
+                "error: there is no project folder to search — the user has not chosen one".into(),
+            ));
+        }
+        tools::Request::List { pattern } => {
+            let ws = ws.as_ref().expect("checked above");
+            let shown = search::describe_list(pattern.as_deref());
+            let find = Find::List { pattern };
+            ("list_files", shown, Some(Payload::Find { root: ws.root_display(), find, stop: next_stop() }))
+        }
+        tools::Request::Search { text, pattern } => {
+            let ws = ws.as_ref().expect("checked above");
+            let shown = search::describe_search(&text, pattern.as_deref());
+            let find = Find::Search { text, pattern };
+            ("search", shown, Some(Payload::Find { root: ws.root_display(), find, stop: next_stop() }))
         }
         // The model can call it from history, or invent it. Either way there is
         // only something to run when a person chose a command for this folder.
@@ -637,11 +687,7 @@ async fn ask_with_tools(
             (Some(ws), Some(argv)) => (
                 "run_check",
                 check::label(argv),
-                Some(Payload::Check {
-                    root: ws.root_display(),
-                    argv: argv.clone(),
-                    stop: STREAMS_STARTED.fetch_add(1, Ordering::SeqCst) + 1,
-                }),
+                Some(Payload::Check { root: ws.root_display(), argv: argv.clone(), stop: next_stop() }),
             ),
             _ => {
                 return Ok(reject(
@@ -793,6 +839,22 @@ async fn run_tool(name: String, path: String, token: String) -> Result<Ran, Stri
                     stopped: o.ended == check::Ended::Stopped,
                     undo: None,
                 },
+                Err(e) => Ran::text(format!("error: {e}")),
+            })
+        }
+        ("list_files" | "search", Some(Payload::Find { root, find, stop })) => {
+            // Opened again rather than trusted: the folder may have been moved
+            // or deleted while the card was on screen.
+            let ws = match edit::Workspace::open(&root) {
+                Ok(ws) => ws,
+                Err(e) => return Ok(Ran::text(format!("error: {e}"))),
+            };
+            let found = match &find {
+                Find::List { pattern } => search::list(&ws, pattern.as_deref(), || stopped(stop)),
+                Find::Search { text, pattern } => search::search(&ws, text, pattern.as_deref(), || stopped(stop)),
+            };
+            Ok(match found {
+                Ok(text) => Ran { stopped: stopped(stop), ..Ran::text(text) },
                 Err(e) => Ran::text(format!("error: {e}")),
             })
         }
@@ -1279,6 +1341,22 @@ mod tests {
                 stop: 7
             })
         );
+    }
+
+    /// What is searched for comes back from the ticket, as the card showed it —
+    /// never from the caller.
+    #[test]
+    fn a_search_ticket_redeems_what_the_card_showed() {
+        let shown = "\"greet(\" in src/**/*.rs";
+        let find = Find::Search { text: "greet(".into(), pattern: Some("src/**/*.rs".into()) };
+        let payload = Payload::Find { root: r"C:\work\demo".into(), find, stop: 3 };
+        let armed = || {
+            Some(Armed { token: "t".into(), name: "search".into(), path: shown.into(), payload: Some(payload.clone()) })
+        };
+        // Not as a read of a file that happens to have that name, nor as a listing.
+        assert!(redeem_in(&mut armed(), "t", "read_file", shown).is_err());
+        assert!(redeem_in(&mut armed(), "t", "list_files", shown).is_err());
+        assert_eq!(redeem_in(&mut armed(), "t", "search", shown).unwrap(), Some(payload.clone()));
     }
 
     #[test]

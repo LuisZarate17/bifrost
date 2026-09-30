@@ -48,7 +48,8 @@ records of what happened.
 - **[STAGE-G.md](../stages/STAGE-G.md)** — **Mímir**, the local chat app sharing Heimdall's
   model. Built through G7 (editing files); the testing round is open.
 - **[STAGE-H.md](../stages/STAGE-H.md)** — Mímir learns to find code, check its work and run
-  longer: ten chunks in four phases, each gated on a measurement. H1 (the check command) built.
+  longer: ten chunks in four phases, each gated on a measurement. H1 (the check command) and H2
+  (finding code) built; Gate 1 next.
 
 ---
 
@@ -76,6 +77,9 @@ names don't, so grep the name if a number has gone stale.
 - **Running the folder's check command** — `check.rs` → `candidates()`, `run()` (stoppable, kills
   the whole tree, output capped), `for_model()` (never reads as a failed call; names a Smart App
   Control block for what it is)
+- **Finding code in the folder** — `search.rs` → `list()`, `search()` (literal, smart-case),
+  `validate()` (an impossible call is refused before its card). Skips `.git`, `target`,
+  `node_modules`, links; capped at 8 KB
 
 > Everything here is **blocking by design**. Calling it from an `async` Tauri command drops a tokio
 > runtime inside an async context and kills the worker. Go through `spawn_blocking`.
@@ -207,6 +211,9 @@ Finished chunks: what was built, what was measured, what the measurement changed
   touch. Found Ollama crashing on the model's own tool calls, and recovered them
 - **[H1](results/H1-results.md)** — the check command. **33% → 79%** on edits whose obvious form
   breaks the build, once the model can run `cargo check` and read what it says
+- **[H2](results/H2-results.md)** — finding code. Named questions about odin **0% → 88%**; the
+  cross-file rename now finds its call site every time. Vague questions stay at 10%, and better
+  wording did not move them — the case for H10's repo map
 
 **Stage F — keep testing models**
 

@@ -9,12 +9,12 @@
 //! no allowlist, no "always allow". The app shows exactly what will happen —
 //! the path for a read, the diff for an edit — and waits.
 //!
-//! **Four tools, and only the first is always offered.** `read_file` can read
-//! anywhere, one approved file at a time. `edit_file` and `create_file` exist
-//! only once a project folder has been chosen, and cannot reach outside it —
-//! see [`crate::edit`] for how that is enforced. `run_check` exists only once
-//! that folder also has a check command chosen for it, and runs exactly that
-//! command — see [`crate::check`].
+//! **Six tools, and only the first is always offered.** `read_file` can read
+//! anywhere, one approved file at a time. `list_files`, `search`, `edit_file`
+//! and `create_file` exist only once a project folder has been chosen, and
+//! cannot reach outside it — see [`crate::search`] and [`crate::edit`] for how
+//! that is enforced. `run_check` exists only once that folder also has a check
+//! command chosen for it, and runs exactly that command — see [`crate::check`].
 //!
 //! The descriptions and the system prompt live here, not in the app, so the G7
 //! probe measures the exact words the app ships with. A probe that tested
@@ -44,14 +44,53 @@ fn read_tool() -> Tool {
     Tool::function(
         "read_file",
         "Read a text file and return its contents. Paths inside the project folder may be \
-         relative to it. Only use this when the user refers to a file. The user approves \
-         each read.",
+         relative to it. The user approves each read.",
         json!({
             "type": "object",
             "properties": {
                 "path": { "type": "string", "description": "Path to the file" }
             },
             "required": ["path"]
+        }),
+    )
+}
+
+/// Which files there are. A glob, because that is what a model already knows
+/// how to write; a bare name matches file names anywhere, the way `.gitignore`
+/// and ripgrep read one.
+fn list_tool() -> Tool {
+    Tool::function(
+        "list_files",
+        "List the files in the project folder whose path matches a glob pattern, such as \
+         src/**/*.rs or *.toml. A pattern without a slash matches file names in any folder; a \
+         folder's name lists everything in it; no pattern lists the whole project. Build output, \
+         dependencies and .git are left out. The user approves each call.",
+        json!({
+            "type": "object",
+            "properties": {
+                "pattern": { "type": "string", "description": "Glob pattern, relative to the project folder" }
+            }
+        }),
+    )
+}
+
+/// Where some text is. **Literal, not a regular expression**: a small model
+/// writes a malformed pattern far more easily than a malformed string, and the
+/// question it is asking is almost always "where is this name".
+fn search_tool() -> Tool {
+    Tool::function(
+        "search",
+        "Find every line in the project folder's files that contains some text. The text is \
+         matched exactly as written, not as a regular expression, and ignores case unless it has \
+         capital letters. Optionally only in files matching a glob pattern, such as src/**/*.rs. \
+         Returns path:line: text for each match. The user approves each call.",
+        json!({
+            "type": "object",
+            "properties": {
+                "text": { "type": "string", "description": "The text to look for, on one line" },
+                "pattern": { "type": "string", "description": "Optional glob pattern for which files to search" }
+            },
+            "required": ["text"]
         }),
     )
 }
@@ -125,12 +164,14 @@ pub fn rewrite_tool() -> Tool {
     )
 }
 
-/// The tools offered to the model. Editing tools only when there is a folder
-/// they are confined to; `run_check` only when that folder has a check, named
-/// here by its label.
+/// The tools offered to the model. Finding and editing tools only when there is
+/// a folder they are confined to; `run_check` only when that folder has a check,
+/// named here by its label.
 pub fn available(editing: bool, check: Option<&str>) -> Vec<Tool> {
     let mut tools = vec![read_tool()];
     if editing {
+        tools.push(list_tool());
+        tools.push(search_tool());
         tools.push(edit_tool());
         tools.push(create_tool());
         if let Some(label) = check {
@@ -151,7 +192,8 @@ pub fn available(editing: bool, check: Option<&str>) -> Vec<Tool> {
 pub fn system_prompt(ws: &Workspace, check: bool) -> String {
     let mut s = format!(
         "You can read and change files in the user's project folder: {}\n\
-         Use paths relative to that folder. To answer a question about a file, read it — never \
+         Use paths relative to that folder. To find where something is, use search or list_files \
+         rather than guessing a path. To answer a question about a file, read it — never \
          guess what it says. To change a file, read it with read_file first, then use edit_file \
          with text copied exactly from what you read. Only change what the user asked for. When \
          you are done, say briefly what you changed.",
@@ -172,6 +214,10 @@ pub enum Request {
     Read { path: String },
     Edit { path: String, old_text: String, new_text: String },
     Create { path: String, content: String },
+    /// Which files match a glob — all of them, with none.
+    List { pattern: Option<String> },
+    /// Which lines contain some text, optionally only in files matching a glob.
+    Search { text: String, pattern: Option<String> },
     /// Run the folder's check command. Carries nothing: what runs was chosen by
     /// a person, not by the model.
     Check,
@@ -185,6 +231,8 @@ impl Request {
             Request::Read { .. } => "read_file",
             Request::Edit { .. } => "edit_file",
             Request::Create { .. } => "create_file",
+            Request::List { .. } => "list_files",
+            Request::Search { .. } => "search",
             Request::Check => "run_check",
             Request::Rewrite { .. } => "write_file",
         }
@@ -197,9 +245,14 @@ impl Request {
             | Request::Edit { path, .. }
             | Request::Create { path, .. }
             | Request::Rewrite { path, .. } => path,
-            Request::Check => "",
+            Request::List { .. } | Request::Search { .. } | Request::Check => "",
         }
     }
+}
+
+/// An optional argument, where a blank one is the same as none.
+fn optional(call: &ToolCall, key: &str) -> Option<String> {
+    arg(call, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
 fn arg(call: &ToolCall, key: &str) -> Option<String> {
@@ -231,6 +284,13 @@ pub fn interpret(call: &ToolCall) -> Result<Request, String> {
         "write_file" => Ok(Request::Rewrite {
             path,
             content: arg(call, "content").ok_or("write_file was called without content")?,
+        }),
+        "list_files" => Ok(Request::List { pattern: optional(call, "pattern") }),
+        "search" => Ok(Request::Search {
+            // Not trimmed: leading spaces can be exactly what is being looked
+            // for. Only an empty one is refused.
+            text: arg(call, "text").filter(|t| !t.is_empty()).ok_or("search was called without text")?,
+            pattern: optional(call, "pattern"),
         }),
         // Any arguments the model sends are ignored: there is nothing it may
         // choose about what runs.
@@ -446,7 +506,10 @@ mod tests {
     fn editing_tools_are_offered_only_with_a_folder() {
         let names = |v: Vec<Tool>| v.into_iter().map(|t| t.function.name).collect::<Vec<_>>();
         assert_eq!(names(available(false, None)), ["read_file"]);
-        assert_eq!(names(available(true, None)), ["read_file", "edit_file", "create_file"]);
+        assert_eq!(
+            names(available(true, None)),
+            ["read_file", "list_files", "search", "edit_file", "create_file"]
+        );
         // The probe-only rewrite is never offered by the app.
         assert!(!names(available(true, None)).contains(&"write_file".to_string()));
     }
@@ -456,13 +519,29 @@ mod tests {
         let names = |v: Vec<Tool>| v.into_iter().map(|t| t.function.name).collect::<Vec<_>>();
         assert_eq!(
             names(available(true, Some("cargo check"))),
-            ["read_file", "edit_file", "create_file", "run_check"]
+            ["read_file", "list_files", "search", "edit_file", "create_file", "run_check"]
         );
         // A check without a folder has nowhere to run.
         assert_eq!(names(available(false, Some("cargo check"))), ["read_file"]);
         // And the model is told what it would run.
         let tool = available(true, Some("cargo check")).pop().unwrap();
         assert!(tool.function.description.contains("`cargo check`"));
+    }
+
+    #[test]
+    fn finding_calls_are_read_with_their_optional_pattern() {
+        assert_eq!(interpret(&call("list_files", json!({}))).unwrap(), Request::List { pattern: None });
+        assert_eq!(
+            interpret(&call("list_files", json!({ "pattern": " src/**/*.rs " }))).unwrap(),
+            Request::List { pattern: Some("src/**/*.rs".into()) }
+        );
+        // A blank pattern is no pattern, not a pattern matching nothing.
+        assert_eq!(
+            interpret(&call("search", json!({ "text": "  greet(", "pattern": "" }))).unwrap(),
+            Request::Search { text: "  greet(".into(), pattern: None }
+        );
+        assert!(interpret(&call("search", json!({ "pattern": "*.rs" }))).is_err());
+        assert!(interpret(&call("search", json!({ "text": "" }))).is_err());
     }
 
     #[test]

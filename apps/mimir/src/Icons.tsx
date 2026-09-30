@@ -49,6 +49,14 @@ export const Wrench = (p: P) => (
   </svg>
 );
 
+/** A lens: looking for something in the project — a search or a listing. */
+export const Search = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="7" cy="7" r="4.25" />
+    <path d="m10.25 10.25 3.25 3.25" />
+  </svg>
+);
+
 /** A prompt in a window: a command that runs. For the check, which is a command
  *  and not a verdict — a tick would read as "passed" on a check that failed. */
 export const Terminal = (p: P) => (

@@ -16,6 +16,11 @@ reqwest = { version = "0.13", default-features = false, features = ["blocking", 
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 similar = "2"
+# For `search`: ripgrep's own walker, which reads .gitignore files, and its glob
+# matcher. Neither has a proc-macro, so neither gives Smart App Control a fresh
+# DLL to refuse at build time.
+ignore = "0.4.33"
+globset = "0.4.20"
 
 # For `check`: a job object, so everything a check command starts can be ended
 # together — on Stop, when the command leaves something running, and when the

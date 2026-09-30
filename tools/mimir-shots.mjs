@@ -23,6 +23,7 @@ const STATES = {
   stream: "?preview=stream",
   edit: "?preview=edit",
   check: "?preview=check",
+  find: "?preview=find",
   empty: "?preview=empty",
   appearance: "?preview=appearance",
   models: "?preview=models",
