@@ -58,6 +58,11 @@ pub struct Setup<'a> {
     pub ws: &'a Workspace,
     pub backups: &'a Path,
     pub check: Option<&'a Check>,
+    /// Refuse reads outside the folder, as edits are. The app lets a person
+    /// approve a read of anything; a probe approves every call, so where the
+    /// answer exists elsewhere on disk — the task probe's worktree sits beside
+    /// the repo holding the reference solution — a read must not reach it.
+    pub confine_reads: bool,
 }
 
 /// One call, run.
@@ -86,6 +91,10 @@ pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
     }
     match tools::interpret(call) {
         Err(e) => text(format!("error: {e}"), true),
+        Ok(Request::Read { path }) if s.confine_reads => match s.ws.resolve_existing(&path) {
+            Ok(real) => text(tools::run_read_file(&real.to_string_lossy()), false),
+            Err(e) => text(format!("error: {e}"), true),
+        },
         Ok(Request::Read { path }) => text(tools::run_read_file(&tools::read_target(&path, Some(s.ws))), false),
         Ok(Request::Edit { path, old_text, new_text }) => {
             edit_result(edit::plan_replace(s.ws, &path, &old_text, &new_text))
@@ -129,9 +138,18 @@ pub struct Run {
     /// Smart App Control refused something a check needed: the run measured
     /// Windows, not the model.
     pub blocked: bool,
-    /// Ollama failed. The run measured nothing.
+    /// Ollama failed. The run measured nothing — unless `runaway` is set.
     pub error: Option<String>,
+    /// The failure was the model's: a reply that ran to the request's
+    /// five-minute limit without finishing. Seen at H3 after reading a long,
+    /// escape-heavy file — the model wrote one edit for ever. A result about
+    /// the model, not about Ollama, so a probe scores it as a fail.
+    pub runaway: bool,
 }
+
+/// A request that failed this close to `chat`'s five-minute limit was cut off
+/// by it, not refused.
+const RUNAWAY: std::time::Duration = std::time::Duration::from_secs(290);
 
 fn short(s: &str, n: usize) -> String {
     let one = s.replace('\n', "⏎");
@@ -157,6 +175,7 @@ pub fn run_loop(
 
     for _ in 0..bound {
         run.rounds += 1;
+        let asked = std::time::Instant::now();
         let sent = match transport {
             Transport::Native => chat::chat(model, messages, offered, opts),
             Transport::Recover => chat::chat_tools(model, messages, offered, opts),
@@ -164,6 +183,7 @@ pub fn run_loop(
         let reply = match sent {
             Ok(r) => r,
             Err(e) => {
+                run.runaway = asked.elapsed() >= RUNAWAY;
                 run.error = Some(e);
                 run.hit_bound = false;
                 return run;

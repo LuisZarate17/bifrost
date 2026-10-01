@@ -48,8 +48,8 @@ records of what happened.
 - **[STAGE-G.md](../stages/STAGE-G.md)** — **Mímir**, the local chat app sharing Heimdall's
   model. Built through G7 (editing files); the testing round is open.
 - **[STAGE-H.md](../stages/STAGE-H.md)** — Mímir learns to find code, check its work and run
-  longer: ten chunks in four phases, each gated on a measurement. H1 (the check command) and H2
-  (finding code) built; Gate 1 next.
+  longer: ten chunks in four phases, each gated on a measurement. H1 (the check command), H2
+  (finding code) and H3 (the benchmark of real work) built; Gate 1 passed; H4 next.
 
 ---
 
@@ -148,8 +148,20 @@ package from G1, so **one renderer means one security review rather than two tha
 - **Can the model call tools?** — `crates/bench/src/bin/toolprobe.rs` (G0)
 - **Can the model edit files correctly?** — `crates/bench/src/bin/editprobe.rs` (G7), scored byte
   for byte on CRLF files: `cargo run -p bench --bin editprobe`
+- **Does the check help it fix what it breaks?** — `crates/bench/src/bin/fixprobe.rs` (H1): eight
+  tasks whose obvious edit breaks the build, with `run_check` and without
+- **Can it find code nobody pointed it at?** — `crates/bench/src/bin/findprobe.rs` (H2): eighteen
+  questions about odin itself, in a git worktree at a pinned commit
+- **Can it do real work?** — `crates/bench/src/bin/taskprobe.rs` (H3): sixteen tasks — four real
+  commits and twelve function bodies removed — scored by the project's own hidden tests.
+  `--selfcheck` proves every task solvable and not already solved, without a model
+- **The loop they all share** — `crates/bench/src/probe.rs`: the app's tool loop with every call
+  approved, so a probe measures what ships
 - **Mímir's file editing, end to end** — `tools/e2e/mimir-edit.mjs`. Drives the running app
   over its WebView2 debug port with the real model; 16 checks, leaves nothing behind
+- **The check and finding code, end to end** — `tools/e2e/mimir-check.mjs`: approval, denial,
+  Stop, a late result after switching threads, the fix loop, a search and a declined listing;
+  24 checks, `--only N` for one scenario
 - **The grading rubric** — `evals/cases.md`
 - **Cases that regenerate from tracked source** — `evals/fixtures/`
 - **Saved runs** — `evals/out/`
@@ -214,6 +226,9 @@ Finished chunks: what was built, what was measured, what the measurement changed
 - **[H2](results/H2-results.md)** — finding code. Named questions about odin **0% → 88%**; the
   cross-file rename now finds its call site every time. Vague questions stay at 10%, and better
   wording did not move them — the case for H10's repo map
+- **[H3](results/H3-results.md)** — a benchmark of real work: sixteen tasks on odin's own code,
+  scored by its hidden tests. **The current model finishes 12%** — every single move works, strung
+  together they mostly do not. H4's baseline
 
 **Stage F — keep testing models**
 

@@ -89,6 +89,9 @@ and a margin set **before** the run, so the numbers cannot move the bar.
 
 ## H1 — `run_check`, and the groundwork the new tools need
 
+> **Built 2026-09-29, f95365f** — [H1-results.md](../docs/results/H1-results.md). Fix tasks 33% →
+> 79% with the check.
+
 **Do:**
 
 *Groundwork, because every new tool hits it:*
@@ -156,6 +159,9 @@ missing somewhere.
 
 ## H2 — `list_files` and `search`
 
+> **Built 2026-09-29, 6653c27** — [H2-results.md](../docs/results/H2-results.md). Named questions
+> 0% → 88%; vague ones stay near 10%. Gate 1 passed 2026-09-30.
+
 **Do:** `crates/odin-core/src/search.rs`, on the `ignore` crate for `.gitignore` rules and a
 `globset` matcher over relative paths — **not** `ignore`'s overrides, because a matching override
 beats `.gitignore` and `**/*` would walk straight into `target/`. Walk from the plain root with
@@ -190,6 +196,10 @@ tools or their wording before building a benchmark on top of them.
 ---
 
 ## H3 — `taskprobe`
+
+> **Built 2026-09-30** — [H3-results.md](../docs/results/H3-results.md). As designed, plus: reads
+> in the probe are confined to the worktree, and runs share the repo's own target folder rather
+> than a fresh one.
 
 **Do:** A benchmark of real work. Only 8 of the repo's commits add tests, so it mixes two kinds of
 task:
