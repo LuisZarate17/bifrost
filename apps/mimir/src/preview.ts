@@ -115,6 +115,12 @@ export function installPreviewIpc() {
   let sends = 0;
   let stopAt = 0;
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // `?preview=offer` is the only state with one to show; every other state is
+  // the ordinary "nothing to offer yet" that a real run sees most of the time.
+  const previewOffer =
+    new URLSearchParams(location.search).get("preview") === "offer"
+      ? { kind: "coding" as const, from: "qwen3-vl:8b-instruct-q4_K_M", to: "qwen3-coder:30b" }
+      : null;
 
   mockIPC(async (cmd, payload) => {
     const args = (payload ?? {}) as Record<string, unknown>;
@@ -202,6 +208,13 @@ export function installPreviewIpc() {
         return true;
       case "set_model":
         return null;
+      case "model_offer":
+        // Null by default; `?preview=offer` seeds one the same way a real
+        // folder choice would, through `checkModelOffer` in App.tsx.
+        return previewOffer;
+      case "accept_model_offer":
+        await sleep(1_500);
+        return 23.4;
       case "system_accent":
         return "#018574";
       case "put_attachment":

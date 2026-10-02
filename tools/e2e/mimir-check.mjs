@@ -213,6 +213,13 @@ const runs = (n) => only === null || only === n;
 const { root, proj } = makeProject();
 const configPath = path.join(proj, "src", "config.rs");
 const configBefore = fs.existsSync(CONFIG) ? fs.readFileSync(CONFIG) : null;
+
+// Ctrl+C skips `finally`, so put the user's config back here as well.
+process.on("SIGINT", () => {
+  if (configBefore) fs.writeFileSync(CONFIG, configBefore);
+  else fs.rmSync(CONFIG, { force: true });
+  process.exit(130);
+});
 const cfgBase = configBefore ? JSON.parse(configBefore) : {};
 const cdp = await connect();
 const { js } = cdp;

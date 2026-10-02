@@ -49,6 +49,8 @@ flowchart TD
     H3["H3 · taskprobe<br/><i>a benchmark of real work</i>"]
     H4["H4 · baseline, then coding models"]
     GB{{"Gate 2 · which model"}}
+    H4a["H4a · read Qwen3-Coder's tool calls"]
+    H4b["H4b · offer the coding model with a folder"]
     H5["H5 · approval policy"]
     H6["H6 · undo a whole turn"]
     GC{{"Gate 3 · works in daily use"}}
@@ -57,7 +59,7 @@ flowchart TD
     H9["H9 · file operations"]
     H10["H10 · AGENTS.md, a task list, a repo map"]
 
-    H1 --> H2 --> GA --> H3 --> H4 --> GB --> H5 --> H6 --> GC
+    H1 --> H2 --> GA --> H3 --> H4 --> GB --> H4a --> H4b --> H5 --> H6 --> GC
     GC --> H7
     GC --> H8
     GC --> H9
@@ -243,6 +245,51 @@ with Ollama's error. Set the switching margin, then run.
 
 Choose the model — and whether choosing a folder should offer to load it, since Heimdall refuses,
 cleanly, while a text-only model is loaded (G3).
+
+> **Decided 2026-10-01: Qwen3-Coder 30B-A3B, its tool calls fixed first (H4a); and yes, choosing a
+> folder offers it (H4b).** Two chunks the plan did not have, done before H5.
+
+---
+
+## H4a — Reading Qwen3-Coder's tool calls
+
+> **Built 2026-10-02** — [H4a-results.md](../docs/results/H4a-results.md). Tool probe 10/10 through the app's path;
+> the render matches Ollama's prompt token for token; benchmark 28/48 with **no errors**, against
+> H4's 25/48 with 8.
+
+**Do:** Qwen3-Coder writes its calls as XML-like tags (`<function=NAME><parameter=KEY>…`), which
+the JSON recovery in `toolcall.rs` cannot read. In H4 Ollama's own parser lost 8 of its runs: it
+ends a call at the first `</tool_call>` even inside a value, and passes a call that lacks its
+opening tag through as text. A second recovery, `xmlcall.rs`: the prompt rendered exactly as
+Ollama's Go renderer does, sent raw, and read by a parser anchored on the offered tool and argument
+names. The model's layout is read from its `PARSER` line, not guessed from its family.
+
+**Done when:** the render gives Ollama's exact prompt token count; toolprobe through the app's path
+is 10/10; a full taskprobe has no tool-call errors and scores at least H4's 25/48.
+
+**Watch for:** `qwen3-coder`'s family, `qwen3moe`, starts with "qwen", so a family check alone
+would send it down the JSON path. The same native request answers differently with a cold and a
+warm prompt cache, so compare token counts and calls, not prose.
+
+---
+
+## H4b — Offering the coding model with a folder
+
+> **Built 2026-10-02** — [H4b-results.md](../docs/results/H4b-results.md). Choosing a folder offers
+> Qwen3-Coder; clearing it offers the way back; e2e 14/14, and the H1/H2 and G7 e2e still pass.
+
+**Do:** `Config.coding_model` (default `qwen3-coder:30b`) and `Config.model_before_coding`. Rust
+decides whether an offer applies (`offer_for`) and recomputes it on accept, so the webview sends
+only a direction, never a tag. Accepting writes the config first — Heimdall refuses for the whole
+switch rather than reloading the vision model — then unloads the old model and loads the new one.
+A manual pick ends the switch-back. The bar sits above the composer; "Not now" holds for the
+session.
+
+**Done when:** e2e shows the offer, declining it, switching for real (config and `/api/ps` agree),
+the coder answering a tool question in the app, and the switch back.
+
+**Watch for:** Ollama is not running after a reboot until something starts it, and a folder is
+often chosen before the first question — the offer must start it.
 
 ---
 

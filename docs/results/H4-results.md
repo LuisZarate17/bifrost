@@ -171,6 +171,9 @@ toolprobe miss — measured with toolprobe and taskprobe the way G7 measured the
 switch itself: choosing a project folder offers to load it, clearing the folder offers to go back,
 and Heimdall refuses cleanly in between.
 
+**Both done 2026-10-02:** [H4a](H4a-results.md) — 28/48 with no errors, against 25/48 and 8 here —
+and [H4b](H4b-results.md), the switch.
+
 ## First attempt, 2026-09-30 — superseded
 
 ### Devstral Small 2 24B (`devstral-small-2:24b`) — partial, stopped for the night

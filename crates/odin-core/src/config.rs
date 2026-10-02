@@ -75,6 +75,13 @@ pub const DEFAULT_PROMPT: &str =
 /// saved runs incomparable to new ones.
 pub const DEFAULT_NUM_CTX: u32 = 32768;
 
+/// Chosen at Gate 2 (2026-10-01) from the H4 benchmark: 25/48 against 6/48 for
+/// `DEFAULT_MODEL`, at 32s/task. Text-only — reports no `vision` capability — so
+/// it is never the model Heimdall can use, and the two cannot be resident
+/// together on this card: 18 GB plus the 6 GB vision model does not fit in 16 GB.
+/// See `docs/results/H4-results.md`.
+pub const DEFAULT_CODING_MODEL: &str = "qwen3-coder:30b";
+
 /// What the apps agree on. Extended rather than replaced as Stage G lands —
 /// G2 writes `model` here when you pick one, and Heimdall reads it on every summon.
 ///
@@ -111,6 +118,17 @@ pub struct Config {
     /// to defaults, and the next save would write that over the file.
     #[serde(deserialize_with = "lenient_checks")]
     pub checks: BTreeMap<String, Vec<String>>,
+    /// The model Mímir offers to switch to once a project folder is chosen.
+    /// An empty string turns the offer off entirely — there is no separate
+    /// on/off flag, because an empty tag can never be installed and so
+    /// [`crate::ollama::find`]-style lookups simply never match it.
+    pub coding_model: String,
+    /// The model Mímir switched away from, on the user's say-so, to load
+    /// `coding_model`. What "switch back" restores once the folder is
+    /// cleared. Cleared by switching back, and by any manual model pick —
+    /// a pick made by hand ends the switch-back story outright, rather than
+    /// fighting it on the next folder change.
+    pub model_before_coding: Option<String>,
 }
 
 /// `checks`, keeping only entries that are a folder mapped to a list of strings.
@@ -163,6 +181,8 @@ impl Default for Config {
             workspace: None,
             recent_workspaces: Vec::new(),
             checks: BTreeMap::new(),
+            coding_model: DEFAULT_CODING_MODEL.to_string(),
+            model_before_coding: None,
         }
     }
 }
@@ -239,9 +259,20 @@ mod tests {
             workspace: Some(r"C:\work\demo".into()),
             recent_workspaces: vec![r"C:\work\demo".into(), r"C:\work\older".into()],
             checks: BTreeMap::from([(r"C:\work\demo".into(), vec!["cargo".into(), "check".into()])]),
+            coding_model: "qwen3-coder:30b".into(),
+            model_before_coding: Some("qwen3-vl:8b-instruct-q4_K_M".into()),
         };
         let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(c, back);
+    }
+
+    /// A config saved before H5 added these fields has neither — and must still
+    /// load, with the offer on by default and nothing to switch back to.
+    #[test]
+    fn a_config_from_before_the_coding_model_existed_still_loads() {
+        let c: Config = serde_json::from_str(r#"{"model":"llama3.1:8b"}"#).unwrap();
+        assert_eq!(c.coding_model, DEFAULT_CODING_MODEL);
+        assert_eq!(c.model_before_coding, None);
     }
 
     /// Windows paths ignore case, and the folder can reach the config spelled

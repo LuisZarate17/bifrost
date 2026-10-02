@@ -159,6 +159,13 @@ function check(name, ok, detail = "") {
 
 const { root, proj } = makeProject();
 const configBefore = fs.existsSync(CONFIG) ? fs.readFileSync(CONFIG) : null;
+
+// Ctrl+C skips `finally`, so put the user's config back here as well.
+process.on("SIGINT", () => {
+  if (configBefore) fs.writeFileSync(CONFIG, configBefore);
+  else fs.rmSync(CONFIG, { force: true });
+  process.exit(130);
+});
 const cdp = await connect();
 const { js } = cdp;
 const convosBefore = new Set((await js(`window.__TAURI_INTERNALS__.invoke("conversations")`)).map((c) => c.id));

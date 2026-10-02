@@ -7,6 +7,23 @@ machine.
 **[G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
+## Open — H4b, switching to the coding model, 2026-10-01
+
+**Already proven mechanically.** `offer_for` has unit tests for every combination that decides
+whether to offer a switch — coder installed or not, already on it, an empty `coding_model` turning
+the offer off, a previous model gone or remembered, a folder still open — plus that `llama3.1` and
+`llama3.1:latest` are the same model to the comparison. `node tools/e2e/mimir-switch.mjs` covers
+the offer appearing on a real folder choice, declining it, the switch actually loading
+`qwen3-coder:30b` (checked against `/api/ps`, not just the config), the coder answering a tool
+question, and the switch back. **What needs a person** is Heimdall's side of the story, since
+Heimdall has no test of its own in this chunk.
+
+- [ ] **Heimdall refuses while the coder is current**, and names it, *before* capturing the screen.
+      [H-testing.md §3](H-testing.md)
+- [ ] **Heimdall answers again after switching back.**
+- [ ] **A manual pick in the Switchboard ends the switch-back offer** — clearing the folder
+      afterwards offers nothing.
+
 ## Open — H2, finding code, 2026-09-29
 
 **Already proven mechanically.** 17 unit tests on the walk itself — `.git` (a folder, or a

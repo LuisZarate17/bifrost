@@ -290,10 +290,129 @@ async fn set_model(tag: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
         let mut cfg = config::load();
         cfg.model = tag;
+        // A pick made by hand ends any switch-back story outright: the user
+        // just chose a model on purpose, and clearing the folder afterwards
+        // must not second-guess that with an offer back to something else.
+        cfg.model_before_coding = None;
         config::save(&cfg)
     })
     .await
     .map_err(|e| format!("saving the model choice failed: {e}"))?
+}
+
+/// `llama3.1` and `llama3.1:latest` name the same model to Ollama; a bare
+/// comparison of the two strings calls them different, so the coding-model
+/// offer and the switch-back would each think the model it cares about was
+/// never installed, or never current.
+fn same_tag(a: &str, b: &str) -> bool {
+    a.strip_suffix(":latest").unwrap_or(a) == b.strip_suffix(":latest").unwrap_or(b)
+}
+
+/// An offer to switch between the current model and another one, shown once
+/// a project folder is chosen or cleared.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelOffer {
+    /// "coding" or "back" — which direction this offer switches.
+    kind: &'static str,
+    from: String,
+    to: String,
+}
+
+/// Work out whether to offer a switch, from the config and what is installed.
+///
+/// A pure function on purpose: [`model_offer`] is the only caller that talks
+/// to Ollama, and keeping the decision itself free of I/O is what makes the
+/// cases in `mod tests` below checkable without one running.
+fn offer_for(cfg: &config::Config, installed: &[String]) -> Option<ModelOffer> {
+    let has = |tag: &str| installed.iter().any(|t| same_tag(t, tag));
+
+    if cfg.workspace.is_some()
+        && !cfg.coding_model.is_empty()
+        && !same_tag(&cfg.model, &cfg.coding_model)
+        && has(&cfg.coding_model)
+    {
+        return Some(ModelOffer { kind: "coding", from: cfg.model.clone(), to: cfg.coding_model.clone() });
+    }
+
+    if cfg.workspace.is_none() && !cfg.coding_model.is_empty() && same_tag(&cfg.model, &cfg.coding_model) {
+        if let Some(prev) = cfg.model_before_coding.as_ref() {
+            if !same_tag(prev, &cfg.coding_model) && has(prev) {
+                return Some(ModelOffer { kind: "back", from: cfg.model.clone(), to: prev.clone() });
+            }
+        }
+    }
+
+    None
+}
+
+/// Whether to offer switching models, now that the folder just changed.
+///
+/// Ollama being unreachable is not an error here — it just means there is
+/// nothing to offer yet, the same as no coding model being installed.
+#[tauri::command]
+async fn model_offer() -> Result<Option<ModelOffer>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let cfg = config::load();
+        // Nothing could be offered even if every model were installed: leave
+        // Ollama alone.
+        let assumed = [cfg.coding_model.clone(), cfg.model_before_coding.clone().unwrap_or_default()];
+        if offer_for(&cfg, &assumed).is_none() {
+            return Ok(None);
+        }
+        // Right after a reboot Ollama is not running until something starts
+        // it, and a folder is usually chosen before the first question —
+        // measured 2026-10-02, when the offer silently never appeared. Start it
+        // the way `send` does.
+        let tags = ollama::tags().or_else(|_| ollama::ensure_running().and_then(|_| ollama::tags()));
+        let Ok(tags) = tags else {
+            return Ok(None);
+        };
+        let installed: Vec<String> = tags.into_iter().map(|m| m.name).collect();
+        Ok(offer_for(&cfg, &installed))
+    })
+    .await
+    .map_err(|e| format!("checking for a model switch failed: {e}"))?
+}
+
+/// Act on an offer the webview was shown.
+///
+/// **The offer is recomputed here, not trusted from the caller** — the
+/// webview never sends a model tag, only which direction it clicked, so
+/// nothing reaching the IPC boundary can choose what model to load.
+///
+/// The config is written *before* the load: Heimdall decides whether to
+/// refuse by reading `cfg.model`, so this is what makes it refuse for the
+/// whole switch rather than racing to reload the vision model while the
+/// coding model is still coming up.
+#[tauri::command]
+async fn accept_model_offer(kind: String) -> Result<f64, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cfg = config::load();
+        let installed: Vec<String> = ollama::tags()
+            .map_err(|e| format!("could not reach Ollama: {e}"))?
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
+        let offer = offer_for(&cfg, &installed)
+            .filter(|o| o.kind == kind)
+            .ok_or_else(|| "That offer no longer applies.".to_string())?;
+
+        if offer.kind == "coding" {
+            cfg.model_before_coding = Some(offer.from.clone());
+        } else {
+            cfg.model_before_coding = None;
+        }
+        cfg.model = offer.to.clone();
+        config::save(&cfg)?;
+
+        let _ = ollama::unload(&offer.from);
+        ollama::load(&offer.to, cfg.num_ctx).map(|d| d.as_secs_f64()).map_err(|e| {
+            format!("Switched to {}, but loading it failed: {e}. It will load with the next question.", offer.to)
+        })
+    })
+    .await
+    .map_err(|e| format!("switching models failed: {e}"))?
 }
 
 #[derive(Serialize)]
@@ -1209,6 +1328,8 @@ pub fn run() {
             load_model,
             unload_model,
             set_model,
+            model_offer,
+            accept_model_offer,
             system_accent,
             recent_folders,
             use_recent_folder,
@@ -1364,5 +1485,81 @@ mod tests {
         // A read of a file called "cargo check" must not run on a check's approval.
         let mut slot = check_ticket();
         assert!(redeem_in(&mut slot, "t", "read_file", "cargo check").is_err());
+    }
+
+    // ── model_offer ─────────────────────────────────────────────────────────
+
+    const VISION: &str = "qwen3-vl:8b-instruct-q4_K_M";
+    const CODER: &str = "qwen3-coder:30b";
+
+    fn cfg_with_folder() -> config::Config {
+        config::Config { model: VISION.into(), workspace: Some(r"C:\work\demo".into()), ..Default::default() }
+    }
+
+    #[test]
+    fn a_folder_on_the_default_model_offers_the_coder() {
+        let cfg = cfg_with_folder();
+        assert_eq!(
+            offer_for(&cfg, &[VISION.into(), CODER.into()]),
+            Some(ModelOffer { kind: "coding", from: VISION.into(), to: CODER.into() })
+        );
+    }
+
+    #[test]
+    fn no_offer_when_the_coder_is_not_installed() {
+        let cfg = cfg_with_folder();
+        assert_eq!(offer_for(&cfg, &[VISION.into()]), None);
+    }
+
+    #[test]
+    fn no_offer_when_already_on_the_coder_with_a_folder() {
+        let mut cfg = cfg_with_folder();
+        cfg.model = CODER.into();
+        assert_eq!(offer_for(&cfg, &[VISION.into(), CODER.into()]), None);
+    }
+
+    #[test]
+    fn an_empty_coding_model_turns_the_offer_off() {
+        let mut cfg = cfg_with_folder();
+        cfg.coding_model = String::new();
+        assert_eq!(offer_for(&cfg, &[VISION.into(), CODER.into()]), None);
+    }
+
+    #[test]
+    fn clearing_the_folder_while_on_the_coder_offers_to_switch_back() {
+        let cfg =
+            config::Config { model: CODER.into(), model_before_coding: Some(VISION.into()), ..Default::default() };
+        assert_eq!(
+            offer_for(&cfg, &[VISION.into(), CODER.into()]),
+            Some(ModelOffer { kind: "back", from: CODER.into(), to: VISION.into() })
+        );
+    }
+
+    #[test]
+    fn no_switch_back_when_the_previous_model_is_gone() {
+        let cfg =
+            config::Config { model: CODER.into(), model_before_coding: Some(VISION.into()), ..Default::default() };
+        assert_eq!(offer_for(&cfg, &[CODER.into()]), None);
+    }
+
+    #[test]
+    fn no_switch_back_with_nothing_to_switch_back_to() {
+        let cfg = config::Config { model: CODER.into(), model_before_coding: None, ..Default::default() };
+        assert_eq!(offer_for(&cfg, &[VISION.into(), CODER.into()]), None);
+    }
+
+    #[test]
+    fn no_switch_back_while_a_folder_is_still_open() {
+        let mut cfg = cfg_with_folder();
+        cfg.model = CODER.into();
+        cfg.model_before_coding = Some(VISION.into());
+        assert_eq!(offer_for(&cfg, &[VISION.into(), CODER.into()]), None);
+    }
+
+    #[test]
+    fn a_bare_tag_and_its_latest_are_the_same_model() {
+        assert!(same_tag("llama3.1", "llama3.1:latest"));
+        assert!(same_tag("llama3.1:latest", "llama3.1"));
+        assert!(!same_tag("llama3.1", "llama3.1:8b"));
     }
 }

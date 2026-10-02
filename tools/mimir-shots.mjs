@@ -24,6 +24,7 @@ const STATES = {
   edit: "?preview=edit",
   check: "?preview=check",
   find: "?preview=find",
+  offer: "?preview=offer",
   empty: "?preview=empty",
   appearance: "?preview=appearance",
   models: "?preview=models",

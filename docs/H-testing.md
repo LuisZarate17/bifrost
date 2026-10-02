@@ -88,7 +88,27 @@ person sees.
 
 ---
 
-*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. H5 onward add
+## 3 — Switching to the coding model (H4b)
+
+`node tools/e2e/mimir-switch.mjs` covers the offer appearing, declining it, switching for real —
+with `/api/ps` and the config checked against each other — the coder answering a tool question,
+and the switch back. What it cannot do is press Heimdall's hotkey, so these need a person.
+
+- [ ] **Heimdall refuses while the coder is current.** With `qwen3-coder:30b` loaded as the current
+      model (switch to it from a folder, or by hand in the Switchboard), press Heimdall's hotkey.
+      **Expect:** it refuses *before* capturing the screen, and names `qwen3-coder:30b` as the
+      reason — no screenshot is taken.
+- [ ] **Heimdall sees the screen again after switching back.** Clear the folder, accept the
+      switch-back offer, and once it says ready, press Heimdall's hotkey again. **Expect:** a normal
+      answer about whatever is on screen.
+- [ ] **A manual pick ends the switch-back story.** While on the coder with a folder open, open the
+      Switchboard and pick a different model by hand (not the vision default). Close the dialog,
+      then clear the folder. **Expect:** no switch-back offer — picking a model yourself is the last
+      word on what "back" would even mean.
+
+---
+
+*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. H6 onward add
 sections here as they are built.*
 
 ## After this

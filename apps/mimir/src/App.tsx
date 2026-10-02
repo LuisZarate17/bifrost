@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { Answer } from "@odin/ui";
 import { Switchboard, GpuMeter, splitName, type ModelInfo, type CardState } from "./Switchboard";
+import { ModelOfferBar, type ModelOffer } from "./ModelOfferBar";
 import { Conversations, type Summary } from "./Conversations";
 import {
   readFiles, storeImages, loadImages, foldText, attachmentTokens, humanBytes,
@@ -362,17 +363,43 @@ function App() {
     refreshRecent();
   }, [refreshRecent]);
 
+  // What to offer switching to, now that the folder just changed — set from
+  // `chooseFolder`, `reopenFolder` and `clearFolder` only, never on app start.
+  // `key` is kind + folder path, so "Not now"/"Keep" can be remembered for the
+  // rest of the session without a second state field to keep in step.
+  const [offerState, setOfferState] = useState<{ offer: ModelOffer; key: string } | null>(null);
+  const dismissedOffers = useRef<Set<string>>(new Set());
+
+  // Which folder change asked last. Choosing two folders in quick succession
+  // must not let the first answer land after the second and replace it.
+  const offerAsk = useRef(0);
+  const checkModelOffer = useCallback(async (folderPath: string) => {
+    const ask = ++offerAsk.current;
+    try {
+      const o = await invoke<ModelOffer | null>("model_offer");
+      if (ask !== offerAsk.current) return;
+      const key = o ? `${o.kind}|${folderPath}` : "";
+      // A new folder choice replaces any offer already showing.
+      setOfferState(o && !dismissedOffers.current.has(key) ? { offer: o, key } : null);
+    } catch {
+      if (ask === offerAsk.current) setOfferState(null);
+    }
+  }, []);
+
   const chooseFolder = useCallback(async () => {
     try {
       // Opens the system's own folder picker. Cancelling returns null and leaves
       // the current folder as it was.
       const picked = await invoke<Folder | null>("choose_project_folder");
-      if (picked) setFolder(picked);
+      if (picked) {
+        setFolder(picked);
+        void checkModelOffer(picked.path);
+      }
       refreshRecent();
     } catch (e) {
       setError(String(e));
     }
-  }, [refreshRecent]);
+  }, [refreshRecent, checkModelOffer]);
 
   const reopenFolder = useCallback(
     async (index: number) => {
@@ -383,21 +410,24 @@ function App() {
         setToolsOn(true);
         refreshRecent();
         composerRef.current?.focus();
+        void checkModelOffer(f.path);
       } catch (e) {
         setError(String(e));
       }
     },
-    [refreshRecent],
+    [refreshRecent, checkModelOffer],
   );
 
   const clearFolder = useCallback(async () => {
+    const closedPath = folder?.path ?? "";
     try {
       await invoke("clear_project_folder");
       setFolder(null);
+      void checkModelOffer(closedPath);
     } catch (e) {
       setError(String(e));
     }
-  }, []);
+  }, [folder, checkModelOffer]);
 
   // The check commands this folder could use, as Rust detected them. Only ever
   // shown and chosen by position: no command typed here can reach Rust.
@@ -455,8 +485,15 @@ function App() {
         setToolsOn(true);
         setFolder({ path: "C:\\Users\\you\\source\\repos\\demo", name: "demo", check: "cargo check" });
       }
+      if (mode === "offer") {
+        // As if a folder had just been chosen — the offer bar does not show on
+        // app start, so previewing it has to go through the same path.
+        setToolsOn(true);
+        setFolder({ path: "C:\\Users\\you\\source\\repos\\demo", name: "demo" });
+        void checkModelOffer("C:\\Users\\you\\source\\repos\\demo");
+      }
     });
-  }, []);
+  }, [checkModelOffer]);
 
   /**
    * Save the thread, and remember which file it went to.
@@ -1386,6 +1423,23 @@ function App() {
                   <I.X />
                 </button>
               </div>
+            )}
+
+            {offerState && (
+              <ModelOfferBar
+                // A new offer is a new bar: no "ready" note or hide timer
+                // carries over from the one before it.
+                key={offerState.key}
+                offer={offerState.offer}
+                busy={streaming || loadingModels}
+                onDismiss={() => {
+                  dismissedOffers.current.add(offerState.key);
+                  setOfferState(null);
+                }}
+                onHide={() => setOfferState(null)}
+                onSwitched={(tag) => setModel(tag)}
+                onRefresh={refreshModels}
+              />
             )}
 
             <div

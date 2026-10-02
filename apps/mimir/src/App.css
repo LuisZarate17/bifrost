@@ -318,6 +318,19 @@ kbd {
   border-color: var(--danger-line);
   color: var(--danger);
 }
+/* The one button in the model-offer bar that commits to a switch — the accent,
+   the same way `.send` is, and for the same reason: it is the main action in
+   the row, not a destructive one. */
+.btn.accent {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+.btn.accent:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.btn.accent:active:not(:disabled) {
+  background: var(--accent-press);
+}
 
 .dot {
   flex: none;
@@ -1359,6 +1372,39 @@ kbd {
 }
 .banner .icon-btn {
   color: inherit;
+}
+
+/* The offer to switch models, shown above the composer when the project
+   folder changes. Styled like `.banner` but neutral — this is not an error,
+   it is a question — with the accent reserved for the one button that
+   commits to switching. */
+.model-offer {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 9px 10px 9px 14px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-card);
+  background: var(--bg-raised);
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.model-offer > svg {
+  flex: none;
+  margin-top: 3px;
+  color: var(--text-3);
+}
+.model-offer-text {
+  flex: 1;
+  min-width: 0;
+}
+.model-offer-text strong {
+  color: var(--text);
+}
+.model-offer .btn {
+  flex: none;
 }
 
 .composer {

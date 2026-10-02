@@ -36,7 +36,8 @@ machine. For when you have an afternoon.
 Mímir and Heimdall, and what should happen. `node tools/practice.mjs` builds the folder it uses.
 
 **[H-testing.md](H-testing.md)** — Stage H's checks, the same way: the check command's chip and
-card, Stop, finding code. Grows a section per chunk that adds something you can press.
+card, Stop, finding code, switching to the coding model. Grows a section per chunk that adds
+something you can press.
 
 **[PENDING-CHECKS.md](PENDING-CHECKS.md)** — things no tool call can verify, because they need a
 keypress, a hover, or a second machine. Where "built but never actually pressed" is tracked.
@@ -53,7 +54,8 @@ records of what happened.
 - **[STAGE-H.md](../stages/STAGE-H.md)** — Mímir learns to find code, check its work and run
   longer: ten chunks in four phases, each gated on a measurement. H1 (the check command), H2
   (finding code) and H3 (the benchmark of real work) built; H4 measured three coding models;
-  Gate 2 chose Qwen3-Coder, once its tool-call format is recovered — that chunk next.
+  Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5
+  (the approval policy) next.
 
 ---
 
@@ -149,7 +151,8 @@ package from G1, so **one renderer means one security review rather than two tha
 ### `crates/bench/` and `evals/` — measuring models
 
 - **Run model × image × prompt** — `crates/bench/src/main.rs`
-- **Can the model call tools?** — `crates/bench/src/bin/toolprobe.rs` (G0)
+- **Can the model call tools?** — `crates/bench/src/bin/toolprobe.rs` (G0); `--recover` scores
+  the app's path, malformed-call recovery included (H4a)
 - **Can the model edit files correctly?** — `crates/bench/src/bin/editprobe.rs` (G7), scored byte
   for byte on CRLF files: `cargo run -p bench --bin editprobe`
 - **Does the check help it fix what it breaks?** — `crates/bench/src/bin/fixprobe.rs` (H1): eight
@@ -235,7 +238,12 @@ Finished chunks: what was built, what was measured, what the measurement changed
   together they mostly do not. H4's baseline
 - **[H4](results/H4-results.md)** — three coding models on that benchmark. **Qwen3-Coder 30B-A3B
   52% and 5× faster, Devstral Small 2 50%, gpt-oss 23%**, against 12%. None but gpt-oss fits the
-  card, and all are text-only — Heimdall goes blind while one is loaded. The choice is Gate 2's
+  card, and all are text-only — Heimdall goes blind while one is loaded. Gate 2 chose Qwen3-Coder
+- **[H4a](results/H4a-results.md)** — reading Qwen3-Coder's own tool-call layout, which Ollama's
+  parser loses whenever an edit contains `</tool_call>`. **28/48 with no errors**, against 25/48
+  and 8 errors; the prompt it re-asks with matches Ollama's token for token
+- **[H4b](results/H4b-results.md)** — choosing a folder offers the coding model, clearing it offers
+  the way back. Found two real bugs in its own e2e before passing 14/14
 
 **Stage F — keep testing models**
 
