@@ -35,6 +35,9 @@ machine. For when you have an afternoon.
 **[G-testing.md](G-testing.md)** — Stage G's checks as a worksheet: exact text to type into
 Mímir and Heimdall, and what should happen. `node tools/practice.mjs` builds the folder it uses.
 
+**[H-testing.md](H-testing.md)** — Stage H's checks, the same way: the check command's chip and
+card, Stop, finding code. Grows a section per chunk that adds something you can press.
+
 **[PENDING-CHECKS.md](PENDING-CHECKS.md)** — things no tool call can verify, because they need a
 keypress, a hover, or a second machine. Where "built but never actually pressed" is tracked.
 
@@ -49,7 +52,8 @@ records of what happened.
   model. Built through G7 (editing files); the testing round is open.
 - **[STAGE-H.md](../stages/STAGE-H.md)** — Mímir learns to find code, check its work and run
   longer: ten chunks in four phases, each gated on a measurement. H1 (the check command), H2
-  (finding code) and H3 (the benchmark of real work) built; Gate 1 passed; H4 next.
+  (finding code) and H3 (the benchmark of real work) built; H4 measured three coding models;
+  Gate 2 chose Qwen3-Coder, once its tool-call format is recovered — that chunk next.
 
 ---
 
@@ -229,6 +233,9 @@ Finished chunks: what was built, what was measured, what the measurement changed
 - **[H3](results/H3-results.md)** — a benchmark of real work: sixteen tasks on odin's own code,
   scored by its hidden tests. **The current model finishes 12%** — every single move works, strung
   together they mostly do not. H4's baseline
+- **[H4](results/H4-results.md)** — three coding models on that benchmark. **Qwen3-Coder 30B-A3B
+  52% and 5× faster, Devstral Small 2 50%, gpt-oss 23%**, against 12%. None but gpt-oss fits the
+  card, and all are text-only — Heimdall goes blind while one is loaded. The choice is Gate 2's
 
 **Stage F — keep testing models**
 

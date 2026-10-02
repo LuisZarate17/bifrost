@@ -3,7 +3,8 @@
 Things built here that no tool call can verify — they need a keypress, a hover, or a second
 machine.
 
-**To work through Stage G's checks, use [G-testing.md](G-testing.md)** — the same checks as a
+**To work through Stage H's checks, use [H-testing.md](H-testing.md)**; Stage G's are in
+**[G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
 ## Open — H2, finding code, 2026-09-29
@@ -16,7 +17,7 @@ a walk. End to end: a search card names what it looks for and what it finds reac
 declined listing reads nothing. **What needs a person** is how the cards read.
 
 - [ ] **The cards read well** — a search, a listing, patterns the right way round.
-      [G-testing.md §9](G-testing.md)
+      [H-testing.md §2](H-testing.md)
 - [ ] **A big folder stays stoppable.** Choose a large folder (your `source\repos`), ask for every
       file, allow it, press **Esc** — the card says *Stopped*, the window stays responsive.
 
@@ -31,7 +32,7 @@ check, in a build that passes. `mimir-edit.mjs` still 16/16. **What it skips is 
 operates** — the picker on the chip, and whether a window flashes.
 
 - [ ] **Choose the check from the chip.** Only detected commands are offered, nothing can be typed,
-      and the choice is remembered per folder. [G-testing.md §8](G-testing.md)
+      and the choice is remembered per folder. [H-testing.md §1](H-testing.md)
 - [ ] **No console window flashes** while a check runs.
 - [ ] **Stop with Esc** during a real `cargo check` leaves no `cargo.exe` or `rustc.exe` behind.
 

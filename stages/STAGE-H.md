@@ -79,7 +79,7 @@ benchmark run with it on and off, and stays only if the pass rate holds.
 - an **independent review** of the diff against the chunk's guarantees, by someone who did not
   write it; fix what it finds and re-run the checks
 - what needs a person goes into [PENDING-CHECKS.md](../docs/PENDING-CHECKS.md) and the
-  [G-testing.md](../docs/G-testing.md) worksheet
+  [H-testing.md](../docs/H-testing.md) worksheet
 - a write-up in `docs/results/H<n>-results.md`, in G7-results.md's shape
 
 Probes use editprobe's scheme — **3 runs at the app's own sampling plus 1 at temperature 0** —
@@ -224,6 +224,11 @@ above ten.
 ---
 
 ## H4 — Baseline, then the model decision
+
+> **Measured 2026-10-01** — [H4-results.md](../docs/results/H4-results.md). Bar set first: ≥10/48.
+> Baseline 6/48 · Devstral Small 2 24/48 · **Qwen3-Coder 30B-A3B 25/48, 5× faster** · gpt-oss
+> 11/48. All three cleared; none fits the card but gpt-oss; all are text-only. **Gate 2, decided
+> 2026-10-01: Qwen3-Coder** — once a recovery path for its XML tool calls is built and measured.
 
 **Do:** taskprobe on the current model for a baseline. For each coding candidate, first measure its
 VRAM at 16k and 32k the way `config.rs`'s table was made, and run toolprobe. The recovery for

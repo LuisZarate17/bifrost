@@ -25,7 +25,7 @@ What the practice folder holds:
 | `shopping.md` | A heading and three items: apples, bread, milk |
 | `facts.txt` | One line: *The practice code is 4417-AMBER.* No model can know that, so an answer quoting it proves the file was read |
 | `refuse-me.zip` | An empty zip. It exists to be refused |
-| `Cargo.toml` | Makes `greet.rs` a project `cargo check` can build, so Mímir offers a check here (section 8). Its own `[workspace]`, so cargo does not attach it to odin |
+| `Cargo.toml` | Makes `greet.rs` a project `cargo check` can build, so Mímir offers a check here ([H-testing.md](H-testing.md)). Its own `[workspace]`, so cargo does not attach it to odin |
 
 ---
 
@@ -192,60 +192,6 @@ Click the bottom of the sidebar, where the loaded model and the GPU meter are.
 **Optional.** Fill Mímir's context by pasting a long document several times. **Expect:**
 *The last request left out n earlier turns to fit the context. They are still saved.* in the
 thread, rather than the chat quietly going strange.
-
----
-
-## 8 — The check command (H1)
-
-Added at H1 ([STAGE-H.md](../stages/STAGE-H.md)). Tools on, `practice` chosen as the folder.
-`node tools/e2e/mimir-check.mjs` already covers approval, denial, output, failure, Stop and the fix
-loop — these are the parts a person operates, and how it feels.
-
-- [ ] **The chip.** With `practice` chosen, a dashed chip reading **No check** appears next to the
-      folder. Open it. **Expect:** *No check*, `cargo check`, `cargo test` — nothing else, and no
-      way to type a command. Pick `cargo check`: the chip turns solid.
-- [ ] **A folder without a manifest has no chip.** Pick any folder with no `Cargo.toml` or
-      `package.json`. **Expect:** no check chip at all. Pick `practice` again: it still says
-      `cargo check` — the choice is remembered per folder.
-- [ ] **Run it.** Type: `Run the check.`
-      **Expect:** a **Run check** card naming `cargo check`, waiting. **Run once** →
-      *Running* → **Passed**, and **Show output** shows cargo's own lines.
-- [ ] **A broken build.** In VS Code, delete the `;` at the end of line 6 of `greet.rs` and save.
-      Type: `Run the check and fix what it reports.` Allow what it asks for.
-      **Expect:** a **Failed** check (red), then an **Edit file** card putting the `;` back, then a
-      **Passed** check. Run `node tools/practice.mjs` afterwards.
-- [ ] **Stop a check.** Type `Run the check.`, click **Run once**, and press **Esc** at once.
-      **Expect:** the card says **Stopped**, and Task Manager shows no `cargo.exe` or `rustc.exe`
-      left behind. (A warm `cargo check` is fast — if it passes first, that is fine; the e2e test
-      proves Stop against a command that runs for a minute.)
-- [ ] **No window flashes.** While any check runs, **Expect:** no console window appears, not even
-      for a moment.
-- [ ] **A protected file.** Type: `Create a file rust-toolchain.toml containing [toolchain]`.
-      **Expect:** no card to approve; the thread says *Couldn't create rust-toolchain.toml — that
-      file decides what the check runs*, and nothing is created. (A toolchain file can point cargo
-      at any program, which would make the check run something nobody chose.)
-
----
-
-## 9 — Finding code (H2)
-
-Added at H2. Tools on, `practice` chosen as the folder. `node tools/e2e/mimir-check.mjs` covers a
-search allowed and a listing declined; these are what a person sees.
-
-- [ ] **Ask where something is.** Type: `Where is the greet function?`
-      **Expect:** a **Search** card (magnifier) or a **List files** card, showing what it will look
-      for — e.g. `"greet"` — waiting for **Allow once**. Allowed, its pill says what it found
-      (`2 matches for "greet" in 1 file`), and **Show what was found** lists `greet.rs:1:` and
-      `greet.rs:6:`.
-- [ ] **Patterns read the right way round.** A card for `*.rs` shows `*.rs`, not `rs.*`.
-- [ ] **Deny a search.** Type `Search the project for "milk".`, click **Deny**. **Expect:** *You
-      declined. Nothing was read, and the model was told.*
-- [ ] **Build output is not searched.** Run `cargo check` in `practice` once (so `target\` exists),
-      then type `List all the files in this project.` and allow it. **Expect:** no `target/` paths,
-      and no `.git`.
-- [ ] **Nothing outside.** Type `Use list_files with the pattern ../**`. **Expect:** no card to
-      approve; the thread says *Couldn't list files — that pattern reaches outside the project
-      folder. The model was told.* Nothing from `odin` above `practice` is listed.
 
 ---
 
