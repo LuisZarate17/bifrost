@@ -2,6 +2,7 @@
 //!
 //!   cargo run -p bench --bin toolprobe
 //!   cargo run -p bench --bin toolprobe -- --model llama3.1:8b
+//!   cargo run -p bench --bin toolprobe -- --recover
 //!
 //! **This gates G6.** If no local model can be trusted to call a tool when one is
 //! needed and to leave it alone when one is not, the tool-calling chunk does not
@@ -73,6 +74,9 @@ fn main() {
         Some(i) => args.get(i + 1).cloned().unwrap_or(cfg.model),
         None => cfg.model,
     };
+    // Default stays native so G0/H4 numbers stay comparable; --recover goes
+    // through the app's own path (native first, then the raw retry).
+    let recover = args.iter().any(|a| a == "--recover");
 
     let cases: Vec<Case> = vec![
         // ---- should call a tool -------------------------------------------
@@ -119,6 +123,7 @@ fn main() {
 
     println!("G0 — tool-call probe");
     println!("model:  {model}");
+    println!("path:   {}", if recover { "recover (the app's: native, then the raw retry)" } else { "native" });
     println!("ctx:    {}", cfg.num_ctx);
     println!("temp:   0 - a verdict that moves between runs is not a measurement");
     println!("cases:  {} ({} expect a call, {} expect none)\n",
@@ -128,12 +133,17 @@ fn main() {
     );
 
     let tools = tools();
-    let (mut correct, mut wrong_tool, mut bad_args, mut missed, mut spurious, mut errors) =
-        (0, 0, 0, 0, 0, 0);
+    let (mut correct, mut wrong_tool, mut bad_args, mut missed, mut spurious, mut errors, mut recovered) =
+        (0, 0, 0, 0, 0, 0, 0);
 
     for (i, case) in cases.iter().enumerate() {
         let messages = [Message::user(case.prompt)];
-        let reply = match chat::chat(&model, &messages, &tools, Options::measured(cfg.num_ctx)) {
+        let outcome = if recover {
+            chat::chat_tools(&model, &messages, &tools, Options::measured(cfg.num_ctx))
+        } else {
+            chat::chat(&model, &messages, &tools, Options::measured(cfg.num_ctx))
+        };
+        let reply = match outcome {
             Ok(r) => r,
             Err(e) => {
                 errors += 1;
@@ -141,6 +151,9 @@ fn main() {
                 continue;
             }
         };
+        if reply.recovered {
+            recovered += 1;
+        }
 
         let calls = reply.tool_calls();
         let got = calls.first();
@@ -186,6 +199,9 @@ fn main() {
     println!("  spurious call  {spurious}     <- the one that makes a model unusable");
     if errors > 0 {
         println!("  errors         {errors}");
+    }
+    if recovered > 0 {
+        println!("  recovered      {recovered}     <- needed the raw retry or a passed-through call read back out");
     }
     println!("\n  pass rate: {:.0}%", 100.0 * correct as f64 / total as f64);
 }

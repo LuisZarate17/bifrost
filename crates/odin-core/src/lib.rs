@@ -33,3 +33,4 @@ pub mod store;
 pub mod toolcall;
 pub mod tools;
 pub mod vram;
+pub mod xmlcall;

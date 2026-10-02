@@ -381,12 +381,29 @@ pub struct ModelDetail {
     pub family: String,
     pub parameter_size: String,
     pub quantization_level: String,
+    /// The word after `PARSER ` in the model's modelfile — `qwen3-coder` for
+    /// that model, `qwen3-vl-instruct` for the vision ones. Tells
+    /// [`crate::chat::chat_tools`] which tool-call layout the model writes,
+    /// since `family` alone does not: qwen3-coder's family is `qwen3moe`, the
+    /// same shape a family-only check would send down the wrong recovery path.
+    pub parser: Option<String>,
 }
 
 impl ModelDetail {
     pub fn has(&self, capability: &str) -> bool {
         self.capabilities.iter().any(|c| c == capability)
     }
+}
+
+/// The word after the first `PARSER ` line in a modelfile, or `None` if there
+/// is no such line. Pulled into its own function so it is testable without a
+/// running Ollama.
+fn parser_from_modelfile(modelfile: &str) -> Option<String> {
+    modelfile
+        .lines()
+        .find_map(|line| line.strip_prefix("PARSER "))
+        .map(|rest| rest.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Ask Ollama what a model can do.
@@ -404,6 +421,8 @@ pub fn show(tag: &str) -> Result<ModelDetail, String> {
         details: ModelDetails,
         #[serde(default)]
         model_info: serde_json::Map<String, serde_json::Value>,
+        #[serde(default)]
+        modelfile: String,
     }
 
     let response = client(SHORT_TIMEOUT)?
@@ -435,6 +454,7 @@ pub fn show(tag: &str) -> Result<ModelDetail, String> {
         family: shown.details.family,
         parameter_size: shown.details.parameter_size,
         quantization_level: shown.details.quantization_level,
+        parser: parser_from_modelfile(&shown.modelfile),
     })
 }
 
@@ -621,5 +641,16 @@ mod tests {
     fn no_expiry_is_not_a_pin() {
         assert!(!loaded(None).pinned());
         assert!(!loaded(Some("")).pinned());
+    }
+
+    #[test]
+    fn the_parser_line_names_the_tool_call_layout() {
+        assert_eq!(
+            parser_from_modelfile("FROM qwen3-coder:30b\nRENDERER qwen3-coder\nPARSER qwen3-coder\n"),
+            Some("qwen3-coder".to_string())
+        );
+        assert_eq!(parser_from_modelfile("PARSER qwen3-vl-instruct"), Some("qwen3-vl-instruct".to_string()));
+        assert_eq!(parser_from_modelfile("FROM llama3.1:8b\n"), None);
+        assert_eq!(parser_from_modelfile(""), None);
     }
 }

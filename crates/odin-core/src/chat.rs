@@ -192,9 +192,12 @@ pub struct ChatReply {
     pub ttft: Option<Duration>,
     pub prompt_eval_count: u32,
     pub eval_count: u32,
-    /// True when Ollama rejected a malformed tool call and the turn was
-    /// recovered through [`chat_tools`]'s raw retry. How often this fires is
-    /// how you know whether the recovery is still needed.
+    /// True when the turn needed [`chat_tools`]'s recovery: either Ollama
+    /// rejected a malformed call and the turn was re-asked through the raw
+    /// retry, or `/api/chat` answered normally but the call came back as plain
+    /// text (`qwen3-coder` writing it without the `<tool_call>` wrapper) and
+    /// had to be read out of the content instead. How often this fires is how
+    /// you know whether the recovery is still needed.
     pub recovered: bool,
 }
 
@@ -284,18 +287,48 @@ pub fn chat(
     })
 }
 
-/// [`chat`] with tools, plus a recovery for the one malformed call Ollama
-/// cannot parse — see [`crate::toolcall`] for the measured failure.
+/// Which tool-call layout a model writes, and so which recovery module
+/// applies to it. `qwen3-coder` is recognised by its own `PARSER` name, and
+/// first: its family, `qwen3moe`, starts with "qwen" too, so the family check
+/// alone would send it down the ChatML JSON path — a prompt layout it was not
+/// trained on. Every other Qwen family, `qwen3vl` included, keeps the ChatML
+/// recovery G7 verified, exactly as before.
+pub(crate) enum Layout {
+    Chatml,
+    Qwen3Coder,
+}
+
+fn layout(model: &str) -> Option<Layout> {
+    let detail = crate::ollama::show_cached(model).ok()?;
+    if detail.parser.as_deref() == Some("qwen3-coder") {
+        return Some(Layout::Qwen3Coder);
+    }
+    if detail.family.starts_with("qwen") {
+        return Some(Layout::Chatml);
+    }
+    None
+}
+
+/// [`chat`] with tools, plus two recoveries for calls Ollama's own parsing
+/// cannot read — see [`crate::toolcall`] and [`crate::xmlcall`] for the
+/// measured failures.
 ///
-/// **Native first, always.** That is the path G6 verified and the only one that
-/// carries images. Only when Ollama answers with a JSON parse error for the
-/// model's call — and only for a model that speaks Qwen's chat format — is the
-/// same turn asked again through raw `/api/generate`, where the text comes back
-/// untouched and [`crate::toolcall::parse_call`] can repair it.
+/// **Native first, always.** That is the path G6 verified and the only one
+/// that carries images. From there:
+///
+/// - If `/api/chat` answers with a parse error matching the model's layout,
+///   the same turn is asked again through raw `/api/generate`, where the text
+///   comes back untouched and the matching module's `extract_calls` can repair
+///   it — see [`recover`].
+/// - If `/api/chat` answers normally with no tool calls, but tools were
+///   offered and the content itself contains `<function=` — `qwen3-coder`
+///   passing a call through as plain text, H4 case 4 — the same content is
+///   read by [`crate::xmlcall::extract_calls`] instead of being handed to the
+///   user as if it were prose.
 ///
 /// A call that still cannot be read comes back as an [`INVALID_TOOL_CALL`], so
-/// the caller tells the model — which can try again — instead of the turn ending
-/// in an HTTP 500.
+/// the caller tells the model — which can try again — instead of the turn
+/// ending in an HTTP 500 or a call silently lost in the text.
 pub fn chat_tools(
     model: &str,
     messages: &[Message],
@@ -303,27 +336,74 @@ pub fn chat_tools(
     options: Options,
 ) -> Result<ChatReply, String> {
     match chat(model, messages, tools, options) {
-        Err(e) if is_malformed_call(&e) && speaks_chatml(model) => recover(model, messages, tools, options),
+        Err(e) if is_chatml_error(&e) => match layout(model) {
+            Some(Layout::Chatml) => recover(model, messages, tools, options, Layout::Chatml),
+            _ => Err(e),
+        },
+        Err(e) if is_xml_error(&e) => match layout(model) {
+            Some(Layout::Qwen3Coder) => recover(model, messages, tools, options, Layout::Qwen3Coder),
+            _ => Err(e),
+        },
+        Ok(reply) if reply.tool_calls().is_empty() && !tools.is_empty() && reply.message.content.contains("<function=") => {
+            match layout(model) {
+                Some(Layout::Qwen3Coder) => Ok(passed_through(reply, tools)),
+                _ => Ok(reply),
+            }
+        }
         other => other,
     }
 }
 
-/// Ollama's wording when the model's tool-call JSON would not parse. Matched
-/// narrowly on purpose: every other error should surface exactly as it was.
-fn is_malformed_call(err: &str) -> bool {
+/// A reply Ollama let through as plain text because the model wrote its call
+/// without the `<tool_call>` wrapper (H4 case 4). Read it the same way the raw
+/// retry would, and mark it recovered either way — so the next turn either has
+/// the call it asked for, or a reason it could not be read.
+fn passed_through(reply: ChatReply, tools: &[Tool]) -> ChatReply {
+    let (content, mut calls, failures) = crate::xmlcall::extract_calls(&reply.message.content, tools);
+    if calls.is_empty() {
+        if let Some(why) = failures.into_iter().next() {
+            calls.push(invalid_call(why));
+        } else {
+            return reply;
+        }
+    }
+    ChatReply {
+        message: Message {
+            role: reply.message.role,
+            content,
+            images: None,
+            tool_calls: Some(calls),
+            tool_name: None,
+        },
+        recovered: true,
+        ..reply
+    }
+}
+
+/// Ollama's wording when the model's tool-call JSON would not parse — the
+/// ChatML-layout failure [`crate::toolcall`] exists for.
+fn is_chatml_error(err: &str) -> bool {
     err.contains("returned 500")
         && ["invalid character", "unexpected end of JSON input", "cannot unmarshal"]
             .iter()
             .any(|m| err.contains(m))
 }
 
-/// Qwen-family models use the ChatML layout [`crate::toolcall::render_chatml`]
-/// writes. Anything else keeps Ollama's own error rather than getting a prompt
-/// in a format it was not trained on.
-fn speaks_chatml(model: &str) -> bool {
-    crate::ollama::show_cached(model)
-        .map(|d| d.family.starts_with("qwen"))
-        .unwrap_or(false)
+/// Ollama's wording when `qwen3-coder`'s XML-like call could not be parsed as
+/// XML. Two shapes, both measured:
+///
+/// - **`XML syntax error … unexpected EOF`** (H4): a value containing
+///   `</tool_call>` ends the call early, and what is left is not valid XML.
+/// - **A bare `{"error":"EOF"}`** (H4a's first benchmark run, 2026-10-01): Go's
+///   XML decoder says only `EOF` when the text between `<tool_call>` and
+///   `</tool_call>` holds no element at all — the model wrote the tags in its
+///   prose, before its real call. Matched as the whole error body, so an `EOF`
+///   inside some other message (a runner that died mid-request) stays an error.
+fn is_xml_error(err: &str) -> bool {
+    err.contains("returned 500")
+        && (err.contains("XML syntax error")
+            || err.contains("expected element type <function>")
+            || err.trim_end().ends_with(r#": {"error":"EOF"}"#))
 }
 
 #[derive(Deserialize)]
@@ -340,11 +420,24 @@ struct RawGenerate {
     eval_count: u32,
 }
 
-fn recover(model: &str, messages: &[Message], tools: &[Tool], options: Options) -> Result<ChatReply, String> {
-    let prompt = crate::toolcall::render_chatml(messages, tools);
+pub(crate) fn recover(
+    model: &str,
+    messages: &[Message],
+    tools: &[Tool],
+    options: Options,
+    layout: Layout,
+) -> Result<ChatReply, String> {
+    let prompt = match layout {
+        Layout::Chatml => crate::toolcall::render_chatml(messages, tools),
+        Layout::Qwen3Coder => crate::xmlcall::render(messages, tools),
+    };
+    let stop: &[&str] = match layout {
+        Layout::Chatml => &["<|im_end|>", "<|endoftext|>"],
+        Layout::Qwen3Coder => &["<|im_start|>", "<|im_end|>", "<|endoftext|>"],
+    };
     let mut opts = serde_json::json!({
         "num_ctx": options.num_ctx,
-        "stop": ["<|im_end|>", "<|endoftext|>"],
+        "stop": stop,
     });
     if let Some(t) = options.temperature {
         opts["temperature"] = serde_json::json!(t);
@@ -374,17 +467,17 @@ fn recover(model: &str, messages: &[Message], tools: &[Tool], options: Options) 
     let raw: RawGenerate =
         serde_json::from_str(&text).map_err(|e| format!("parsing /api/generate reply: {e}"))?;
 
-    let (content, mut calls, failures) = crate::toolcall::extract_calls(&raw.response, tools);
+    let (content, mut calls, failures) = match layout {
+        Layout::Chatml => crate::toolcall::extract_calls(&raw.response, tools),
+        Layout::Qwen3Coder => crate::xmlcall::extract_calls(&raw.response, tools),
+    };
+    // A failure beside a call that did parse is not reported: Mímir acts on a
+    // reply's first call only, so the call that parsed is what the model hears
+    // back about. Unchanged from the ChatML path before this layout existed.
     if calls.is_empty()
         && let Some(why) = failures.into_iter().next()
     {
-        calls.push(ToolCall {
-            id: None,
-            function: FunctionCall {
-                name: INVALID_TOOL_CALL.to_string(),
-                arguments: serde_json::json!({ "error": why }),
-            },
-        });
+        calls.push(invalid_call(why));
     }
 
     Ok(ChatReply {
@@ -408,6 +501,16 @@ fn recover(model: &str, messages: &[Message], tools: &[Tool], options: Options) 
 /// so the caller hands the reason back to the model rather than running
 /// anything.
 pub const INVALID_TOOL_CALL: &str = "invalid_tool_call";
+
+fn invalid_call(why: String) -> ToolCall {
+    ToolCall {
+        id: None,
+        function: FunctionCall {
+            name: INVALID_TOOL_CALL.to_string(),
+            arguments: serde_json::json!({ "error": why }),
+        },
+    }
+}
 
 /// One thing that arrived while the model was answering.
 pub enum StreamChunk<'a> {
@@ -576,5 +679,121 @@ mod tests {
             recovered: false,
         };
         assert!(reply.tool_calls().is_empty());
+    }
+
+    #[test]
+    fn the_xml_matcher_accepts_the_measured_h4_error_and_nothing_else() {
+        // Verbatim from H4 (docs/results/H4-results.md): b05/b06's long edits
+        // to toolcall.rs, which contains the literal text `</tool_call>`.
+        let h4 = r#"/api/chat returned 500 Internal Server Error: {"error":"XML syntax error on line 45: unexpected EOF"}"#;
+        assert!(is_xml_error(h4));
+        assert!(!is_chatml_error(h4));
+
+        let json_err = "/api/chat returned 500 Internal Server Error: invalid character '{' after object key:value pair";
+        assert!(is_chatml_error(json_err));
+        assert!(!is_xml_error(json_err));
+
+        assert!(!is_xml_error("/api/chat returned 404 Not Found: model not found"));
+    }
+
+    #[test]
+    fn a_bare_eof_is_an_xml_error_but_an_eof_inside_another_message_is_not() {
+        // Verbatim from H4a's first run, b05 run 1.
+        assert!(is_xml_error(r#"/api/chat returned 500 Internal Server Error: {"error":"EOF"}"#));
+        assert!(!is_chatml_error(r#"/api/chat returned 500 Internal Server Error: {"error":"EOF"}"#));
+        assert!(!is_xml_error(
+            r#"/api/chat returned 500 Internal Server Error: {"error":"POST predict: Post \"http://127.0.0.1:50000/completion\": EOF"}"#
+        ));
+    }
+
+    /// Proves our raw-prompt render is the exact prompt Ollama would have
+    /// built natively — by sending the same conversation both ways and checking
+    /// that the model was given the same number of prompt tokens and called the
+    /// same tools.
+    ///
+    /// **Not the same prose.** Measured 2026-10-01: the identical native request
+    /// sent three times answered with prose that diverged after ~30 tokens
+    /// between a cold and a warm prompt cache, while `prompt_eval_count` stayed
+    /// 490 every time. So the token count is the fidelity check, and the tools
+    /// called are the part that has to come out the same.
+    ///
+    /// `--ignored`: needs Ollama running locally with qwen3-coder:30b.
+    #[test]
+    #[ignore = "needs Ollama running with qwen3-coder:30b"]
+    fn the_raw_render_matches_what_ollama_builds_natively() {
+        let model = "qwen3-coder:30b";
+        let options = Options { num_ctx: 32768, temperature: Some(0.0) };
+
+        let call = |path: &str| ToolCall {
+            id: None,
+            function: FunctionCall { name: "read_file".into(), arguments: serde_json::json!({ "path": path }) },
+        };
+        let assistant = |content: &str, calls: Vec<ToolCall>| Message {
+            role: "assistant".into(),
+            content: content.into(),
+            images: None,
+            tool_calls: Some(calls),
+            tool_name: None,
+        };
+
+        let conversations: Vec<Vec<Message>> = vec![
+            vec![Message::user("In notes.txt, replace the word cat with dog.")],
+            vec![
+                Message::user("Read a.rs"),
+                assistant("", vec![call("a.rs")]),
+                Message::tool_result("read_file", "fn a() {}\n"),
+                Message::user("Now add a doc comment to it."),
+            ],
+            // The app's shape: a system prompt, words before the calls, two
+            // calls at once, their results back to back, and markup in a result.
+            vec![
+                Message::system("You are working in the folder C:\\work. Be brief."),
+                Message::user("Read a.rs and b.rs, then tell me which is longer."),
+                assistant("Reading both.", vec![call("a.rs"), call("b.rs")]),
+                Message::tool_result("read_file", "fn a() {}\n"),
+                Message::tool_result("read_file", "fn b() {\n    println!(\"<b> & </tool_call>\");\n}\n"),
+                Message::user("Which one is longer? Then replace b's println with a return of 1."),
+            ],
+        ];
+
+        for (i, messages) in conversations.into_iter().enumerate() {
+            let tools = odin_tools_for_live_test();
+            let native = chat(model, &messages, &tools, options).expect("native chat");
+            let recovered = recover(model, &messages, &tools, options, Layout::Qwen3Coder).expect("raw recover");
+
+            let names = |r: &ChatReply| r.tool_calls().iter().map(|c| c.function.name.clone()).collect::<Vec<_>>();
+            let args = |r: &ChatReply| r.tool_calls().iter().map(|c| c.function.arguments.clone()).collect::<Vec<_>>();
+
+            println!(
+                "conversation {i}: prompt tokens native {} / raw {}; calls native {:?} / raw {:?}",
+                native.prompt_eval_count,
+                recovered.prompt_eval_count,
+                names(&native),
+                names(&recovered),
+            );
+
+            // Arguments are printed, not compared: the third conversation's
+            // `new_text` came back as `1` one way and `return 1;` the other on
+            // 2026-10-01 — the same cache drift as the prose, with the prompt
+            // token counts equal (970, 1013, 1071).
+            if native.prompt_eval_count != recovered.prompt_eval_count || names(&native) != names(&recovered) {
+                panic!(
+                    "conversation {i}: native and recovered disagree\n\
+                     native:    {:?} {:?} {:?}\n\
+                     recovered: {:?} {:?} {:?}",
+                    names(&native),
+                    args(&native),
+                    native.message.content.trim(),
+                    names(&recovered),
+                    args(&recovered),
+                    recovered.message.content.trim(),
+                );
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn odin_tools_for_live_test() -> Vec<Tool> {
+        crate::tools::available(true, None)
     }
 }
