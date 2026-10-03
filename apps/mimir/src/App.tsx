@@ -302,6 +302,36 @@ function Thumbs({ names }: { names: string[] }) {
   );
 }
 
+/** What `ask_with_tools` answers with, whichever kind it is. */
+type ToolReply = (
+  | { kind: "answer"; content: string; evalCount: number }
+  | {
+      kind: "call";
+      call: { name: string; path: string; token: string; diff?: DiffView; changedBuildFiles?: string[] };
+      rawCall: Record<string, unknown>;
+    }
+  | { kind: "rejected"; name: string; path: string; error: string; rawCall: Record<string, unknown> }
+  | {
+      kind: "auto";
+      name: string;
+      path: string;
+      result: string;
+      ok: boolean;
+      stopped: boolean;
+      rawCall: Record<string, unknown>;
+    }
+  | { kind: "stuck"; error: string }
+) & {
+  // Every reply says what the prompt it answered cost, and which of the messages
+  // it was sent were set aside to fit (Rust did the setting aside;
+  // `setAsideMessages` is what they now are).
+  promptEvalCount: number;
+  promptChars: number;
+  setAside: number[];
+  setAsideMessages: Array<Record<string, unknown>>;
+  fits: boolean;
+};
+
 function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [draft, setDraft] = useState("");
@@ -336,6 +366,15 @@ function App() {
   // How many turns the last request left out. Display only - the thread and the
   // file still hold everything.
   const [dropped, setDropped] = useState(0);
+  // What this tool turn set aside to stay inside the context, and whether it
+  // still fits. Display only, and not saved with the thread: it describes the
+  // request that was sent, not the conversation.
+  const [squeeze, setSqueeze] = useState<{ aside: number; fits: boolean }>({ aside: 0, fits: true });
+  // The last measured characters-per-token of this conversation, carried from
+  // turn to turn: without it every turn's first round guessed a conservative
+  // ratio, could think a long chat was over budget, and set aside results it
+  // did not need to. Forgotten when another conversation opens.
+  const lastCalibration = useRef<{ chars: number; tokens: number } | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   /** Ollama's own count from the last reply — the honest number. */
   const [spent, setSpent] = useState(0);
@@ -722,6 +761,8 @@ function App() {
           }),
         );
         setDropped(0);
+        setSqueeze({ aside: 0, fits: true });
+        lastCalibration.current = null;
         convoIdRef.current = c.id;
         setConvoId(c.id);
         setSpent(0);
@@ -744,6 +785,8 @@ function App() {
     convoIdRef.current = null;
     setConvoId(null);
     setDropped(0);
+    setSqueeze({ aside: 0, fits: true });
+    lastCalibration.current = null;
     setSpent(0);
     setStats("");
     setError("");
@@ -898,6 +941,10 @@ function App() {
   const askWithTools = useCallback(
     async (history: Array<Record<string, unknown>>, live: () => boolean) => {
       let convo = [...history];
+      // The previous round's own numbers, so the next round's budget counts
+      // tokens from what Ollama measured instead of guessing a ratio.
+      let calibration: { chars: number; tokens: number } | null = lastCalibration.current;
+      let setAside = 0;
       // The thread this turn belongs to. Once Stop has freed the window,
       // another conversation can be opened in its place.
       const gen = threadGen.current;
@@ -908,25 +955,26 @@ function App() {
         // Stopped: a tool round is not streamed, so it cannot be cut short, but
         // nothing after the stop is shown or acted on.
         if (!live()) return;
-        const out = await invoke<
-          | { kind: "answer"; content: string; promptEvalCount: number; evalCount: number }
-          | {
-              kind: "call";
-              call: { name: string; path: string; token: string; diff?: DiffView; changedBuildFiles?: string[] };
-              rawCall: Record<string, unknown>;
-            }
-          | { kind: "rejected"; name: string; path: string; error: string; rawCall: Record<string, unknown> }
-          | {
-              kind: "auto";
-              name: string;
-              path: string;
-              result: string;
-              ok: boolean;
-              stopped: boolean;
-              rawCall: Record<string, unknown>;
-            }
-          | { kind: "stuck"; error: string }
-        >("ask_with_tools", { messages: convo, model });
+        const out: ToolReply = await invoke<ToolReply>("ask_with_tools", { messages: convo, model, calibration });
+        // `convo` must end up exactly what was sent, or the next round's prefix
+        // differs and Ollama's prompt cache is lost.
+        out.setAside.forEach((at, k) => {
+          convo[at] = out.setAsideMessages[k];
+        });
+        setAside += out.setAside.length;
+        // Only for the thread this turn belongs to: after Stop another
+        // conversation can be open, and its meter is not this turn's.
+        if (threadGen.current === gen) {
+          if (out.promptEvalCount > 0) {
+            calibration = { chars: out.promptChars, tokens: out.promptEvalCount };
+            lastCalibration.current = calibration;
+            setSpent(out.promptEvalCount);
+          }
+          // Every round, so a round that did not fit and a later one that does
+          // (the first round guesses; the next is measured) clears the warning.
+          setSqueeze({ aside: setAside, fits: out.fits });
+        }
+
         // An automatic call has already run by the time it comes back, so Stop
         // pressed meanwhile still gets its card — the branch below shows and
         // saves it, and sends nothing on — as long as this thread is on screen.
@@ -946,7 +994,6 @@ function App() {
             entriesRef.current = next;
             return next;
           });
-          setSpent(out.promptEvalCount);
           setStats(`${out.promptEvalCount} in · ${out.evalCount} out · tool turn`);
           return;
         }
@@ -1162,6 +1209,7 @@ function App() {
     // What this request can afford. The thread itself keeps everything.
     const { from, dropped: leftOut } = planSend(withUser, limit);
     setDropped(leftOut);
+    setSqueeze({ aside: 0, fits: true });
     const sendable = withUser.slice(from);
 
     // The assistant turn is appended empty and filled by the stream, so the
@@ -1646,6 +1694,17 @@ function App() {
                     {turnLine(i)}
                   </Fragment>
                 ))}
+                {squeeze.aside > 0 && (
+                  <p className="dropped">
+                    Set aside {squeeze.aside} earlier {squeeze.aside === 1 ? "result" : "results"} to fit
+                    the model's context
+                  </p>
+                )}
+                {!squeeze.fits && (
+                  <p className="dropped warn">
+                    This turn no longer fits the model's context — start a new chat, or ask about less at once.
+                  </p>
+                )}
               </>
             )}
           </div>

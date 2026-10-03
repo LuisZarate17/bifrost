@@ -24,7 +24,7 @@ use std::path::Path;
 
 use odin_core::chat::{self, Message, Options, Tool, ToolCall};
 use odin_core::edit::{self, Workspace};
-use odin_core::{check, search};
+use odin_core::{check, compact, search};
 use odin_core::tools::{self, Request};
 
 /// How tool calls travel. **native**: Ollama parses them, and a call it cannot
@@ -64,6 +64,10 @@ pub struct Setup<'a> {
     /// answer exists elsewhere on disk — the task probe's worktree sits beside
     /// the repo holding the reference solution — a read must not reach it.
     pub confine_reads: bool,
+    /// Set earlier results aside before each request, as the app does from H7
+    /// (`odin_core::compact`). Off measures the loop as it was: the whole
+    /// conversation sent every round, and Ollama's cut when it overflows.
+    pub compact: bool,
 }
 
 /// One call, run.
@@ -209,6 +213,15 @@ pub struct Run {
     /// escape-heavy file — the model wrote one edit for ever. A result about
     /// the model, not about Ollama, so a probe scores it as a fail.
     pub runaway: bool,
+    /// Ollama's `prompt_eval_count` for each request, in order.
+    pub prompt_tokens: Vec<u32>,
+    /// Results and long arguments set aside over the run (`Setup::compact`).
+    pub set_aside: usize,
+    /// Rounds where the prompt came back **smaller** than the round before while
+    /// nothing had been set aside: inside a turn the prompt only grows, so a drop
+    /// means Ollama cut it to fit `num_ctx` — measured at H7 to keep the system
+    /// message and the tail and lose the user's request.
+    pub truncated: usize,
 }
 
 /// A request that failed this close to `chat`'s five-minute limit was cut off
@@ -236,9 +249,23 @@ pub fn run_loop(
     s: &Setup,
 ) -> Run {
     let mut run = Run { hit_bound: true, ..Run::default() };
+    // The previous round's characters sent and tokens counted, which is how the
+    // budget learns this model's characters per token, as the app's does.
+    let mut calibration: Option<(u64, u32)> = None;
 
     for _ in 0..bound {
         run.rounds += 1;
+        let mut aside_now = 0;
+        if s.compact {
+            let plan = compact::compact(messages, offered, &compact::Budget::new(opts.num_ctx, calibration));
+            for &i in &plan.set_aside {
+                let call = i.checked_sub(1).and_then(|p| messages[p].tool_calls.as_deref()?.first().cloned());
+                compact::set_aside(&mut messages[i], call.as_ref());
+            }
+            aside_now = plan.set_aside.len();
+            run.set_aside += aside_now;
+        }
+        let sent_chars = compact::prompt_chars(messages, offered);
         let asked = std::time::Instant::now();
         let sent = match transport {
             Transport::Native => chat::chat(model, messages, offered, opts),
@@ -253,6 +280,18 @@ pub fn run_loop(
                 return run;
             }
         };
+        // A count of 0 is a reply that did not report one — not a prompt of no
+        // tokens — so it neither counts as a cut nor calibrates anything.
+        if reply.prompt_eval_count > 0 {
+            if let Some(&before) = run.prompt_tokens.last()
+                && reply.prompt_eval_count < before
+                && aside_now == 0
+            {
+                run.truncated += 1;
+            }
+            run.prompt_tokens.push(reply.prompt_eval_count);
+            calibration = Some((sent_chars, reply.prompt_eval_count));
+        }
         if reply.recovered {
             run.recovered += 1;
             run.log.push("(ollama rejected a malformed call; recovered through the raw retry)".into());
@@ -335,7 +374,7 @@ mod tests {
 ").unwrap();
         let ws = Workspace::open(&tree).unwrap();
         let backups = base.join("backups");
-        let setup = Setup { ws: &ws, backups: &backups, check: None, confine_reads: true };
+        let setup = Setup { ws: &ws, backups: &backups, check: None, confine_reads: true, compact: true };
         let asks = |c: ToolCall| {
             let r = execute(&c, &setup);
             (r.asked, r.asked_every_call)

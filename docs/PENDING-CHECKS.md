@@ -7,6 +7,25 @@ machine.
 **[G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
+## Open — H7, a context budget inside the turn, 2026-10-02
+
+**Already proven mechanically.** Unit tests on `odin_core::compact`: nothing set aside under
+budget; oldest first and only as many as needed; the system prompt and the user's request never;
+the newest result kept, and the newest read of each file only set aside once nothing else is left
+(two files read once each: the first goes, as measured); a long `create_file` argument stubbed; a
+stub never set aside again (one-way); `fits` false when only protected messages remain; the
+calibration clamp; and that the count includes call arguments and the tool schemas. `cargo test -p
+mimir` checks the index mapping back to the webview's numbering. The probe's `--compact on|off`
+measures it against the model. **What needs a person** is whether the meter moves during a turn,
+how the notes read, and that the answer still addresses the request.
+
+- [ ] **A turn that reads many large files** moves the context meter while it runs, and past about
+      75% shows **Set aside N earlier results to fit the model's context**. The answer still
+      addresses the request. [H-testing.md §6](H-testing.md)
+- [ ] **A turn that cannot fit** says so: **This turn no longer fits the model's context — start a
+      new chat, or ask about less at once.**
+- [ ] **The notes go with the next message** and are not saved with the thread.
+
 ## Open — H6, undo a whole turn, 2026-10-02
 
 **Already proven mechanically.** Unit tests on `edit::undo_turn`: two files, one file edited twice,

@@ -343,6 +343,11 @@ The policy works in daily use.
 
 ## H7 — A context budget inside the turn
 
+> **Built 2026-10-02** — [H7-results.md](../docs/results/H7-results.md). Old results are set aside, oldest first, before Ollama
+> has to cut — the newest read of each file last, not never as written above. At 8k the request
+> survives (e2e 8/8); at 32k the benchmark stays under budget (26/48 off, 30/48 on, no cuts either
+> way). Rounds stay at 10.
+
 **Do:** Trimming runs once per send today; inside a turn nothing is counted — not the system
 prompt, the tool schemas, the raw arguments or the results. Two 64 KB reads overflow 32k, and
 Ollama truncates silently. A pure `tools::compact` used by the app **and** the probe loop replaces

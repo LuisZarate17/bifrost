@@ -836,9 +836,24 @@ struct Outcome {
     files: Vec<String>,
     secs: f64,
     log: Vec<String>,
+    /// Ollama's prompt token count for each request, the largest of them, how
+    /// many things were set aside (H7), and the rounds where the prompt shrank
+    /// with nothing set aside — Ollama cutting it to fit `num_ctx`.
+    prompt_tokens: Vec<u32>,
+    max_prompt: u32,
+    set_aside: usize,
+    truncated: usize,
 }
 
-fn run(model: &str, task: &Task, opts: Options, scratch: &Path, target_dir: &Path, keep: bool) -> Outcome {
+fn run(
+    model: &str,
+    task: &Task,
+    opts: Options,
+    scratch: &Path,
+    target_dir: &Path,
+    keep: bool,
+    compact: bool,
+) -> Outcome {
     let started = Instant::now();
     let start = match task.kind {
         Kind::RealCommit => format!("{}^", task.commit),
@@ -864,6 +879,10 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, target_dir: &Pat
                 files: Vec::new(),
                 secs: started.elapsed().as_secs_f64(),
                 log: Vec::new(),
+                prompt_tokens: Vec::new(),
+                max_prompt: 0,
+                set_aside: 0,
+                truncated: 0,
             };
         }
     };
@@ -882,6 +901,10 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, target_dir: &Pat
                 files: Vec::new(),
                 secs: started.elapsed().as_secs_f64(),
                 log: Vec::new(),
+                prompt_tokens: Vec::new(),
+                max_prompt: 0,
+                set_aside: 0,
+                truncated: 0,
             };
         }
     };
@@ -903,6 +926,10 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, target_dir: &Pat
                 files: Vec::new(),
                 secs: started.elapsed().as_secs_f64(),
                 log: Vec::new(),
+                prompt_tokens: Vec::new(),
+                max_prompt: 0,
+                set_aside: 0,
+                truncated: 0,
             };
         }
     };
@@ -933,7 +960,7 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, target_dir: &Pat
     // A task that stubs out a safety function (b03's `contain_with`) stubs the
     // worktree's copy only: the tools the model calls run on the odin-core this
     // probe was built with, whose rules are intact.
-    let setup = Setup { ws: &ws, backups: &backups, check: Some(&cargo), confine_reads: true };
+    let setup = Setup { ws: &ws, backups: &backups, check: Some(&cargo), confine_reads: true, compact };
     let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, PROBE_ROUNDS, &setup);
 
     let files = Command::new("git")
@@ -962,6 +989,10 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, target_dir: &Pat
         files,
         secs: 0.0,
         log: r.log,
+        max_prompt: r.prompt_tokens.iter().copied().max().unwrap_or(0),
+        prompt_tokens: r.prompt_tokens,
+        set_aside: r.set_aside,
+        truncated: r.truncated,
     };
 
     if r.runaway {
@@ -1014,6 +1045,16 @@ fn main() {
     let only = arg(&args, "--only");
     let keep = args.iter().any(|a| a == "--keep");
     let do_selfcheck = args.iter().any(|a| a == "--selfcheck");
+    // On, like the app: a probe that sent the whole conversation would measure
+    // the loop as it was before H7. `--compact off` is how that is measured.
+    let compact = match arg(&args, "--compact").as_deref() {
+        None | Some("on") => true,
+        Some("off") => false,
+        Some(other) => {
+            eprintln!("--compact takes on or off, not {other}");
+            std::process::exit(2);
+        }
+    };
 
     let tasks: Vec<Task> =
         tasks().into_iter().filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o))).collect();
@@ -1033,6 +1074,7 @@ fn main() {
     println!("H3 — task probe");
     println!("model:  {model}");
     println!("ctx:    {}", cfg.num_ctx);
+    println!("compact: {}", if compact { "on" } else { "off" });
     println!(
         "tasks:  {} · {} real commits · {} removals",
         tasks.len(),
@@ -1072,12 +1114,13 @@ fn main() {
         let (mut kind_a, mut kind_b) = ((0usize, 0usize), (0usize, 0usize));
         let (mut secs, mut rounds, mut checks) = (0.0, 0usize, 0usize);
         let (mut asks, mut asks_every_call) = (0usize, 0usize);
+        let (mut max_prompt, mut set_aside, mut cut_runs) = (0u32, 0usize, 0usize);
         println!("── {label} ──");
         for task in &tasks {
             let mut line = String::new();
             for i in 0..*n {
                 let scratch = scratch_root.join(format!("{}-{}-{i}", label.replace('=', ""), task.id));
-                let o = run(&model, task, *opts, &scratch, &target_dir, keep);
+                let o = run(&model, task, *opts, &scratch, &target_dir, keep, compact);
                 if !keep {
                     let _ = std::fs::remove_dir_all(&scratch);
                 }
@@ -1100,6 +1143,9 @@ fn main() {
                 checks += o.checks;
                 asks += o.asks;
                 asks_every_call += o.asks_every_call;
+                max_prompt = max_prompt.max(o.max_prompt);
+                set_aside += o.set_aside;
+                cut_runs += (o.truncated > 0) as usize;
                 let shown = if o.verdict == Verdict::Pass && o.late { "LATE" } else { o.verdict.label() };
                 line.push_str(&format!("{shown:<5} "));
                 if o.verdict != Verdict::Pass {
@@ -1112,6 +1158,8 @@ fn main() {
                     "setting": label, "task": task.id, "kind": task.kind.name(), "run": i + 1,
                     "verdict": o.verdict.label(), "why": o.why, "rounds": o.rounds, "late": o.late,
                     "checks": o.checks, "asks": o.asks, "asksEveryCall": o.asks_every_call, "calls": o.calls, "filesChanged": o.files, "log": o.log,
+                    "promptTokens": o.prompt_tokens, "maxPrompt": o.max_prompt, "setAside": o.set_aside,
+                    "truncated": o.truncated,
                     "secs": (o.secs * 10.0).round() / 10.0,
                 }));
             }
@@ -1121,7 +1169,8 @@ fn main() {
         println!(
             "  → {pass}/{total} pass within the app's {} rounds ({:.0}%) · {late} only later · {fail} fail · \
              {error} error · real commits {}/{} · removals {}/{} · {:.1} rounds/run · {:.1} checks/run · \
-             {:.1} asks/run ({:.1} asking every call) · {:.1}s avg\n",
+             {:.1} asks/run ({:.1} asking every call) · max prompt {max_prompt} · {:.1} set aside/run · \
+             {cut_runs} cut runs · {:.1}s avg\n",
             tools::MAX_ROUNDS,
             100.0 * pass as f64 / total.max(1) as f64,
             kind_a.0,
@@ -1132,10 +1181,11 @@ fn main() {
             checks as f64 / total.max(1) as f64,
             asks as f64 / total.max(1) as f64,
             asks_every_call as f64 / total.max(1) as f64,
+            set_aside as f64 / total.max(1) as f64,
             secs / total.max(1) as f64,
         );
         rows.push(format!(
-            "| {label} | {pass}/{total} ({:.0}%) | {late} | {fail} | {error} | {:.1} | {:.1} | {:.1} | {:.1}s |",
+            "| {label} | {pass}/{total} ({:.0}%) | {late} | {fail} | {error} | {:.1} | {:.1} | {:.1} | {:.1}s | {max_prompt} | {cut_runs} |",
             100.0 * pass as f64 / total.max(1) as f64,
             rounds as f64 / total.max(1) as f64,
             checks as f64 / total.max(1) as f64,
@@ -1145,8 +1195,8 @@ fn main() {
     }
 
     println!("─── {model} ───");
-    println!("| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | checks/run | asks/run | time/run |", tools::MAX_ROUNDS);
-    println!("|---|---|---|---|---|---|---|---|---|");
+    println!("| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | checks/run | asks/run | time/run | max prompt | cut runs |", tools::MAX_ROUNDS);
+    println!("|---|---|---|---|---|---|---|---|---|---|---|");
     for r in &rows {
         println!("{r}");
     }
@@ -1184,7 +1234,7 @@ mod tests {
 
         let ws = Workspace::open(&tree).unwrap();
         let backups = base.join("backups");
-        let setup = Setup { ws: &ws, backups: &backups, check: None, confine_reads: true };
+        let setup = Setup { ws: &ws, backups: &backups, check: None, confine_reads: true, compact: true };
         let read = |path: &str| {
             let call = odin_core::chat::ToolCall {
                 id: None,

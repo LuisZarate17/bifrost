@@ -311,7 +311,7 @@ struct Outcome {
 fn run(model: &str, q: &Question, variant: Variant, opts: Options, ws: &Workspace, backups: &Path) -> Outcome {
     let started = Instant::now();
     let mut messages = vec![Message::system(variant.system(ws)), Message::user(q.ask)];
-    let setup = Setup { ws, backups, check: None, confine_reads: false };
+    let setup = Setup { ws, backups, check: None, confine_reads: false, compact: true };
     let r = probe::run_loop(model, &mut messages, &variant.tools(), opts, Transport::Recover, PROBE_ROUNDS, &setup);
     let (verdict, why) = if let Some(e) = r.error {
         (Verdict::Error, e)

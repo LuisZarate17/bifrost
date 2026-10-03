@@ -174,7 +174,29 @@ What it cannot judge is how the line reads, a Stop in the middle, and a file hel
 
 ---
 
-*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. H7 onward add
+## 6 — A turn that outgrows the context (H7)
+
+Unit tests in `odin_core::compact` cover the rule (oldest first, never the request or the newest
+result, the newest read of each file only once nothing else is left, one-way) and
+`cargo test -p mimir` the index mapping. What
+they cannot judge is whether the meter moves while a turn runs, how the note reads, and that the
+answer still addresses what you asked.
+
+- [ ] **A turn that reads a lot.** Choose `crates/odin-core/src` of this repo as the folder (or any
+      folder with several large files) and type `Read every .rs file in odin's crates/odin-core/src and
+      summarise each`. **Expect:** the context meter climbs while the turn runs, not only at the end.
+      Once it is past about 75%, a quiet line after the cards: **Set aside N earlier results to fit
+      the model's context**, the count growing as the turn goes on. The answer still addresses the
+      request (a summary of the files), not the code of whichever file was read last.
+- [ ] **When even that is not enough.** Ask for something that must keep many different files in view
+      at once. **Expect:** if nothing more can be set aside, a warning line: **This turn no longer fits
+      the model's context — start a new chat, or ask about less at once.**
+- [ ] **The next message is a new turn.** Send a short follow-up. **Expect:** the notes are gone and
+      nothing is said about the earlier turn's set-aside results. (They are not saved with the thread.)
+
+---
+
+*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. H8 onward add
 sections here as they are built.*
 
 ## After this

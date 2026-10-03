@@ -20,11 +20,14 @@
 //!   stoppable and with its output capped. Added at H1
 //! - [`search`] — which files the project folder has, and which lines hold
 //!   some text: inside the folder only, build output skipped, capped. Added at H2
+//! - [`compact`] — the prompt's budget inside one tool turn: which old results to
+//!   set aside before Ollama silently cuts the middle of the conversation. Added at H7
 //!
 //! Nothing here prints or panics. Callers format, and a tray has no stdout.
 
 pub mod chat;
 pub mod check;
+pub mod compact;
 pub mod config;
 pub mod edit;
 pub mod ollama;

@@ -22,7 +22,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 
 use odin_core::chat::{self, Message, Options, StreamChunk};
-use odin_core::{check, config, edit, ollama, search, store, tools, vram};
+use odin_core::{check, compact, config, edit, ollama, search, store, tools, vram};
 
 /// One message pushed up to the UI.
 ///
@@ -659,6 +659,76 @@ fn workspace(cfg: &config::Config) -> Option<edit::Workspace> {
     cfg.workspace.as_deref().and_then(|p| edit::Workspace::open(p).ok())
 }
 
+/// The previous round of a tool turn, as the webview remembers it: how many
+/// characters were sent and how many tokens Ollama counted for them. It is what
+/// turns "characters" into "tokens" for the next round's budget.
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Calibration {
+    chars: u64,
+    tokens: u32,
+}
+
+/// What [`compact_for_send`] did, for the reply to carry.
+#[derive(Debug, Clone, PartialEq)]
+struct Sent {
+    /// Characters actually sent, after anything was set aside.
+    prompt_chars: u64,
+    /// Indices into the webview's conversation, oldest first.
+    set_aside: Vec<usize>,
+    /// What each of those messages now is, in the same order, so the webview
+    /// replaces them with exactly what was sent rather than re-deriving the stub.
+    replacements: Vec<Message>,
+    fits: bool,
+}
+
+impl Sent {
+    fn into_fields(self) -> serde_json::Map<String, serde_json::Value> {
+        let mut m = serde_json::Map::new();
+        m.insert("promptChars".into(), self.prompt_chars.into());
+        m.insert("setAside".into(), self.set_aside.into());
+        m.insert("setAsideMessages".into(), serde_json::to_value(self.replacements).unwrap_or_default());
+        m.insert("fits".into(), self.fits.into());
+        m
+    }
+}
+
+/// The webview's numbering for indices into what is sent. `lead` is how many
+/// messages the backend put in front (the system prompt, when a folder is
+/// chosen); an index inside them is never the webview's and is dropped.
+fn frontend_indices(sent: &[usize], lead: usize) -> Vec<usize> {
+    sent.iter().filter_map(|i| i.checked_sub(lead)).collect()
+}
+
+/// Set aside what will not fit, in `messages` as they are about to be sent.
+fn compact_for_send(
+    messages: &mut [Message],
+    offered: &[chat::Tool],
+    num_ctx: u32,
+    calibration: Option<Calibration>,
+    lead: usize,
+) -> Sent {
+    let budget = compact::Budget::new(num_ctx, calibration.map(|c| (c.chars, c.tokens)));
+    let plan = compact::compact(messages, offered, &budget);
+    let mut replacements = Vec::new();
+    for &i in &plan.set_aside {
+        // The call that produced a result sits just before it.
+        let call = i.checked_sub(1).and_then(|p| messages[p].tool_calls.as_deref()?.first().cloned());
+        compact::set_aside(&mut messages[i], call.as_ref());
+        replacements.push(messages[i].clone());
+    }
+    // Anything in front of the webview's messages is never reported; `compact`
+    // does not set the system prompt aside, so nothing is lost by the filter.
+    let set_aside = frontend_indices(&plan.set_aside, lead);
+    replacements.drain(..plan.set_aside.len() - set_aside.len());
+    Sent {
+        prompt_chars: compact::prompt_chars(messages, offered),
+        set_aside,
+        replacements,
+        fits: plan.fits,
+    }
+}
+
 /// Ask the model, offering the tools, and report back what it wants.
 ///
 /// **What it runs itself is only what `tools::approval` calls automatic** — a
@@ -673,6 +743,7 @@ fn workspace(cfg: &config::Config) -> Option<edit::Workspace> {
 async fn ask_with_tools(
     mut messages: Vec<Message>,
     model: Option<String>,
+    calibration: Option<Calibration>,
 ) -> Result<serde_json::Value, String> {
     // Taken **before the model is asked**, for an automatic search or listing:
     // there is no card to take it at, and a Stop pressed while the model is
@@ -717,6 +788,12 @@ async fn ask_with_tools(
     let history = messages.clone();
     let num_ctx = cfg.num_ctx;
     let offered = tools::available(ws.is_some(), check_label.as_deref());
+
+    // Inside a turn the conversation only grows, and past `num_ctx` Ollama cuts
+    // the middle of it without a word (H7). So old results are set aside here,
+    // in the copy being sent, and the webview is told which so that its own copy
+    // ends up identical — a prefix that changed would also cost the prompt cache.
+    let sent = compact_for_send(&mut messages, &offered, num_ctx, calibration, usize::from(ws.is_some()));
     let reply = tauri::async_runtime::spawn_blocking(move || {
         chat::chat_tools(&model, &messages, &offered, Options::new(num_ctx))
     })
@@ -726,210 +803,224 @@ async fn ask_with_tools(
         println!("[mimir] a malformed tool call was recovered through the raw retry");
     }
 
-    // The first call only. A model that asks for several at once is handled one
-    // at a time, because each one needs its own approval.
-    let Some(call) = reply.tool_calls().first().cloned() else {
-        return Ok(serde_json::json!({
-            "kind": "answer",
-            "content": reply.message.content,
-            "promptEvalCount": reply.prompt_eval_count,
-            "evalCount": reply.eval_count,
-        }));
-    };
-
-    // A call that has already failed identically, twice, ends the turn: the file
-    // has not changed, so a third try cannot go differently, and each one costs
-    // a round. Measured at G7 - the model once repeated one impossible edit
-    // eight times running.
-    let prior = tools::prior_failures(&history, &call);
-    if prior + 1 >= tools::MAX_IDENTICAL_FAILURES {
-        return Ok(serde_json::json!({
-            "kind": "stuck",
-            "error": format!(
-                "the model kept repeating a call to {} that could not be carried out, so it was stopped",
-                call.function.name
-            ),
-        }));
-    }
-
-    // Rejected without asking anyone: the reason goes back to the model. The raw
-    // call goes with it, so the conversation shows the model its own attempt.
-    let reject = |name: &str, path: &str, why: String| {
-        let why = if prior > 0 { format!("{why}{}", tools::repeated_note(name)) } else { why };
-        serde_json::json!({
-            "kind": "rejected",
-            "name": name,
-            "path": path,
-            "error": why,
-            "rawCall": call,
-        })
-    };
-
-    if call.function.name == chat::INVALID_TOOL_CALL {
-        let why = call.function.arguments["error"].as_str().unwrap_or("unreadable").to_string();
-        return Ok(reject("tool call", "", format!("{why}. Send the call again as valid JSON.")));
-    }
-    let request = match tools::interpret(&call) {
-        Ok(r) => r,
-        Err(e) => return Ok(reject(&call.function.name, "", e)),
-    };
-
-    // A finding call that could never run — a pattern outside the folder, text
-    // over several lines — goes back to the model with the reason, without
-    // asking anyone to approve something that can only fail.
-    if let (Some(ws), tools::Request::List { pattern } | tools::Request::Search { pattern, .. }) = (&ws, &request) {
-        let text = match &request {
-            tools::Request::Search { text, .. } => Some(text.as_str()),
-            _ => None,
+    // The reply is built inside a block so that every kind of it — answer, call,
+    // auto, rejected, stuck — leaves through the one place that adds the prompt's
+    // numbers, instead of each of a dozen returns remembering to.
+    let mut outcome: Result<serde_json::Value, String> = async {
+        // The first call only. A model that asks for several at once is handled one
+        // at a time, because each one needs its own approval.
+        let Some(call) = reply.tool_calls().first().cloned() else {
+            return Ok(serde_json::json!({
+                "kind": "answer",
+                "content": reply.message.content,
+                "promptEvalCount": reply.prompt_eval_count,
+                "evalCount": reply.eval_count,
+            }));
         };
-        if let Err(e) = search::validate(ws, text, pattern.as_deref()) {
-            return Ok(reject(request.name(), "", format!("error: {e}")));
-        }
-    }
 
-    // What may run without a card. Decided here, once, by the one rule the probe
-    // shares — and on a blocking thread, because it walks the folder.
-    let decided = {
-        let (ws, request, ask_every_call) = (ws.clone(), request.clone(), cfg.ask_every_call);
-        tauri::async_runtime::spawn_blocking(move || tools::approval(ws.as_ref(), &request, ask_every_call))
-            .await
-            .map_err(|e| format!("deciding the call failed: {e}"))?
-    };
-    match decided {
-        tools::Approval::Reject(why) => {
-            return Ok(reject(request.name(), request.path(), format!("error: {why}")));
+        // A call that has already failed identically, twice, ends the turn: the file
+        // has not changed, so a third try cannot go differently, and each one costs
+        // a round. Measured at G7 - the model once repeated one impossible edit
+        // eight times running.
+        let prior = tools::prior_failures(&history, &call);
+        if prior + 1 >= tools::MAX_IDENTICAL_FAILURES {
+            return Ok(serde_json::json!({
+                "kind": "stuck",
+                "error": format!(
+                    "the model kept repeating a call to {} that could not be carried out, so it was stopped",
+                    call.function.name
+                ),
+            }));
         }
-        tools::Approval::Auto(auto) => {
-            let ws = ws.clone().expect("a call is only automatic inside a project folder");
-            let ran = tauri::async_runtime::spawn_blocking(move || run_auto(&ws, auto, stop))
-                .await
-                .map_err(|e| format!("running the call failed: {e}"))?;
-            // `None`: the read could not be made safely, so it asks like any other.
-            if let Some((name, path, mut ran)) = ran {
-                if !ran.ok && prior > 0 {
-                    ran.result.push_str(tools::repeated_note(name));
-                }
-                // **Never `arm`s a ticket and never touches PENDING**: nothing
-                // here awaits a decision, so nothing may replace or leave one.
-                return Ok(serde_json::json!({
-                    "kind": "auto",
-                    "name": name,
-                    "path": path,
-                    "result": ran.result,
-                    "ok": ran.ok,
-                    "stopped": ran.stopped,
-                    "rawCall": call,
-                }));
+
+        // Rejected without asking anyone: the reason goes back to the model. The raw
+        // call goes with it, so the conversation shows the model its own attempt.
+        let reject = |name: &str, path: &str, why: String| {
+            let why = if prior > 0 { format!("{why}{}", tools::repeated_note(name)) } else { why };
+            serde_json::json!({
+                "kind": "rejected",
+                "name": name,
+                "path": path,
+                "error": why,
+                "rawCall": call,
+            })
+        };
+
+        if call.function.name == chat::INVALID_TOOL_CALL {
+            let why = call.function.arguments["error"].as_str().unwrap_or("unreadable").to_string();
+            return Ok(reject("tool call", "", format!("{why}. Send the call again as valid JSON.")));
+        }
+        let request = match tools::interpret(&call) {
+            Ok(r) => r,
+            Err(e) => return Ok(reject(&call.function.name, "", e)),
+        };
+
+        // A finding call that could never run — a pattern outside the folder, text
+        // over several lines — goes back to the model with the reason, without
+        // asking anyone to approve something that can only fail.
+        if let (Some(ws), tools::Request::List { pattern } | tools::Request::Search { pattern, .. }) = (&ws, &request) {
+            let text = match &request {
+                tools::Request::Search { text, .. } => Some(text.as_str()),
+                _ => None,
+            };
+            if let Err(e) = search::validate(ws, text, pattern.as_deref()) {
+                return Ok(reject(request.name(), "", format!("error: {e}")));
             }
         }
-        tools::Approval::Ask => {}
-    }
 
-    let (name, path, payload) = match request {
-        tools::Request::Read { path } => {
-            let (open, shown) = tools::read_target(&path, ws.as_ref());
-            ("read_file", shown, Some(Payload::Read(open)))
+        // What may run without a card. Decided here, once, by the one rule the probe
+        // shares — and on a blocking thread, because it walks the folder.
+        let decided = {
+            let (ws, request, ask_every_call) = (ws.clone(), request.clone(), cfg.ask_every_call);
+            tauri::async_runtime::spawn_blocking(move || tools::approval(ws.as_ref(), &request, ask_every_call))
+                .await
+                .map_err(|e| format!("deciding the call failed: {e}"))?
+        };
+        match decided {
+            tools::Approval::Reject(why) => {
+                return Ok(reject(request.name(), request.path(), format!("error: {why}")));
+            }
+            tools::Approval::Auto(auto) => {
+                let ws = ws.clone().expect("a call is only automatic inside a project folder");
+                let ran = tauri::async_runtime::spawn_blocking(move || run_auto(&ws, auto, stop))
+                    .await
+                    .map_err(|e| format!("running the call failed: {e}"))?;
+                // `None`: the read could not be made safely, so it asks like any other.
+                if let Some((name, path, mut ran)) = ran {
+                    if !ran.ok && prior > 0 {
+                        ran.result.push_str(tools::repeated_note(name));
+                    }
+                    // **Never `arm`s a ticket and never touches PENDING**: nothing
+                    // here awaits a decision, so nothing may replace or leave one.
+                    return Ok(serde_json::json!({
+                        "kind": "auto",
+                        "name": name,
+                        "path": path,
+                        "result": ran.result,
+                        "ok": ran.ok,
+                        "stopped": ran.stopped,
+                        "rawCall": call,
+                    }));
+                }
+            }
+            tools::Approval::Ask => {}
         }
-        tools::Request::List { .. } | tools::Request::Search { .. } if ws.is_none() => {
-            return Ok(reject(
-                request.name(),
-                "",
-                "error: there is no project folder to search — the user has not chosen one".into(),
-            ));
-        }
-        tools::Request::List { pattern } => {
-            let ws = ws.as_ref().expect("checked above");
-            let shown = search::describe_list(pattern.as_deref());
-            let find = Find::List { pattern };
-            ("list_files", shown, Some(Payload::Find { root: ws.root_display(), find, stop: next_stop() }))
-        }
-        tools::Request::Search { text, pattern } => {
-            let ws = ws.as_ref().expect("checked above");
-            let shown = search::describe_search(&text, pattern.as_deref());
-            let find = Find::Search { text, pattern };
-            ("search", shown, Some(Payload::Find { root: ws.root_display(), find, stop: next_stop() }))
-        }
-        // The model can call it from history, or invent it. Either way there is
-        // only something to run when a person chose a command for this folder.
-        tools::Request::Check => match (&ws, &check) {
-            (Some(ws), Some(argv)) => (
-                "run_check",
-                check::label(argv),
-                Some(Payload::Check { root: ws.root_display(), argv: argv.clone(), stop: next_stop() }),
-            ),
-            _ => {
+
+        let (name, path, payload) = match request {
+            tools::Request::Read { path } => {
+                let (open, shown) = tools::read_target(&path, ws.as_ref());
+                ("read_file", shown, Some(Payload::Read(open)))
+            }
+            tools::Request::List { .. } | tools::Request::Search { .. } if ws.is_none() => {
                 return Ok(reject(
-                    "run_check",
+                    request.name(),
                     "",
-                    "error: run_check is not available — no check command is set for this folder. \
-                     Carry on without it, and tell the user they can choose one."
-                        .into(),
+                    "error: there is no project folder to search — the user has not chosen one".into(),
                 ));
             }
-        },
-        tools::Request::Rewrite { path, .. } => {
-            return Ok(reject("write_file", &path, "no such tool: write_file — use edit_file".into()));
-        }
-        tools::Request::Edit { .. } | tools::Request::Create { .. } if ws.is_none() => {
-            return Ok(reject(
-                request.name(),
-                request.path(),
-                "editing is off: the user has not chosen a project folder".into(),
-            ));
-        }
-        tools::Request::Edit { path, old_text, new_text } => {
-            let ws = ws.clone().expect("checked above");
-            let planned = tauri::async_runtime::spawn_blocking(move || {
-                edit::plan_replace(&ws, &path, &old_text, &new_text)
-            })
-            .await
-            .map_err(|e| format!("planning the edit failed: {e}"))?;
-            match planned {
-                Ok(p) => ("edit_file", p.display.clone(), Some(Payload::Edit(p))),
-                Err(e) => return Ok(reject("edit_file", request_path(&call), format!("error: {e}"))),
+            tools::Request::List { pattern } => {
+                let ws = ws.as_ref().expect("checked above");
+                let shown = search::describe_list(pattern.as_deref());
+                let find = Find::List { pattern };
+                ("list_files", shown, Some(Payload::Find { root: ws.root_display(), find, stop: next_stop() }))
             }
-        }
-        tools::Request::Create { path, content } => {
-            let ws = ws.clone().expect("checked above");
-            let planned =
-                tauri::async_runtime::spawn_blocking(move || edit::plan_create(&ws, &path, &content))
-                    .await
-                    .map_err(|e| format!("planning the new file failed: {e}"))?;
-            match planned {
-                Ok(p) => ("create_file", p.display.clone(), Some(Payload::Edit(p))),
-                Err(e) => return Ok(reject("create_file", request_path(&call), format!("error: {e}"))),
+            tools::Request::Search { text, pattern } => {
+                let ws = ws.as_ref().expect("checked above");
+                let shown = search::describe_search(&text, pattern.as_deref());
+                let find = Find::Search { text, pattern };
+                ("search", shown, Some(Payload::Find { root: ws.root_display(), find, stop: next_stop() }))
             }
-        }
-    };
+            // The model can call it from history, or invent it. Either way there is
+            // only something to run when a person chose a command for this folder.
+            tools::Request::Check => match (&ws, &check) {
+                (Some(ws), Some(argv)) => (
+                    "run_check",
+                    check::label(argv),
+                    Some(Payload::Check { root: ws.root_display(), argv: argv.clone(), stop: next_stop() }),
+                ),
+                _ => {
+                    return Ok(reject(
+                        "run_check",
+                        "",
+                        "error: run_check is not available — no check command is set for this folder. \
+                         Carry on without it, and tell the user they can choose one."
+                            .into(),
+                    ));
+                }
+            },
+            tools::Request::Rewrite { path, .. } => {
+                return Ok(reject("write_file", &path, "no such tool: write_file — use edit_file".into()));
+            }
+            tools::Request::Edit { .. } | tools::Request::Create { .. } if ws.is_none() => {
+                return Ok(reject(
+                    request.name(),
+                    request.path(),
+                    "editing is off: the user has not chosen a project folder".into(),
+                ));
+            }
+            tools::Request::Edit { path, old_text, new_text } => {
+                let ws = ws.clone().expect("checked above");
+                let planned = tauri::async_runtime::spawn_blocking(move || {
+                    edit::plan_replace(&ws, &path, &old_text, &new_text)
+                })
+                .await
+                .map_err(|e| format!("planning the edit failed: {e}"))?;
+                match planned {
+                    Ok(p) => ("edit_file", p.display.clone(), Some(Payload::Edit(p))),
+                    Err(e) => return Ok(reject("edit_file", request_path(&call), format!("error: {e}"))),
+                }
+            }
+            tools::Request::Create { path, content } => {
+                let ws = ws.clone().expect("checked above");
+                let planned =
+                    tauri::async_runtime::spawn_blocking(move || edit::plan_create(&ws, &path, &content))
+                        .await
+                        .map_err(|e| format!("planning the new file failed: {e}"))?;
+                match planned {
+                    Ok(p) => ("create_file", p.display.clone(), Some(Payload::Edit(p))),
+                    Err(e) => return Ok(reject("create_file", request_path(&call), format!("error: {e}"))),
+                }
+            }
+        };
 
-    let diff = match &payload {
-        Some(Payload::Edit(p)) => Some(DiffView {
-            hunks: p.hunks.clone(),
-            added: p.added,
-            removed: p.removed,
-            create: p.create,
-        }),
-        _ => None,
-    };
-    let changed_build_files =
-        if name == "run_check" { tools::build_files_changed(&history) } else { Vec::new() };
-    Ok(serde_json::json!({
-        "kind": "call",
-        "call": PendingCall {
-            token: arm(name, &path, payload),
-            name: name.to_string(),
-            path,
-            diff,
-            changed_build_files,
-        },
-        // The raw call, so the caller can put the assistant turn that asked
-        // for it back into the conversation before the tool result.
-        //
-        // **Without it the loop does not close.** Ollama expects
-        // assistant(tool_calls) → tool(result); a tool message with no call in
-        // front of it answers a question the model cannot see itself asking.
-        "rawCall": call,
-    }))
+        let diff = match &payload {
+            Some(Payload::Edit(p)) => Some(DiffView {
+                hunks: p.hunks.clone(),
+                added: p.added,
+                removed: p.removed,
+                create: p.create,
+            }),
+            _ => None,
+        };
+        let changed_build_files =
+            if name == "run_check" { tools::build_files_changed(&history) } else { Vec::new() };
+        Ok(serde_json::json!({
+            "kind": "call",
+            "call": PendingCall {
+                token: arm(name, &path, payload),
+                name: name.to_string(),
+                path,
+                diff,
+                changed_build_files,
+            },
+            // The raw call, so the caller can put the assistant turn that asked
+            // for it back into the conversation before the tool result.
+            //
+            // **Without it the loop does not close.** Ollama expects
+            // assistant(tool_calls) → tool(result); a tool message with no call in
+            // front of it answers a question the model cannot see itself asking.
+            "rawCall": call,
+        }))
+    }
+    .await;
+
+    // What every kind of reply also says about the prompt it answered: the
+    // numbers the next round is calibrated from, and what was set aside.
+    if let Ok(serde_json::Value::Object(body)) = &mut outcome {
+        body.insert("promptEvalCount".into(), reply.prompt_eval_count.into());
+        body.extend(sent.into_fields());
+    }
+    outcome
 }
 
 fn request_path(call: &chat::ToolCall) -> &str {
@@ -1465,6 +1556,49 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indices_are_reported_in_the_webviews_numbering_and_the_system_prompt_is_never_one() {
+        assert_eq!(frontend_indices(&[3, 5], 1), vec![2, 4]);
+        assert_eq!(frontend_indices(&[3, 5], 0), vec![3, 5]);
+        assert_eq!(frontend_indices(&[0, 3], 1), vec![2]);
+    }
+
+    /// The pairs a webview would hold, with the system prompt in front.
+    fn long_turn() -> Vec<Message> {
+        let mut m = vec![Message::system("sys"), Message::user("find it")];
+        for _ in 0..4 {
+            m.push(Message {
+                role: "assistant".into(),
+                content: String::new(),
+                images: None,
+                tool_calls: Some(vec![chat::ToolCall {
+                    id: None,
+                    function: chat::FunctionCall {
+                        name: "search".into(),
+                        arguments: serde_json::json!({ "text": "x" }),
+                    },
+                }]),
+                tool_name: None,
+            });
+            m.push(Message::tool_result("search", "x".repeat(6000)));
+        }
+        m
+    }
+
+    #[test]
+    fn what_is_set_aside_comes_back_numbered_without_the_system_prompt_and_as_sent() {
+        let mut messages = long_turn();
+        // 24000 characters at 2.5 a token is 9600 tokens; 0.75 of 8192 is 6144.
+        let sent = compact_for_send(&mut messages, &[], 8192, None, 1);
+        // Sent indices 3 and 5 are the webview's 2 and 4; the last result stays.
+        assert_eq!(sent.set_aside, vec![2, 4]);
+        assert!(sent.fits);
+        assert_eq!(sent.replacements, vec![messages[3].clone(), messages[5].clone()]);
+        assert!(sent.replacements[0].content.starts_with(compact::STUB_MARKER));
+        assert_eq!(sent.prompt_chars, compact::prompt_chars(&messages, &[]));
+        assert_eq!(messages[9].content.len(), 6000);
+    }
 
     #[test]
     fn undoing_a_turn_of_more_than_the_limit_is_refused_before_anything_runs() {

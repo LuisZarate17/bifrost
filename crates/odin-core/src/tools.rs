@@ -57,6 +57,12 @@ pub const MAX_READ_BYTES: u64 = 64 * 1024;
 /// forever. G6 used 4, which was right for reads and **too few for edits**: the
 /// G7 probe measured a two-file change taking read, read, edit, edit and then
 /// an answer — five rounds — so the old bound cut it off one short.
+///
+/// **H7 keeps 10.** Across three full Qwen3-Coder taskprobe runs, 192 runs in
+/// all (H4a's first and its run of record in `evals/out/H4a-2026-10-01/`, H5's
+/// in `evals/out/H5-2026-10-02/`), no task passed after round 10 under the
+/// probe's bound of 20 — each summary reads "0 only later" — so a higher bound
+/// would only let a lost model run longer.
 pub const MAX_ROUNDS: usize = 10;
 
 fn read_tool() -> Tool {

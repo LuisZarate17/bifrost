@@ -57,7 +57,7 @@ records of what happened.
 - **[STAGE-H.md](../stages/STAGE-H.md)** — Mímir learns to find code, check its work and run
   longer: ten chunks in four phases, each gated on a measurement. H1 (the check command), H2
   (finding code) and H3 (the benchmark of real work) built; H4 measured three coding models;
-  Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5 and H6 built; Gate 3 next.
+  Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5 and H6 built. H7 built; H8 next.
 
 ---
 
@@ -255,6 +255,9 @@ Finished chunks: what was built, what was measured, what the measurement changed
   checks every file's whole chain before writing anything and puts them back newest first; a real
   two-file turn came back byte for byte. Also fixed: a single Undo could save into the wrong
   conversation
+- **[H7](results/H7-results.md)** — a context budget inside the turn. **Old tool results are set aside before a turn outgrows the context**,
+  instead of Ollama silently cutting the request out of the prompt (measured). At 8k the request
+  survives; at 32k the benchmark stays under budget and is unharmed (30/48 on, 26/48 off, no cuts)
 
 **Stage F — keep testing models**
 

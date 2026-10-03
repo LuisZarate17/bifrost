@@ -1,9 +1,9 @@
 # Stage H — where it stands
 
 Every chunk and gate of [STAGE-H.md](../stages/STAGE-H.md), done or not. **Updated at the end of
-every chunk**, alongside its results doc. Last updated 2026-10-02, after H6.
+every chunk**, alongside its results doc. Last updated 2026-10-02, after H7.
 
-**8 of 12 chunks done · 2 of 3 gates passed.** Next: Gate 3, then Phase 4.
+**9 of 12 chunks done · 3 of 3 gates passed.** Next: H8.
 
 | Phase | Chunk | What it is | Status | Result |
 |---|---|---|---|---|
@@ -17,14 +17,14 @@ every chunk**, alongside its results doc. Last updated 2026-10-02, after H6.
 | | H4b | Choosing a folder offers the coding model | ✅ Done · local (06e72e9) | e2e 14/14 — [H4b](results/H4b-results.md) |
 | **3. Approval** | H5 | In-folder reads run without asking | ✅ Done · local (ee6c1e5) | Cards per task 3.9 → 2.5 — [H5](results/H5-results.md) |
 | | H6 | Undo a whole turn | ✅ Done · local | A two-file turn back byte for byte — [H6](results/H6-results.md) |
-| | Gate 3 | Does it work in daily use? | ⬜ **Next** — your call, after using it | |
-| **4. Longer runs** | H7 | Context budget inside a turn | ⬜ | |
-| | H8 | Partial reads (line ranges) | ⬜ | |
+| | Gate 3 | Does it work in daily use? | ✅ Passed on your "continue" — daily use is still the real test | |
+| **4. Longer runs** | H7 | Context budget inside a turn | ✅ Done · local | At 8k the request survives; benchmark unharmed — [H7](results/H7-results.md) |
+| | H8 | Partial reads (line ranges) | ⬜ **Next** | |
 | | H9 | File operations (delete, move, new folders) | ⬜ | |
 | | H10 | AGENTS.md, a task list, a repo map | ⬜ | Measure the repo map first: Qwen3-Coder already answers 15 of 21 vague find-code questions |
 
 ## Also open
 
-- **Unpushed:** H4a, H4b, H5 and H6 are local, not pushed to origin/main.
-- **Checks by hand waiting** in [PENDING-CHECKS.md](PENDING-CHECKS.md): H1, H2, H4b, H5 and H6, with
+- **Unpushed:** H4a, H4b, H5, H6 and H7 are local, not pushed to origin/main.
+- **Checks by hand waiting** in [PENDING-CHECKS.md](PENDING-CHECKS.md): H1, H2, H4b, H5, H6 and H7, with
   the steps in [H-testing.md](H-testing.md).
