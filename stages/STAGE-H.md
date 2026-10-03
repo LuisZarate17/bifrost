@@ -1,6 +1,7 @@
 # Stage H — Execution Packet
 
 **Paste this into a fresh chat.** Self-contained; it doesn't assume the earlier conversations.
+**Where it stands:** [docs/H-status.md](../docs/H-status.md).
 
 ---
 
@@ -83,6 +84,7 @@ benchmark run with it on and off, and stays only if the pass rate holds.
 - what needs a person goes into [PENDING-CHECKS.md](../docs/PENDING-CHECKS.md) and the
   [H-testing.md](../docs/H-testing.md) worksheet
 - a write-up in `docs/results/H<n>-results.md`, in G7-results.md's shape
+- its row in [H-status.md](../docs/H-status.md), the one-page chart of where Stage H stands
 
 Probes use editprobe's scheme — **3 runs at the app's own sampling plus 1 at temperature 0** —
 and a margin set **before** the run, so the numbers cannot move the bar.
@@ -314,6 +316,12 @@ that promises otherwise.
 ---
 
 ## H6 — Undo a whole turn
+
+> **Built 2026-10-02** — [H6-results.md](../docs/results/H6-results.md). A turn with two or more edits ends in "N edits in
+> this turn · Undo all", asked twice; every file's chain is checked before anything is written;
+> the real model's two-file turn came back byte for byte. The line sits at
+> the end of the turn rather than "on an answer", so a turn that was stopped or ended in an error
+> has it too (your choice).
 
 **Do:** `edit::undo_turn(ids)` over the undo handles the frontend already holds for a turn — no
 turn id needed. Skip ones already undone; pre-check each file's whole chain (the file matches its

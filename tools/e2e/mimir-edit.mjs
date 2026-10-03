@@ -8,14 +8,17 @@
 // What it proves that no unit test can: that a sentence typed into the composer
 // becomes an approval card, that the diff on the card is the edit that lands on
 // disk — byte for byte, CRLF endings included — and that Undo, Deny, a file
-// changed behind the diff's back, and a path outside the folder all behave.
+// changed behind the diff's back, and a path outside the folder all behave —
+// and, for a turn with two edits in it, that "Undo all" asks first, refuses
+// when a file has moved on, and otherwise puts the whole project back byte for
+// byte.
 //
 // It types into the real textarea and clicks the real buttons over CDP. It
 // never calls a Rust command to do the thing under test.
 //
 // Leaves nothing behind: the project folder it edits is a temporary one, the
-// config's `workspace` is restored to what it was (or removed), and every
-// conversation the run created is deleted.
+// config's `workspace` is restored to what it was (or removed), every
+// conversation the run created is deleted, and so is any backup record it left.
 //
 // The model is real, so a run can fail for model reasons — the G7 probe
 // measured 98/100. A failure prints what the thread showed, so it can be read.
@@ -127,6 +130,22 @@ async function untilEditCard(js) {
   throw new Error("timed out waiting for an edit card");
 }
 
+/** Approve every read and edit until the turn ends. */
+async function driveAll(js, what) {
+  const end = Date.now() + 180_000;
+  while (Date.now() < end) {
+    const s = await js(`(() => {
+      const card = document.querySelector(".tool.read.pending, .tool.find.pending, .tool.edit.pending");
+      if (card) { card.querySelector(".btn.primary").click(); return "allowed"; }
+      const t = document.querySelector(".composer textarea");
+      return t && !t.disabled && !document.querySelector(".send.stop") ? "idle" : null;
+    })()`);
+    if (s === "idle") return;
+    await sleep(400);
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
 /** Let the turn finish: approve any read, decline any further edit. The model
  *  may re-read to check its work, or propose another change, after the one
  *  under test — waiting for idle alone would hang on that card. */
@@ -153,17 +172,45 @@ const threadText = (js) => js(`document.querySelector(".thread").innerText.slice
 
 const results = [];
 function check(name, ok, detail = "") {
-  results.push({ name, ok });
+  results.push({ name, ok, skip: false });
   console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
 }
+/** The model did not do what the check needs (here: make two edits). Not a
+ *  pass and not a failure. */
+function skip(name, why) {
+  results.push({ name, ok: true, skip: true });
+  console.log(`  SKIP  ${name} — ${why}`);
+}
+
+const BACKUPS = path.join(APPDATA, "odin", "backups");
+const backupNames = () => (fs.existsSync(BACKUPS) ? fs.readdirSync(BACKUPS) : []);
 
 const { root, proj } = makeProject();
 const configBefore = fs.existsSync(CONFIG) ? fs.readFileSync(CONFIG) : null;
+const backupsBefore = new Set(backupNames());
+
+/** Remove the backup records this run made — only those whose file lies in this
+ *  run's project, so a Mímir session of the user's own running meanwhile keeps
+ *  its undo history. */
+function cleanBackups() {
+  const mine = (p) => typeof p === "string" && p.replace(/^\\\\\?\\/, "").toLowerCase().startsWith(proj.toLowerCase());
+  for (const f of backupNames()) {
+    if (backupsBefore.has(f) || !f.endsWith(".json")) continue;
+    let record;
+    try { record = JSON.parse(fs.readFileSync(path.join(BACKUPS, f), "utf8")); } catch { continue; }
+    if (!mine(record.path)) continue;
+    const id = f.slice(0, -".json".length);
+    fs.rmSync(path.join(BACKUPS, f), { force: true });
+    fs.rmSync(path.join(BACKUPS, `${id}.bak`), { force: true });
+  }
+}
 
 // Ctrl+C skips `finally`, so put the user's config back here as well.
 process.on("SIGINT", () => {
   if (configBefore) fs.writeFileSync(CONFIG, configBefore);
   else fs.rmSync(CONFIG, { force: true });
+  cleanBackups();
+  fs.rmSync(root, { recursive: true, force: true });
   process.exit(130);
 });
 const cdp = await connect();
@@ -255,6 +302,79 @@ try {
   const cards = await js(`document.querySelectorAll(".tool.edit").length`);
   check("no approval card was offered for it", cards === 0, `${cards} edit cards`);
   console.log(`        (the thread showed: ${shown || "no attempt — the model declined on its own"})`);
+
+  // 5 ── undo a whole turn ─────────────────────────────────────────────────
+  console.log("\n5. undo a whole turn");
+  fs.writeFileSync(configPath, crlf(CONFIG_RS));
+  fs.writeFileSync(mainPath, crlf(MAIN_RS));
+  const convosBefore5 = new Set((await js(`window.__TAURI_INTERNALS__.invoke("conversations")`)).map((c) => c.id));
+  await newChat(js);
+  await say(cdp, 'Change PORT to 3000 in src/config.rs and "world" to "Luis" in src/main.rs.');
+  await driveAll(js, "the two-file turn");
+  const edited = { config: fs.readFileSync(configPath), main: fs.readFileSync(mainPath) };
+  const applied = await js(`document.querySelectorAll(".tool.edit.ran").length`);
+  const both = !edited.config.equals(crlf(CONFIG_RS)) && !edited.main.equals(crlf(MAIN_RS));
+  if (applied < 2 || !both) {
+    skip("Undo all", `the model made ${applied} edit(s), and changed ${both ? "both files" : "fewer than two files"}`);
+  } else {
+    const line = () => js(`document.querySelector(".turn-undo .btn")?.innerText ?? ""`);
+    const count = () => js(`document.querySelector(".turn-undo-count")?.innerText ?? ""`);
+    const click = () => js(`document.querySelector(".turn-undo .btn").click(), true`);
+    const unchanged = () => fs.readFileSync(configPath).equals(edited.config) && fs.readFileSync(mainPath).equals(edited.main);
+    const resting = "Undo all";
+
+    check("the turn shows how many edits it made", (await count()) === `${applied} edits in this turn`, await count());
+    check("and offers to undo them all", (await line()) === resting, await line());
+
+    await click();
+    await sleep(150);
+    check("the first click only asks", (await line()) === `Undo ${applied} edits?` && unchanged(), await line());
+    await sleep(4500);
+    check("the question lapses on its own", (await line()) === resting && unchanged(), await line());
+
+    // A file that moved on since: the whole turn is refused, nothing written.
+    const theirs = Buffer.concat([edited.config, crlf("// my own line\n")]);
+    fs.writeFileSync(configPath, theirs);
+    await click();
+    await sleep(600);
+    await click();
+    await until(js, `!!document.querySelector(".banner")`, "the refusal", 30_000);
+    const banner = await js(`document.querySelector(".banner-text").innerText`);
+    check("a changed file refuses the whole turn", banner.includes("Nothing was undone") && banner.includes("config.rs"), banner);
+    check("a refused undo writes nothing", fs.readFileSync(configPath).equals(theirs) && fs.readFileSync(mainPath).equals(edited.main));
+
+    // Put the hand edit back out, and it goes through.
+    fs.writeFileSync(configPath, edited.config);
+    await js(`document.querySelector(".banner .icon-btn").click(), true`);
+    await click();
+    await sleep(600);
+    await click();
+    await until(js, `!document.querySelector(".tool.edit.ran") && !!document.querySelector(".tool.edit.undone")`, "the undo", 30_000);
+    check("the whole project is back byte for byte, CRLF kept",
+      fs.readFileSync(configPath).equals(crlf(CONFIG_RS)) && fs.readFileSync(mainPath).equals(crlf(MAIN_RS)));
+    check("every card reads Undone and the line is gone",
+      (await js(`document.querySelectorAll(".tool.edit.undone").length`)) === applied && (await line()) === "");
+
+    // Reopened from the sidebar: the cards are still Undone.
+    const mine = (await js(`window.__TAURI_INTERNALS__.invoke("conversations")`)).find((c) => !convosBefore5.has(c.id));
+    // The cards flip before the save lands; reopening too soon would read the
+    // file from before it. Wait until the saved thread says every edit is undone.
+    await until(
+      js,
+      `window.__TAURI_INTERNALS__.invoke("open_conversation", { id: ${JSON.stringify(mine?.id ?? "")} }).then((c) => {
+        const undos = c.messages.flatMap((m) => m.tool_calls ?? []).map((t) => t.function?.arguments ?? {}).filter((a) => a.undo);
+        return undos.length > 0 && undos.every((a) => a.undone === true);
+      })`,
+      "the undo to be saved",
+      15_000,
+    );
+    await newChat(js);
+    // By id: an earlier section asked about the same files, so titles can repeat.
+    await js(`document.querySelector(${JSON.stringify(`.cv-open[data-id=${JSON.stringify(mine?.id ?? "")}]`)}).click(), true`);
+    await until(js, `!!document.querySelector(".tool.edit")`, "the thread to reopen", 30_000);
+    check("reopened, the cards are still Undone and there is no line",
+      (await js(`document.querySelectorAll(".tool.edit.undone").length`)) === applied && (await line()) === "");
+  }
 } catch (e) {
   check("the run completed", false, String(e.message ?? e));
   console.log("\n  last of the thread:\n" + (await threadText(js).catch(() => "(unavailable)")));
@@ -267,9 +387,14 @@ try {
   }
   await js(`(location.href = location.origin + "/"), true`).catch(() => {});
   cdp.close();
+  cleanBackups();
   fs.rmSync(root, { recursive: true, force: true });
 }
 
-const failed = results.filter((r) => !r.ok).length;
-console.log(`\n${results.length - failed}/${results.length} checks passed`);
-process.exit(failed ? 1 : 0);
+const skipped = results.filter((r) => r.skip).length;
+const counted = results.filter((r) => !r.skip);
+const failed = counted.filter((r) => !r.ok).length;
+console.log(`\n${counted.length - failed}/${counted.length} checks passed (${skipped} skipped)`);
+// A run where section 5 was skipped proved nothing about undoing a turn.
+if (skipped) console.log("Section 5 did not run: the model did not make two edits. Not a pass for Undo all.");
+process.exit(failed || skipped ? 1 : 0);

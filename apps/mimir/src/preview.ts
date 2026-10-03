@@ -8,6 +8,7 @@
 //   ?preview          a finished exchange, ending on a tool call awaiting approval
 //   ?preview=stream   the same thread, with an answer still being waited on
 //   ?preview=edit     the file-editing flow: an undoable edit, a rejection, a diff to review
+//   ?preview=undo     taking turns back: three edits ending in an answer, a stopped turn with two, one already half undone, one still running
 //   ?preview=check    the check flow: a failed build, the fix, and a check awaiting approval
 //   ?preview=find     finding code: a listing, a search and a read that ran without asking, and a read outside the folder awaiting approval
 //   ?preview=empty    a new chat, with the sidebar and models filled in
@@ -201,6 +202,9 @@ export function installPreviewIpc() {
         return { result: "(preview) nothing was read, written or run", ok: true, stopped: false };
       case "undo_edit":
         return "undone";
+      case "undo_turn":
+        await sleep(500);
+        return { restored: [...(args.ids as string[])].reverse(), already: [], failed: null };
       case "load_model":
         await sleep(900);
         return 2.4;
@@ -352,6 +356,38 @@ export function previewThread(mode: string): Preview {
       stats: "",
       convoId: "p4",
       spent: 3_214,
+    };
+  }
+
+  // ?preview=undo — the line at the end of a turn that made two or more edits:
+  // after an answer, after a Stop with no answer, and the two turns that have
+  // none — one edit already undone, and a card still waiting on you.
+  if (mode === "undo") {
+    const one = (path: string, undo: string, state: "ran" | "undone" = "ran"): Entry => ({
+      kind: "tool", name: "edit_file", path, state, diff: PORT_DIFF, undo, result: `Edited ${path}: 1 line removed, 1 added.`,
+    });
+    return {
+      entries: [
+        { kind: "turn", role: "user", content: "Change the port to 3000, rename greet to welcome, and say hello to Luis." },
+        one("src/config.rs", "28f3a1"),
+        one("src/main.rs", "28f3a2"),
+        one("src/main.rs", "28f3a3"),
+        { kind: "turn", role: "assistant", content: "Done — `PORT` is **3000**, `greet` is now `welcome`, and `main` greets Luis.", model: "qwen3-vl:8b-instruct-q4_K_M" },
+        { kind: "turn", role: "user", content: "Now add a HOST constant and use it in address()." },
+        one("src/config.rs", "28f3b1"),
+        one("src/config.rs", "28f3b2"),
+        { kind: "turn", role: "user", content: "Put the port in an environment variable instead." },
+        one("src/config.rs", "28f3c1", "undone"),
+        one("src/main.rs", "28f3c2"),
+        { kind: "turn", role: "assistant", content: "I put the port in `PORT` and undid the first try, which read it in the wrong place.", model: "qwen3-vl:8b-instruct-q4_K_M" },
+        { kind: "turn", role: "user", content: "Also bump the version in Cargo.toml and src/main.rs." },
+        one("Cargo.toml", "28f3d1"),
+        { kind: "tool", name: "edit_file", path: "src/main.rs", state: "pending", diff: RENAME_DIFF },
+      ],
+      status: "",
+      stats: "",
+      convoId: "p4",
+      spent: 4_480,
     };
   }
 

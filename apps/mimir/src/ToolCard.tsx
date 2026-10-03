@@ -227,11 +227,14 @@ export function ToolCard({
   onAllow,
   onDeny,
   onUndo,
+  disabled,
 }: {
   entry: ToolEntry;
   onAllow: () => void;
   onDeny: () => void;
   onUndo: () => void;
+  /** Undo waits: an answer is streaming, or another undo is running. */
+  disabled: boolean;
 }) {
   const { name, path, state } = entry;
 
@@ -346,7 +349,12 @@ export function ToolCard({
         )}
         <span className="tool-state">{label}</span>
         {state === "ran" && entry.undo && (
-          <button className="btn ghost xs" onClick={onUndo} title="Put the file back the way it was">
+          <button
+            className="btn ghost xs"
+            onClick={onUndo}
+            disabled={disabled}
+            title="Put the file back the way it was"
+          >
             Undo
           </button>
         )}

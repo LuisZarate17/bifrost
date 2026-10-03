@@ -7,6 +7,29 @@ machine.
 **[G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
+## Open — H6, undo a whole turn, 2026-10-02
+
+**Already proven mechanically.** Unit tests on `edit::undo_turn`: two files, one file edited twice,
+create then edit, a file changed since (refused, every file and record untouched), a turn partly
+undone singly first, a hand edit between two of the turn's edits, an older turn under a newer
+edit, a created file deleted by hand, a missing backup, a write that fails partway (the newer edit
+is restored, the older bytes and records stay, and a retry finishes), ids in any order, bad ids,
+and no record left behind. Section 5 of `node tools/e2e/mimir-edit.mjs` drives the real app and
+model: the first click only asks, a changed file refuses the whole turn, and then a two-file turn
+comes back byte for byte, CRLF kept, still Undone after reopening (SKIP if the model made fewer
+than two edits). **What needs a person** is how the line reads, Stop partway through a turn, and a
+file held open by an editor.
+
+- [ ] **The line appears on a turn with two or more edits**, always visible, and asks before
+      acting. [H-testing.md §5](H-testing.md)
+- [ ] **Stop partway through a two-edit turn.** The line sits at the end of the stopped turn and
+      undoes what ran.
+- [ ] **A file held open by an editor.** With one of the turn's files open and locked by an editor
+      that blocks writes, **Undo all** either puts everything back or says which file it stopped at
+      and how many are still applied — never a silent half.
+- [ ] **Switching conversations while an undo runs** marks the right cards, in the right
+      conversation.
+
 ## Open — H5, reads that don't ask, 2026-10-02
 
 **Already proven mechanically.** Unit tests on the rule itself: a read, listing and search inside

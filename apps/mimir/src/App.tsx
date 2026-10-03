@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { Answer } from "@odin/ui";
 import { Switchboard, GpuMeter, splitName, type ModelInfo, type CardState } from "./Switchboard";
@@ -115,6 +115,55 @@ type Folder = { path: string; name: string; check?: string | null };
 const MAX_ROUNDS = 10;
 
 const isEdit = (name: string) => name === "edit_file" || name === "create_file";
+
+/** One turn as the Undo-all line sees it: from your message to just before the
+ *  next one. */
+export type TurnGroup = {
+  /** Undo handles of the edits and creates that ran and are still applied, in
+   *  the order they were made. Denied, rejected, failed, stopped, auto-run and
+   *  already-undone cards have none to offer. */
+  ids: string[];
+  /** A card still waiting on you or under way: not a turn to undo yet. */
+  busy: boolean;
+  /** Index of the turn's last entry — the answer if there is one, else the last
+   *  card — which is where the line goes. */
+  end: number;
+};
+
+/** Pure, so a reopened thread and a live one find the same turns: only ran and
+ *  undone cards are ever saved, and that is all this looks at. */
+export function turnsOf(all: Entry[]): TurnGroup[] {
+  const out: TurnGroup[] = [];
+  all.forEach((e, i) => {
+    if (e.kind === "turn" && e.role === "user") {
+      out.push({ ids: [], busy: false, end: i });
+      return;
+    }
+    const g = out[out.length - 1];
+    if (!g) return;
+    g.end = i;
+    if (e.kind !== "tool") return;
+    if (e.state === "pending" || e.state === "running") g.busy = true;
+    else if (isEdit(e.name) && e.state === "ran" && e.undo) g.ids.push(e.undo);
+  });
+  return out;
+}
+
+/** Flip the cards holding these undo handles to undone. By handle, never by
+ *  position: the thread can have changed while an undo was running. */
+function markUndone(all: Entry[], ids: string[]): Entry[] {
+  return all.map((x) =>
+    x.kind === "tool" && x.state === "ran" && x.undo && ids.includes(x.undo) ? { ...x, state: "undone" as const } : x,
+  );
+}
+
+/** What `undo_turn` reports; see odin_core::edit::TurnUndo. */
+type TurnUndo = { restored: string[]; already: string[]; failed: { id: string; display: string; error: string } | null };
+
+/** A second click this soon after the first is a habit, not an answer. */
+const ARM_MIN_MS = 400;
+/** The "Undo N edits?" question lapses after this long. */
+const ARM_MAX_MS = 4000;
 
 /** What the model is told when you say no, in terms of what it asked for. */
 function refusalFor(name: string, path: string): string {
@@ -326,6 +375,21 @@ function App() {
   useEffect(() => {
     convoIdRef.current = convoId;
   }, [convoId]);
+
+  /** Which turn's Undo all is asking "Undo N edits?" — its ids joined — and
+   *  when it asked, so a double-click cannot answer its own question. */
+  const [armed, setArmed] = useState<string | null>(null);
+  const armedAt = useRef(0);
+  const armTimer = useRef<number | undefined>(undefined);
+  /** The undo in flight, if any: "edit" for a card's own, else a turn's key.
+   *  Every Undo waits behind it, because two undos on one file would race. */
+  const [undoing, setUndoing] = useState<string | null>(null);
+  const undoingRef = useRef(false);
+  const disarm = useCallback(() => {
+    window.clearTimeout(armTimer.current);
+    setArmed(null);
+  }, []);
+  useEffect(() => () => window.clearTimeout(armTimer.current), []);
 
   const refreshModels = useCallback(() => {
     setLoadingModels(true);
@@ -616,6 +680,7 @@ function App() {
       try {
         const c = await invoke<Conversation>("open_conversation", { id });
         threadGen.current++;
+        disarm();
         setEntries(
           c.messages.map((m): Entry => {
             if (m.role === "tool") {
@@ -669,11 +734,12 @@ function App() {
         setError(String(e));
       }
     },
-    [],
+    [disarm],
   );
 
   const newConvo = useCallback(() => {
     threadGen.current++;
+    disarm();
     setEntries([]);
     convoIdRef.current = null;
     setConvoId(null);
@@ -682,7 +748,7 @@ function App() {
     setStats("");
     setError("");
     composerRef.current?.focus();
-  }, []);
+  }, [disarm]);
 
   // The card's figure moves while a model loads or is released, so it is worth
   // re-reading rather than showing once at startup and going stale.
@@ -1066,6 +1132,7 @@ function App() {
     setError("");
     setStats("");
     setDraft("");
+    disarm();
     setStreaming(true);
     pinned.current = true;
     const req = ++activeRequest.current;
@@ -1178,7 +1245,7 @@ function App() {
       });
       await persist(out, convoId);
     }
-  }, [draft, streaming, entries, model, card, planSend, staged, persist, settle, convoId, toolsOn, askWithTools, toWire]);
+  }, [draft, streaming, entries, model, card, planSend, staged, persist, settle, convoId, toolsOn, askWithTools, toWire, disarm]);
 
   /**
    * Stop the answer being written, and keep what has arrived.
@@ -1214,6 +1281,57 @@ function App() {
   }, [streaming, model, persist, convoId]);
 
   /**
+   * What both Undo buttons share. `call` asks Rust and says which handles it put
+   * back; it throws if Rust refused.
+   *
+   * **The thread can change while Rust works**, and this used to mark a card by
+   * its position and save to the conversation id captured at the click — so
+   * switching conversations mid-undo could mark a card in the wrong thread, or
+   * save the wrong one. So: which thread this was is taken before anything is
+   * awaited; cards are marked by their undo handle; and if that thread is no
+   * longer on screen the marked snapshot is saved to its own file, leaving the
+   * thread that is open alone. The save waits behind any save in flight, so two
+   * cannot race into two files.
+   */
+  const undoWith = useCallback(
+    async (key: string, call: () => Promise<{ done: string[]; note?: string }>) => {
+      if (undoingRef.current) return;
+      undoingRef.current = true;
+      setUndoing(key);
+      const gen = threadGen.current;
+      const snapshot = entriesRef.current;
+      const was = convoIdRef.current;
+      try {
+        await saving.current;
+        let out: { done: string[]; note?: string };
+        try {
+          out = await call();
+        } catch (err) {
+          setError(String(err));
+          return;
+        }
+        if (out.done.length) {
+          if (threadGen.current === gen) {
+            const next = await settle((prev) => markUndone(prev, out.done));
+            await persist(next, convoIdRef.current);
+          } else {
+            // A thread that was never saved has nothing to update on disk, unless
+            // Stop saved it a moment ago.
+            const stopped = stopSave.current?.gen === gen ? stopSave.current : null;
+            const id = was ?? (stopped ? await stopped.saved : null);
+            if (id) await persist(markUndone(snapshot, out.done), id, false);
+          }
+        }
+        if (out.note) setError(out.note);
+      } finally {
+        undoingRef.current = false;
+        setUndoing(null);
+      }
+    },
+    [persist, settle],
+  );
+
+  /**
    * Put a file back the way it was before one edit.
    *
    * Rust refuses if the file has changed since — undo restores by overwriting,
@@ -1221,20 +1339,56 @@ function App() {
    * again afterwards, so it records that the edit was undone.
    */
   const undoEdit = useCallback(
-    async (index: number) => {
-      const e = entriesRef.current[index];
-      if (!e || e.kind !== "tool" || !e.undo) return;
-      try {
-        await invoke<string>("undo_edit", { id: e.undo });
-        const next = await settle((prev) =>
-          prev.map((x, i) => (i === index && x.kind === "tool" ? { ...x, state: "undone" as const } : x)),
-        );
-        await persist(next, convoId);
-      } catch (err) {
-        setError(String(err));
+    (id: string) =>
+      undoWith("edit", async () => {
+        await invoke<string>("undo_edit", { id });
+        return { done: [id] };
+      }),
+    [undoWith],
+  );
+
+  /**
+   * Put back every edit of one turn, or none — Rust checks them all first, and
+   * refuses with the files that have changed. If a write fails partway, the ones
+   * that were put back flip to Undone and the banner says where it stopped; the
+   * rest are still applied and the line reappears with the smaller count.
+   */
+  const undoTurn = useCallback(
+    (ids: string[]) =>
+      undoWith(ids.join(","), async () => {
+        const out = await invoke<TurnUndo>("undo_turn", { ids });
+        const done = [...out.restored, ...out.already];
+        if (!out.failed) return { done };
+        const left = ids.length - done.length;
+        return {
+          done,
+          note:
+            `Undid ${done.length} of ${ids.length} edits, then stopped at ${out.failed.display}: ` +
+            `${out.failed.error}. The other ${left} ${left === 1 ? "is" : "are"} still applied — Undo all again ` +
+            `once that's fixed, or undo them one at a time, newest first.`,
+        };
+      }),
+    [undoWith],
+  );
+
+  /** The first click asks; a second, after a beat and within a few seconds,
+   *  does it. The key is the turn's own handles, so a turn that changes under
+   *  the question — an edit undone singly — is a different question. */
+  const askUndoTurn = useCallback(
+    (ids: string[]) => {
+      const key = ids.join(",");
+      if (armed === key) {
+        if (Date.now() - armedAt.current < ARM_MIN_MS) return;
+        disarm();
+        void undoTurn(ids);
+        return;
       }
+      window.clearTimeout(armTimer.current);
+      armedAt.current = Date.now();
+      setArmed(key);
+      armTimer.current = window.setTimeout(() => setArmed(null), ARM_MAX_MS);
     },
-    [persist, settle, convoId],
+    [armed, disarm, undoTurn],
   );
 
   const take = useCallback(async (files: FileList | File[]) => {
@@ -1292,6 +1446,93 @@ function App() {
   })();
   const canSend = !streaming && (draft.trim().length > 0 || staged.length > 0);
   const short = model ? splitName(model) : null;
+
+  const turns = turnsOf(entries);
+  const turnEnds = new Map(turns.map((t) => [t.end, t]));
+  /** The Undo-all line, after a turn's last entry. Two or more edits still
+   *  applied, nothing waiting on you, and not the turn being streamed now. */
+  const turnLine = (i: number) => {
+    const t = turnEnds.get(i);
+    if (!t || t.busy || t.ids.length < 2) return null;
+    if (streaming && t === turns[turns.length - 1]) return null;
+    const key = t.ids.join(",");
+    const label = undoing === key ? "Undoing…" : armed === key ? `Undo ${t.ids.length} edits?` : "Undo all";
+    // The count is quiet text and the action a button that looks like the
+    // cards' own Undo: a borderless line read as a caption, not as something
+    // to press. The text never changes, so the button's edge does not move.
+    return (
+      <div className="turn-undo" aria-live="polite">
+        <span className="turn-undo-count">{t.ids.length} edits in this turn</span>
+        <button
+          className={"btn ghost xs" + (armed === key ? " armed" : "")}
+          onClick={() => askUndoTurn(t.ids)}
+          disabled={streaming || undoing !== null}
+          title="Put every file this turn changed back the way it was"
+        >
+          {label}
+        </button>
+      </div>
+    );
+  };
+
+  const renderEntry = (entry: Entry, i: number) => {
+    if (entry.kind === "tool") {
+      return (
+        <ToolCard
+          key={"t" + i}
+          entry={entry}
+          onAllow={() => pendingDecision.current?.(true)}
+          onDeny={() => pendingDecision.current?.(false)}
+          onUndo={() => entry.undo && void undoEdit(entry.undo)}
+          disabled={streaming || undoing !== null}
+        />
+      );
+    }
+
+    if (entry.role === "user") {
+      return (
+        <div key={i} className="turn user">
+          {entry.images && entry.images.length > 0 && (
+            <Thumbs names={entry.images} />
+          )}
+          {entry.content && <div className="bubble">{entry.content}</div>}
+        </div>
+      );
+    }
+
+    const isLast = i === lastAssistant;
+    const waiting = !entry.content;
+    return (
+      <div key={i} className={"turn assistant" + (isLast ? " last" : "")}>
+        {waiting ? (
+          <div className="waiting" role="status">
+            <span className="pulse" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            {status && <span className="waiting-text">{status}</span>}
+          </div>
+        ) : (
+          <>
+            <Answer text={entry.content} />
+            {!(isLast && streaming) && (
+              <div className="turn-meta">
+                <CopyButton text={entry.content} label="Copy response" />
+                {entry.model && (
+                  <span className="turn-model" title={entry.model}>
+                    {splitName(entry.model).family} {splitName(entry.model).size}
+                  </span>
+                )}
+                {entry.stopped && <span className="turn-stopped">Stopped</span>}
+                {isLast && stats && <span className="turn-stats">{stats}</span>}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className={"app" + (sidebarOpen ? " with-sidebar" : "")}>
@@ -1399,63 +1640,12 @@ function App() {
                     {dropped === 1 ? "turn" : "turns"} to fit the context. They are still saved.
                   </p>
                 )}
-                {entries.map((entry, i) => {
-                  if (entry.kind === "tool") {
-                    return (
-                      <ToolCard
-                        key={"t" + i}
-                        entry={entry}
-                        onAllow={() => pendingDecision.current?.(true)}
-                        onDeny={() => pendingDecision.current?.(false)}
-                        onUndo={() => void undoEdit(i)}
-                      />
-                    );
-                  }
-
-                  if (entry.role === "user") {
-                    return (
-                      <div key={i} className="turn user">
-                        {entry.images && entry.images.length > 0 && (
-                          <Thumbs names={entry.images} />
-                        )}
-                        {entry.content && <div className="bubble">{entry.content}</div>}
-                      </div>
-                    );
-                  }
-
-                  const isLast = i === lastAssistant;
-                  const waiting = !entry.content;
-                  return (
-                    <div key={i} className={"turn assistant" + (isLast ? " last" : "")}>
-                      {waiting ? (
-                        <div className="waiting" role="status">
-                          <span className="pulse" aria-hidden="true">
-                            <i />
-                            <i />
-                            <i />
-                          </span>
-                          {status && <span className="waiting-text">{status}</span>}
-                        </div>
-                      ) : (
-                        <>
-                          <Answer text={entry.content} />
-                          {!(isLast && streaming) && (
-                            <div className="turn-meta">
-                              <CopyButton text={entry.content} label="Copy response" />
-                              {entry.model && (
-                                <span className="turn-model" title={entry.model}>
-                                  {splitName(entry.model).family} {splitName(entry.model).size}
-                                </span>
-                              )}
-                              {entry.stopped && <span className="turn-stopped">Stopped</span>}
-                              {isLast && stats && <span className="turn-stats">{stats}</span>}
-                            </div>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
+                {entries.map((entry, i) => (
+                  <Fragment key={i}>
+                    {renderEntry(entry, i)}
+                    {turnLine(i)}
+                  </Fragment>
+                ))}
               </>
             )}
           </div>

@@ -813,6 +813,32 @@ kbd {
   font-size: 11.5px;
 }
 
+/* The line at the end of a turn that made two or more edits. Always visible,
+   unlike `.turn-meta`: it is the way to take a whole turn back, and a control
+   that only appears on hover is one nobody knows is there. One button whose
+   label changes, so its left edge never moves when it asks "are you sure". */
+.turn-undo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  min-height: 28px;
+}
+.turn-undo-count {
+  color: var(--text-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+/* The same pill as a card's Undo, so it reads as something to press. */
+.turn-undo .btn {
+  font-variant-numeric: tabular-nums;
+}
+/* Armed: the one place the line asks for attention. */
+.turn-undo .btn.armed {
+  border-color: var(--text-3);
+  background: var(--bg-hover);
+}
+
 .waiting {
   display: flex;
   align-items: center;

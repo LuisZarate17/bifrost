@@ -147,7 +147,34 @@ keeps its cards. What it cannot judge is how it reads and feels.
 
 ---
 
-*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. H6 onward add
+## 5 — Undo a whole turn (H6)
+
+`node tools/e2e/mimir-edit.mjs` (section 5) drives a real two-file turn: the first click only asks,
+a changed file refuses the whole turn, and then the project comes back byte for byte, CRLF kept,
+with the cards still Undone after reopening. `cargo test -p odin-core` covers every chain shape.
+What it cannot judge is how the line reads, a Stop in the middle, and a file held open elsewhere.
+
+- [ ] **The line, and the question.** In `practice`, type `Change "world" to "Luis" in greet.rs,
+      then add a comment line at the top.` (or any request that makes two edits). **Expect:** after
+      the turn, a quiet line under the last card or answer: **2 edits in this turn** and an **Undo
+      all** button shaped like the cards' own Undo, always visible, not only on hover. Click it once.
+      **Expect:** it reads **Undo 2 edits?** and nothing has changed; leave it for four seconds and
+      it goes back to **Undo all**.
+- [ ] **Undo all.** Click it twice, a moment apart. **Expect:** every card reads **Undone**, the line
+      disappears, and `greet.rs` is exactly as it was. Run `node tools/practice.mjs` afterwards.
+- [ ] **A file that moved on.** Make a two-edit turn, then add a line to `greet.rs` in an editor and
+      save. Click **Undo all** twice. **Expect:** a banner naming `greet.rs`, **Nothing was undone**,
+      and your line still there.
+- [ ] **Stop partway.** Start a request likely to make several edits and press **Stop** after the
+      second one is applied. **Expect:** the line appears at the end of the stopped turn with the
+      count of edits that ran, and undoing it puts them back.
+- [ ] **Switch conversations while it runs.** Click **Undo all** twice, then at once open another
+      conversation. **Expect:** the other conversation is untouched; reopening the first shows its
+      cards Undone.
+
+---
+
+*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. H7 onward add
 sections here as they are built.*
 
 ## After this

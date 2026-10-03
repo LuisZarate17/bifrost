@@ -794,6 +794,11 @@ struct Record {
     create: bool,
     /// Hash of what the edit wrote. Undo only proceeds if the file still is this.
     after: u64,
+    /// Hash of the file before the edit, so [`undo_turn`] can check a `.bak`
+    /// directly — the oldest edit of a chain has no earlier record to compare it
+    /// with. `None` for a create, and for records written before this existed.
+    #[serde(default)]
+    before: Option<u64>,
 }
 
 /// `%APPDATA%\odin\backups\`, beside the conversations.
@@ -860,6 +865,7 @@ pub fn apply(plan: &Plan, backups: &Path) -> Result<Applied, String> {
         display: plan.display.clone(),
         create: plan.create,
         after: fingerprint(&plan.after),
+        before: plan.before,
     };
     std::fs::write(
         backups.join(format!("{id}.json")),
@@ -915,6 +921,140 @@ pub fn undo(id: &str, backups: &Path) -> Result<String, String> {
     let _ = std::fs::remove_file(&meta);
     let _ = std::fs::remove_file(backups.join(format!("{id}.bak")));
     Ok(record.display)
+}
+
+/// What [`undo_turn`] did. `Err` from `undo_turn` means it refused and wrote
+/// nothing; `Ok` with no `failed` means every edit is back; `Ok` with `failed`
+/// means it stopped partway and the rest are still applied.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnUndo {
+    /// Edits put back, newest first.
+    pub restored: Vec<String>,
+    /// Edits with no record left — undone one at a time already, or never made.
+    pub already: Vec<String>,
+    pub failed: Option<TurnFailure>,
+}
+
+/// The edit a turn's undo stopped at, and why.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnFailure {
+    pub id: String,
+    pub display: String,
+    pub error: String,
+}
+
+/// Put back every edit of one turn — or, if any of them cannot be put back
+/// safely, none.
+///
+/// Undoing newest first with [`undo`] already unwinds a chain of edits on one
+/// file, because each edit's backup is exactly the file the previous edit
+/// wrote. What a loop of `undo` cannot do is refuse *before* writing: edit three
+/// of four failing would leave the turn half undone. So this checks every chain
+/// first — the file still is what the newest edit wrote, every backup is
+/// readable and is the hash its record expects, and each backup is the output of
+/// the edit before it — collecting every problem file before refusing. Then it
+/// restores newest first across all files, each through [`undo`], whose own
+/// check guards against a change after the pre-check.
+///
+/// **Not atomic across files.** If a write fails partway, what is left is a
+/// state that really existed during the turn, the records of what remains are
+/// intact, and calling this again with the same ids finishes the job. Ids are
+/// wall-clock nanoseconds, so a clock that steps back during a turn makes the
+/// chains disagree and gets a refusal, never a wrong write.
+///
+/// The caller serialises this against every other edit and undo (the app holds a
+/// lock); nothing in here does.
+pub fn undo_turn(ids: &[String], backups: &Path) -> Result<TurnUndo, String> {
+    // id → (numeric id, record), in the order given, without repeats.
+    let mut seen: Vec<u128> = Vec::new();
+    let mut already: Vec<String> = Vec::new();
+    let mut found: Vec<(u128, String, Record)> = Vec::new();
+    for id in ids {
+        if id.is_empty() || id.len() > 32 || !id.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("not an edit id: {id}"));
+        }
+        let n = u128::from_str_radix(id, 16).map_err(|_| format!("not an edit id: {id}"))?;
+        if seen.contains(&n) {
+            continue;
+        }
+        seen.push(n);
+        let Ok(bytes) = std::fs::read(backups.join(format!("{id}.json"))) else {
+            already.push(id.clone());
+            continue;
+        };
+        let record: Record =
+            serde_json::from_slice(&bytes).map_err(|e| format!("reading the backup record for {id}: {e}"))?;
+        found.push((n, id.clone(), record));
+    }
+    if found.is_empty() {
+        if ids.is_empty() {
+            return Err("there are no edits to undo".to_string());
+        }
+        return Ok(TurnUndo { restored: Vec::new(), already, failed: None });
+    }
+
+    // One chain per file, oldest edit first.
+    let mut chains: std::collections::BTreeMap<PathBuf, Vec<&(u128, String, Record)>> = Default::default();
+    for f in &found {
+        chains.entry(f.2.path.clone()).or_default().push(f);
+    }
+    let mut problems: Vec<String> = Vec::new();
+    for chain in chains.values_mut() {
+        chain.sort_by_key(|f| f.0);
+        let display = &chain[chain.len() - 1].2.display;
+        let newest = chain[chain.len() - 1];
+        let mismatch =
+            || format!("{display}'s edits in this turn do not line up, so they cannot be put back safely");
+        let problem: Option<String> = 'chain: {
+            match std::fs::read(&newest.2.path) {
+                Ok(bytes) if fingerprint(&bytes) == newest.2.after => {}
+                Ok(_) => {
+                    break 'chain Some(format!(
+                        "{display} has changed since this turn's edit, so putting it back would lose those changes"
+                    ));
+                }
+                Err(_) => {
+                    break 'chain Some(format!("{display} no longer exists, so there is nothing to put back"));
+                }
+            }
+            for (i, (_, id, r)) in chain.iter().enumerate() {
+                if r.create {
+                    if i != 0 {
+                        break 'chain Some(mismatch());
+                    }
+                    continue;
+                }
+                let Ok(bak) = std::fs::read(backups.join(format!("{id}.bak"))) else {
+                    break 'chain Some(format!("the backup of {display} is missing"));
+                };
+                let hash = fingerprint(&bak);
+                if r.before.is_some_and(|b| b != hash) || (i > 0 && hash != chain[i - 1].2.after) {
+                    break 'chain Some(mismatch());
+                }
+            }
+            None
+        };
+        problems.extend(problem);
+    }
+    if !problems.is_empty() {
+        return Err(format!("Nothing was undone: {}.", problems.join("; ")));
+    }
+
+    // Newest first across every file.
+    found.sort_by_key(|f| std::cmp::Reverse(f.0));
+    let mut restored = Vec::new();
+    for (_, id, record) in &found {
+        match undo(id, backups) {
+            Ok(_) => restored.push(id.clone()),
+            Err(error) => {
+                let failed = TurnFailure { id: id.clone(), display: record.display.clone(), error };
+                return Ok(TurnUndo { restored, already, failed: Some(failed) });
+            }
+        }
+    }
+    Ok(TurnUndo { restored, already, failed: None })
 }
 
 #[cfg(test)]
@@ -1571,6 +1711,264 @@ mod tests {
         let s = Sandbox::new("undoid");
         assert!(undo("../../config", &s.backups()).unwrap_err().contains("not an edit id"));
         assert!(undo("", &s.backups()).is_err());
+    }
+
+    // ── undoing a whole turn ────────────────────────────────────────────────
+
+    fn replace(s: &Sandbox, ws: &Workspace, rel: &str, old: &str, new: &str) -> String {
+        apply(&plan_replace(ws, rel, old, new).unwrap(), &s.backups()).unwrap().id
+    }
+
+    fn backup_files(s: &Sandbox) -> Vec<String> {
+        match std::fs::read_dir(s.backups()) {
+            Ok(rd) => rd.map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_turn_across_two_files_is_put_back() {
+        let s = Sandbox::new("turn-two");
+        let ws = s.ws();
+        s.write("a.txt", b"one\r\n");
+        s.write("b.txt", b"\xEF\xBB\xBFred\n");
+        let a = replace(&s, &ws, "a.txt", "one", "two");
+        let b = replace(&s, &ws, "b.txt", "red", "blue");
+        let out = undo_turn(&[a.clone(), b.clone()], &s.backups()).unwrap();
+        assert_eq!(out.restored, vec![b, a]);
+        assert!(out.already.is_empty() && out.failed.is_none());
+        assert_eq!(s.read("a.txt"), b"one\r\n");
+        assert_eq!(s.read("b.txt"), b"\xEF\xBB\xBFred\n");
+    }
+
+    #[test]
+    fn one_file_edited_twice_is_unwound_newest_first() {
+        let s = Sandbox::new("turn-twice");
+        let ws = s.ws();
+        s.write("a.txt", b"one two\n");
+        let first = replace(&s, &ws, "a.txt", "one", "1");
+        let second = replace(&s, &ws, "a.txt", "two", "2");
+        let out = undo_turn(&[first.clone(), second.clone()], &s.backups()).unwrap();
+        assert_eq!(out.restored, vec![second, first]);
+        assert_eq!(s.read("a.txt"), b"one two\n");
+    }
+
+    #[test]
+    fn ids_given_in_reverse_order_make_no_difference() {
+        let s = Sandbox::new("turn-reverse");
+        let ws = s.ws();
+        s.write("a.txt", b"one two\n");
+        let first = replace(&s, &ws, "a.txt", "one", "1");
+        let second = replace(&s, &ws, "a.txt", "two", "2");
+        undo_turn(&[second, first], &s.backups()).unwrap();
+        assert_eq!(s.read("a.txt"), b"one two\n");
+    }
+
+    #[test]
+    fn a_create_then_an_edit_of_it_is_removed() {
+        let s = Sandbox::new("turn-create");
+        let ws = s.ws();
+        let made = apply(&plan_create(&ws, "new.txt", "hi\n").unwrap(), &s.backups()).unwrap().id;
+        let edited = replace(&s, &ws, "new.txt", "hi", "hello");
+        undo_turn(&[made, edited], &s.backups()).unwrap();
+        assert!(!ws.root().join("new.txt").exists());
+        assert!(backup_files(&s).is_empty());
+    }
+
+    #[test]
+    fn a_file_changed_since_refuses_the_whole_turn_and_touches_nothing() {
+        let s = Sandbox::new("turn-changed");
+        let ws = s.ws();
+        s.write("a.txt", b"one\n");
+        s.write("b.txt", b"red\n");
+        let a = replace(&s, &ws, "a.txt", "one", "two");
+        let b = replace(&s, &ws, "b.txt", "red", "blue");
+        s.write("a.txt", b"two\nmy own line\n");
+        let before = backup_files(&s);
+        let err = undo_turn(&[a, b], &s.backups()).unwrap_err();
+        assert!(err.starts_with("Nothing was undone:") && err.contains("a.txt has changed"), "{err}");
+        assert_eq!(s.read("a.txt"), b"two\nmy own line\n");
+        assert_eq!(s.read("b.txt"), b"blue\n");
+        let mut after = backup_files(&s);
+        let mut before = before;
+        before.sort();
+        after.sort();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn every_problem_file_is_named() {
+        let s = Sandbox::new("turn-names");
+        let ws = s.ws();
+        s.write("a.txt", b"one\n");
+        s.write("b.txt", b"red\n");
+        let a = replace(&s, &ws, "a.txt", "one", "two");
+        let b = replace(&s, &ws, "b.txt", "red", "blue");
+        s.write("a.txt", b"x\n");
+        s.write("b.txt", b"y\n");
+        let err = undo_turn(&[a, b], &s.backups()).unwrap_err();
+        assert!(err.contains("a.txt") && err.contains("b.txt"), "{err}");
+    }
+
+    #[test]
+    fn a_turn_partly_undone_by_hand_finishes_the_rest() {
+        let s = Sandbox::new("turn-partly");
+        let ws = s.ws();
+        s.write("a.txt", b"one two\n");
+        let first = replace(&s, &ws, "a.txt", "one", "1");
+        let second = replace(&s, &ws, "a.txt", "two", "2");
+        undo(&second, &s.backups()).unwrap();
+        let out = undo_turn(&[first.clone(), second.clone()], &s.backups()).unwrap();
+        assert_eq!(out.restored, vec![first]);
+        assert_eq!(out.already, vec![second]);
+        assert_eq!(s.read("a.txt"), b"one two\n");
+    }
+
+    #[test]
+    fn a_hand_edit_between_two_of_the_turns_edits_refuses() {
+        let s = Sandbox::new("turn-between");
+        let ws = s.ws();
+        s.write("a.txt", b"one two\n");
+        let first = replace(&s, &ws, "a.txt", "one", "1");
+        s.write("a.txt", b"1 two\nmine\n");
+        let second = replace(&s, &ws, "a.txt", "two", "2");
+        let err = undo_turn(&[first, second], &s.backups()).unwrap_err();
+        assert!(err.contains("do not line up"), "{err}");
+        assert_eq!(s.read("a.txt"), b"1 2\nmine\n");
+    }
+
+    #[test]
+    fn an_older_turn_under_a_newer_edit_refuses_until_the_newer_goes_first() {
+        let s = Sandbox::new("turn-layers");
+        let ws = s.ws();
+        s.write("a.txt", b"one two\n");
+        let older = replace(&s, &ws, "a.txt", "one", "1");
+        let newer = replace(&s, &ws, "a.txt", "two", "2");
+        let err = undo_turn(std::slice::from_ref(&older), &s.backups()).unwrap_err();
+        assert!(err.contains("has changed"), "{err}");
+        undo_turn(&[newer], &s.backups()).unwrap();
+        undo_turn(&[older], &s.backups()).unwrap();
+        assert_eq!(s.read("a.txt"), b"one two\n");
+    }
+
+    #[test]
+    fn a_created_file_deleted_by_hand_refuses() {
+        let s = Sandbox::new("turn-vanished");
+        let ws = s.ws();
+        let made = apply(&plan_create(&ws, "new.txt", "hi\n").unwrap(), &s.backups()).unwrap().id;
+        let edited = replace(&s, &ws, "new.txt", "hi", "hello");
+        std::fs::remove_file(ws.root().join("new.txt")).unwrap();
+        let err = undo_turn(&[made, edited], &s.backups()).unwrap_err();
+        assert!(err.contains("no longer exists"), "{err}");
+    }
+
+    #[test]
+    fn a_file_created_deleted_and_created_again_refuses() {
+        let s = Sandbox::new("turn-recreated");
+        let ws = s.ws();
+        let one = apply(&plan_create(&ws, "new.txt", "hi\n").unwrap(), &s.backups()).unwrap().id;
+        std::fs::remove_file(ws.root().join("new.txt")).unwrap();
+        let two = apply(&plan_create(&ws, "new.txt", "hi\n").unwrap(), &s.backups()).unwrap().id;
+        let err = undo_turn(&[one, two], &s.backups()).unwrap_err();
+        assert!(err.contains("do not line up"), "{err}");
+        assert!(ws.root().join("new.txt").exists());
+    }
+
+    #[test]
+    fn a_missing_backup_refuses() {
+        let s = Sandbox::new("turn-nobak");
+        let ws = s.ws();
+        s.write("a.txt", b"one two\n");
+        let first = replace(&s, &ws, "a.txt", "one", "1");
+        let second = replace(&s, &ws, "a.txt", "two", "2");
+        std::fs::remove_file(s.backups().join(format!("{first}.bak"))).unwrap();
+        let err = undo_turn(&[first, second], &s.backups()).unwrap_err();
+        assert!(err.contains("backup of a.txt is missing"), "{err}");
+        assert_eq!(s.read("a.txt"), b"1 2\n");
+    }
+
+    #[test]
+    fn a_turn_already_undone_is_ok_and_does_nothing() {
+        let s = Sandbox::new("turn-already");
+        let ws = s.ws();
+        s.write("a.txt", b"one\n");
+        let a = replace(&s, &ws, "a.txt", "one", "two");
+        undo(&a, &s.backups()).unwrap();
+        let out = undo_turn(std::slice::from_ref(&a), &s.backups()).unwrap();
+        assert_eq!(out, TurnUndo { restored: Vec::new(), already: vec![a], failed: None });
+    }
+
+    #[test]
+    fn a_write_failing_partway_leaves_the_rest_intact_and_retryable() {
+        let s = Sandbox::new("turn-fail");
+        let ws = s.ws();
+        s.write("a.txt", b"one\n");
+        s.write("b.txt", b"red\n");
+        let a = replace(&s, &ws, "a.txt", "one", "two");
+        let b = replace(&s, &ws, "b.txt", "red", "blue");
+        // A directory where write_atomic wants its temporary file makes the
+        // write to a.txt fail on any OS.
+        let block = ws.root().join(".a.txt.odin-tmp");
+        std::fs::create_dir(&block).unwrap();
+
+        let out = undo_turn(&[a.clone(), b.clone()], &s.backups()).unwrap();
+        assert_eq!(out.restored, vec![b.clone()]);
+        let failed = out.failed.unwrap();
+        assert_eq!((failed.id.as_str(), failed.display.as_str()), (a.as_str(), "a.txt"));
+        assert_eq!(s.read("b.txt"), b"red\n");
+        assert_eq!(s.read("a.txt"), b"two\n");
+        assert!(s.backups().join(format!("{a}.json")).exists());
+        assert!(s.backups().join(format!("{a}.bak")).exists());
+
+        std::fs::remove_dir(&block).unwrap();
+        let again = undo_turn(&[a.clone(), b.clone()], &s.backups()).unwrap();
+        assert_eq!(again.restored, vec![a]);
+        assert_eq!(again.already, vec![b]);
+        assert_eq!(s.read("a.txt"), b"one\n");
+    }
+
+    #[test]
+    fn turn_ids_that_are_not_ids_are_refused() {
+        let s = Sandbox::new("turn-badids");
+        assert!(undo_turn(&["../../config".to_string()], &s.backups()).unwrap_err().contains("not an edit id"));
+        assert!(undo_turn(&["zz".to_string()], &s.backups()).is_err());
+        assert!(undo_turn(&["1".repeat(33)], &s.backups()).is_err());
+        assert!(undo_turn(&[String::new()], &s.backups()).is_err());
+    }
+
+    #[test]
+    fn an_empty_turn_is_refused() {
+        let s = Sandbox::new("turn-empty");
+        assert!(undo_turn(&[], &s.backups()).is_err());
+    }
+
+    #[test]
+    fn a_repeated_id_is_undone_once() {
+        let s = Sandbox::new("turn-dup");
+        let ws = s.ws();
+        s.write("a.txt", b"one\n");
+        let a = replace(&s, &ws, "a.txt", "one", "two");
+        let out = undo_turn(&[a.clone(), a.clone()], &s.backups()).unwrap();
+        assert_eq!(out.restored, vec![a]);
+        assert!(out.already.is_empty());
+    }
+
+    #[test]
+    fn undoing_a_turn_leaves_no_record_or_backup_behind() {
+        let s = Sandbox::new("turn-clean");
+        let ws = s.ws();
+        s.write("a.txt", b"one\n");
+        let a = replace(&s, &ws, "a.txt", "one", "two");
+        let b = apply(&plan_create(&ws, "new.txt", "hi\n").unwrap(), &s.backups()).unwrap().id;
+        undo_turn(&[a, b], &s.backups()).unwrap();
+        assert!(backup_files(&s).is_empty());
+    }
+
+    #[test]
+    fn a_record_written_before_the_hash_of_the_original_was_kept_still_loads() {
+        let old = br#"{"path":"C:\\x\\a.txt","display":"a.txt","create":false,"after":42}"#;
+        let r: Record = serde_json::from_slice(old).unwrap();
+        assert_eq!(r.before, None);
     }
 
     #[test]

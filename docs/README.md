@@ -39,6 +39,9 @@ Mímir and Heimdall, and what should happen. `node tools/practice.mjs` builds th
 card, Stop, finding code, switching to the coding model. Grows a section per chunk that adds
 something you can press.
 
+**[H-status.md](H-status.md)** — every Stage H chunk and gate, done or not, with its commit and
+one-line result. Updated at the end of each chunk.
+
 **[PENDING-CHECKS.md](PENDING-CHECKS.md)** — things no tool call can verify, because they need a
 keypress, a hover, or a second machine. Where "built but never actually pressed" is tracked.
 
@@ -54,7 +57,7 @@ records of what happened.
 - **[STAGE-H.md](../stages/STAGE-H.md)** — Mímir learns to find code, check its work and run
   longer: ten chunks in four phases, each gated on a measurement. H1 (the check command), H2
   (finding code) and H3 (the benchmark of real work) built; H4 measured three coding models;
-  Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5 built; H6 (undo a whole turn) next.
+  Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5 and H6 built; Gate 3 next.
 
 ---
 
@@ -248,6 +251,10 @@ Finished chunks: what was built, what was measured, what the measurement changed
   asking** — 2.5 cards per coding task instead of 3.9, none to find code — while edits, checks,
   outside reads, secret-looking and gitignored files still ask. `ask_every_call` turns it off.
   Reverses G6 in part
+- **[H6](results/H6-results.md)** — undo a whole turn. Two or more edits in a turn end in an **Undo all**, asked twice, that
+  checks every file's whole chain before writing anything and puts them back newest first; a real
+  two-file turn came back byte for byte. Also fixed: a single Undo could save into the wrong
+  conversation
 
 **Stage F — keep testing models**
 

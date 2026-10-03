@@ -1027,6 +1027,7 @@ async fn run_tool(name: String, path: String, token: String) -> Result<Ran, Stri
         ("read_file", Some(Payload::Read(real))) => Ok(run_read(&real)),
         ("edit_file" | "create_file", Some(Payload::Edit(plan))) => {
             let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
+            let _edits = edits_lock();
             // A file changed since the diff was shown is refused, not written:
             // the model is told, and can read it again.
             Ok(match edit::apply(&plan, &backups) {
@@ -1072,7 +1073,44 @@ async fn run_tool(name: String, path: String, token: String) -> Result<Ran, Stri
 async fn undo_edit(id: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
+        let _edits = edits_lock();
         edit::undo(&id, &backups)
+    })
+    .await
+    .map_err(|e| format!("undo failed: {e}"))?
+}
+
+/// Every write to a project file — an edit, an undo, a turn's undo — takes this
+/// first, so two of them never touch the same file at once. Two undos from two
+/// clicks, or an undo while the next edit is being applied, would otherwise each
+/// pass their own "is the file still what I expect" check and then write over
+/// one another. It lives here rather than in `edit.rs` because the tests and
+/// probes there apply edits in parallel on purpose.
+static EDITS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A panic while holding the lock leaves nothing half-written that the next
+/// holder's own checks would not catch, so a poisoned lock is simply taken.
+fn edits_lock() -> std::sync::MutexGuard<'static, ()> {
+    EDITS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// More edits than this in one turn is not something the UI produces.
+const MAX_TURN_UNDO: usize = 64;
+
+/// Put back every edit of one turn, or none.
+///
+/// All of [`edit::undo_turn`]'s pre-check and restores run under one hold of
+/// the edits lock. `Err` means refused and nothing written; `Ok` with `failed`
+/// set means it stopped partway and the rest are still applied.
+#[tauri::command]
+async fn undo_turn(ids: Vec<String>) -> Result<edit::TurnUndo, String> {
+    if ids.len() > MAX_TURN_UNDO {
+        return Err(format!("a turn of more than {MAX_TURN_UNDO} edits cannot be undone at once"));
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
+        let _edits = edits_lock();
+        edit::undo_turn(&ids, &backups)
     })
     .await
     .map_err(|e| format!("undo failed: {e}"))?
@@ -1403,6 +1441,7 @@ pub fn run() {
             ask_with_tools,
             run_tool,
             undo_edit,
+            undo_turn,
             project_folder,
             choose_project_folder,
             clear_project_folder,
@@ -1426,6 +1465,29 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn undoing_a_turn_of_more_than_the_limit_is_refused_before_anything_runs() {
+        let ids: Vec<String> = (0..=MAX_TURN_UNDO).map(|i| format!("{i:x}")).collect();
+        let err = tauri::async_runtime::block_on(undo_turn(ids)).unwrap_err();
+        assert!(err.contains("more than 64"), "{err}");
+    }
+
+    /// The lock is what keeps two writers off one file, so a second taker must
+    /// wait while the first holds it, and a panic in a holder must not wedge it.
+    #[test]
+    fn the_edits_lock_is_exclusive_and_survives_a_panicking_holder() {
+        {
+            let _held = edits_lock();
+            assert!(EDITS.try_lock().is_err(), "a second writer got in while the lock was held");
+        }
+        let _ = std::thread::spawn(|| {
+            let _held = edits_lock();
+            panic!("a writer died holding the lock");
+        })
+        .join();
+        drop(edits_lock());
+    }
 
     /// The approval boundary. These are the only tests in this crate on purpose:
     /// everything else here is a thin `spawn_blocking` wrapper over `odin-core`,

@@ -196,6 +196,11 @@ try {
   if (runs(2)) {
     console.log("\n2. picking B and switching loads the coding model for real");
     await js(`(() => { document.querySelector(".folder-x")?.click(); return true; })()`);
+    // Wait for the clear to land first. Clearing and picking both rewrite the
+    // config; fired back to back, the clear could be saved last and leave no
+    // folder — a race no person clicks fast enough to hit, but a script does.
+    await until(js, `document.querySelector(".folder-x") === null`, "the folder to clear");
+    await sleep(300);
     await pickRecent(js, 1);
     await until(js, `document.querySelector(".model-offer-text")?.textContent.includes("working in code") ?? false`, "the coding offer");
     await clickOffer(js, "Switch");
