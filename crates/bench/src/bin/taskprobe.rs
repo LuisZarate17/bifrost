@@ -828,6 +828,10 @@ struct Outcome {
     rounds: usize,
     late: bool,
     checks: usize,
+    /// Calls that would have shown a card under the app's policy, and under
+    /// the one before H5 (every call).
+    asks: usize,
+    asks_every_call: usize,
     calls: Vec<String>,
     files: Vec<String>,
     secs: f64,
@@ -854,6 +858,8 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, target_dir: &Pat
                 rounds: 0,
                 late: false,
                 checks: 0,
+                asks: 0,
+                asks_every_call: 0,
                 calls: Vec::new(),
                 files: Vec::new(),
                 secs: started.elapsed().as_secs_f64(),
@@ -870,6 +876,8 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, target_dir: &Pat
                 rounds: 0,
                 late: false,
                 checks: 0,
+                asks: 0,
+                asks_every_call: 0,
                 calls: Vec::new(),
                 files: Vec::new(),
                 secs: started.elapsed().as_secs_f64(),
@@ -889,6 +897,8 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, target_dir: &Pat
                 rounds: 0,
                 late: false,
                 checks: 0,
+                asks: 0,
+                asks_every_call: 0,
                 calls: Vec::new(),
                 files: Vec::new(),
                 secs: started.elapsed().as_secs_f64(),
@@ -946,6 +956,8 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, target_dir: &Pat
         rounds: r.rounds,
         late: r.rounds > tools::MAX_ROUNDS,
         checks: r.checks.len(),
+        asks: r.asks,
+        asks_every_call: r.asks_every_call,
         calls: r.calls,
         files,
         secs: 0.0,
@@ -1059,6 +1071,7 @@ fn main() {
         let (mut pass, mut late, mut fail, mut error) = (0, 0, 0, 0);
         let (mut kind_a, mut kind_b) = ((0usize, 0usize), (0usize, 0usize));
         let (mut secs, mut rounds, mut checks) = (0.0, 0usize, 0usize);
+        let (mut asks, mut asks_every_call) = (0usize, 0usize);
         println!("── {label} ──");
         for task in &tasks {
             let mut line = String::new();
@@ -1085,6 +1098,8 @@ fn main() {
                 secs += o.secs;
                 rounds += o.rounds;
                 checks += o.checks;
+                asks += o.asks;
+                asks_every_call += o.asks_every_call;
                 let shown = if o.verdict == Verdict::Pass && o.late { "LATE" } else { o.verdict.label() };
                 line.push_str(&format!("{shown:<5} "));
                 if o.verdict != Verdict::Pass {
@@ -1096,7 +1111,7 @@ fn main() {
                 json.push(serde_json::json!({
                     "setting": label, "task": task.id, "kind": task.kind.name(), "run": i + 1,
                     "verdict": o.verdict.label(), "why": o.why, "rounds": o.rounds, "late": o.late,
-                    "checks": o.checks, "calls": o.calls, "filesChanged": o.files, "log": o.log,
+                    "checks": o.checks, "asks": o.asks, "asksEveryCall": o.asks_every_call, "calls": o.calls, "filesChanged": o.files, "log": o.log,
                     "secs": (o.secs * 10.0).round() / 10.0,
                 }));
             }
@@ -1106,7 +1121,7 @@ fn main() {
         println!(
             "  → {pass}/{total} pass within the app's {} rounds ({:.0}%) · {late} only later · {fail} fail · \
              {error} error · real commits {}/{} · removals {}/{} · {:.1} rounds/run · {:.1} checks/run · \
-             {:.1}s avg\n",
+             {:.1} asks/run ({:.1} asking every call) · {:.1}s avg\n",
             tools::MAX_ROUNDS,
             100.0 * pass as f64 / total.max(1) as f64,
             kind_a.0,
@@ -1115,20 +1130,23 @@ fn main() {
             kind_b.1,
             rounds as f64 / total.max(1) as f64,
             checks as f64 / total.max(1) as f64,
+            asks as f64 / total.max(1) as f64,
+            asks_every_call as f64 / total.max(1) as f64,
             secs / total.max(1) as f64,
         );
         rows.push(format!(
-            "| {label} | {pass}/{total} ({:.0}%) | {late} | {fail} | {error} | {:.1} | {:.1} | {:.1}s |",
+            "| {label} | {pass}/{total} ({:.0}%) | {late} | {fail} | {error} | {:.1} | {:.1} | {:.1} | {:.1}s |",
             100.0 * pass as f64 / total.max(1) as f64,
             rounds as f64 / total.max(1) as f64,
             checks as f64 / total.max(1) as f64,
+            asks as f64 / total.max(1) as f64,
             secs / total.max(1) as f64,
         ));
     }
 
     println!("─── {model} ───");
-    println!("| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | checks/run | time/run |", tools::MAX_ROUNDS);
-    println!("|---|---|---|---|---|---|---|---|");
+    println!("| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | checks/run | asks/run | time/run |", tools::MAX_ROUNDS);
+    println!("|---|---|---|---|---|---|---|---|---|");
     for r in &rows {
         println!("{r}");
     }

@@ -215,7 +215,9 @@ try {
     await newChat(js);
     await toolsOn(js);
     await say(cdp, "List the files in this folder.");
-    await until(js, `!!document.querySelector(".tool.find.pending")`, "a list_files card", 60_000);
+    // Since H5 a listing inside the folder runs without asking, so the card is
+    // usually already "ran"; click Allow only if it is waiting.
+    await until(js, `!!document.querySelector(".tool.find.ran, .tool.find.pending")`, "a list_files card", 60_000);
     await js(`document.querySelector(".tool.find.pending .btn.primary")?.click(), true`);
     await until(
       js,

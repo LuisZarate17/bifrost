@@ -9,7 +9,7 @@
 //   ?preview=stream   the same thread, with an answer still being waited on
 //   ?preview=edit     the file-editing flow: an undoable edit, a rejection, a diff to review
 //   ?preview=check    the check flow: a failed build, the fix, and a check awaiting approval
-//   ?preview=find     finding code: a listing and a search that ran, and a search awaiting approval
+//   ?preview=find     finding code: a listing, a search and a read that ran without asking, and a read outside the folder awaiting approval
 //   ?preview=empty    a new chat, with the sidebar and models filled in
 //   ?preview=appearance  the thread, with the Appearance dialog open over it
 //   ?preview=models   the thread, with the models dialog open over it
@@ -341,7 +341,7 @@ export function previewThread(mode: string): Preview {
     return {
       entries: [
         { kind: "turn", role: "user", content: "Change the port in src/config.rs to 3000." },
-        { kind: "tool", name: "read_file", path: "C:\\Users\\you\\source\\repos\\demo\\src\\config.rs", state: "ran", result: "pub const PORT: u16 = 8080;\n" },
+        { kind: "tool", name: "read_file", path: "C:\\Users\\you\\source\\repos\\demo\\src\\config.rs", state: "ran", auto: true, result: "pub const PORT: u16 = 8080;\n" },
         { kind: "tool", name: "edit_file", path: "src/config.rs", state: "ran", diff: PORT_DIFF, undo: "18f3a2", result: "Edited src/config.rs: 1 line removed, 1 added." },
         { kind: "turn", role: "assistant", content: "Done — `PORT` in `src/config.rs` is now **3000**.", model: "qwen3-vl:8b-instruct-q4_K_M" },
         { kind: "turn", role: "user", content: "Now rename greet to welcome in src/main.rs, and where it's called." },
@@ -391,17 +391,18 @@ export function previewThread(mode: string): Preview {
   }
 
   // ?preview=find — the model finding code for itself instead of guessing a
-  // path: a listing, a search, the read it led to, and a search still waiting.
+  // path: a listing, a search and the read it led to, all inside the project
+  // folder and so run without asking (H5), and a read outside it, still waiting.
   if (mode === "find") {
     return {
       entries: [
         { kind: "turn", role: "user", content: "Where does the server decide which port to listen on?" },
-        { kind: "tool", name: "list_files", path: "*.rs", args: { pattern: "*.rs" }, state: "ran", result: "2 files match *.rs:\nsrc/config.rs\nsrc/main.rs" },
-        { kind: "tool", name: "search", path: "\"PORT\"", args: { text: "PORT" }, state: "ran", result: "3 matches for \"PORT\" in 1 file:\nsrc/config.rs:1: pub const PORT: u16 = 8080;\nsrc/config.rs:5:     format!(\"{HOST}:{PORT}\")\nsrc/config.rs:9:     PORT" },
-        { kind: "tool", name: "read_file", path: "C:\\Users\\you\\source\\repos\\demo\\src\\config.rs", state: "ran", result: "pub const PORT: u16 = 8080;\n" },
+        { kind: "tool", name: "list_files", path: "*.rs", args: { pattern: "*.rs" }, state: "ran", auto: true, result: "2 files match *.rs:\nsrc/config.rs\nsrc/main.rs" },
+        { kind: "tool", name: "search", path: "\"PORT\"", args: { text: "PORT" }, state: "ran", auto: true, result: "3 matches for \"PORT\" in 1 file:\nsrc/config.rs:1: pub const PORT: u16 = 8080;\nsrc/config.rs:5:     format!(\"{HOST}:{PORT}\")\nsrc/config.rs:9:     PORT" },
+        { kind: "tool", name: "read_file", path: "C:\\Users\\you\\source\\repos\\demo\\src\\config.rs", state: "ran", auto: true, result: "pub const PORT: u16 = 8080;\n" },
         { kind: "turn", role: "assistant", content: "In `src/config.rs`: `PORT` is **8080**, and `address()` joins it to `HOST`.", model: "qwen3-vl:8b-instruct-q4_K_M" },
-        { kind: "turn", role: "user", content: "And where is address() called?" },
-        { kind: "tool", name: "search", path: "\"address(\" in src/**/*.rs", args: { text: "address(", pattern: "src/**/*.rs" }, state: "pending" },
+        { kind: "turn", role: "user", content: "Does the other project, in repos\\other, use the same port?" },
+        { kind: "tool", name: "read_file", path: "C:\\Users\\you\\source\\repos\\other\\src\\config.rs", state: "pending" },
       ],
       status: "",
       stats: "",

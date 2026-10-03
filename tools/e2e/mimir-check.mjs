@@ -13,7 +13,9 @@
 // the Stop button kills a running command and everything it started — and that
 // with all of that, a change whose first edit breaks the build ends in a build
 // that passes. Since H2, also that a search card names what it looks for, that
-// what it finds reaches the model, and that a declined listing reads nothing.
+// what it finds reaches the model, and — with ask_every_call on — that a declined
+// listing reads nothing. Since H5 a search inside the folder runs without
+// asking, which section 7 now asserts.
 //
 // It types into the real textarea and clicks the real buttons over CDP. The
 // command a scenario needs is written into the config file directly, which is
@@ -167,26 +169,26 @@ async function drive(js, onCheck, what, ms = 180_000) {
 }
 
 /**
- * Allow reads, and finding cards other than the one wanted, until a pending
- * finding card named `name` ("Search" or "List files") appears. Resolves with
- * what the card shows, or null if the turn ended without one.
+ * Wait for a finding card named `name` ("Search" or "List files"), pending or —
+ * since H5, for a call inside the folder — already ran. Allows pending reads
+ * and pending finding cards of the other name on the way. Resolves with
+ * `{ shown, pending }`, or null if the turn ended without one.
  */
 async function untilFind(js, name, ms = 120_000) {
   const end = Date.now() + ms;
   while (Date.now() < end) {
     const s = await js(`(() => {
+      const want = [...document.querySelectorAll(".tool.find.pending, .tool.find.ran")]
+        .find((c) => c.querySelector(".tool-name").textContent === ${JSON.stringify(name)});
+      if (want) return { shown: want.querySelector(".tool-path").textContent, pending: want.classList.contains("pending") };
       const f = document.querySelector(".tool.find.pending");
-      if (f) {
-        if (f.querySelector(".tool-name").textContent === ${JSON.stringify(name)}) return { shown: f.querySelector(".tool-path").textContent };
-        f.querySelector(".btn.primary").click();
-        return "allowed";
-      }
+      if (f) { f.querySelector(".btn.primary").click(); return "allowed"; }
       const r = document.querySelector(".tool.read.pending");
       if (r) { r.querySelector(".btn.primary").click(); return "allowed"; }
       const t = document.querySelector(".composer textarea");
       return t && !t.disabled && !document.querySelector(".send.stop") ? "idle" : null;
     })()`);
-    if (s?.shown !== undefined) return s.shown;
+    if (s?.shown !== undefined) return s;
     if (s === "idle") return null;
     await sleep(400);
   }
@@ -225,11 +227,14 @@ const cdp = await connect();
 const { js } = cdp;
 const convosBefore = new Set((await js(`window.__TAURI_INTERNALS__.invoke("conversations")`)).map((c) => c.id));
 
-/** Point Mímir at the project, with this check command set for it. */
-function useCheck(argv) {
+/** Point Mímir at the project, with this check command set for it. Since H5 a
+ *  read, listing or search inside the folder runs without asking unless
+ *  `ask_every_call` is on; it is written explicitly, so the user's own setting
+ *  cannot change what a scenario sees. Mímir re-reads the config every round. */
+function useCheck(argv, askEveryCall = false) {
   const checks = { ...(cfgBase.checks ?? {}), [proj]: argv };
   fs.mkdirSync(path.dirname(CONFIG), { recursive: true });
-  fs.writeFileSync(CONFIG, JSON.stringify({ ...cfgBase, workspace: proj, checks }, null, 2));
+  fs.writeFileSync(CONFIG, JSON.stringify({ ...cfgBase, workspace: proj, checks, ask_every_call: askEveryCall }, null, 2));
 }
 
 try {
@@ -394,10 +399,15 @@ try {
   fs.writeFileSync(configPath, crlf(CONFIG_RS));
   await newChat(js);
   await say(cdp, 'Use the search tool to find the text "PORT" in this project, then tell me which files and lines it is on.');
-  const shown = await untilFind(js, "Search");
-  if (check("a search card waits for approval", shown !== null, shown === null ? await threadText(js) : "")) {
-    check("the card shows what it looks for", shown.includes("PORT"), shown);
-    await js(`document.querySelector(".tool.find.pending .btn.primary").click(), true`);
+  const hit = await untilFind(js, "Search");
+  if (check("a search card appeared", hit !== null, hit === null ? await threadText(js) : "")) {
+    check("the card shows what it looks for", hit.shown.includes("PORT"), hit.shown);
+    // H5: a search inside the folder runs at once, marked as needing no approval.
+    check("it ran without asking", !hit.pending);
+    check(
+      "the card is marked automatic, with no button",
+      await js(`(() => { const c = document.querySelector(".tool.find.ran.auto"); return !!c && !c.querySelector(".btn") && !!c.querySelector(".tool-auto"); })()`),
+    );
     await drive(js, "allow", "the answer");
     const found = await js(`document.querySelector(".tool.find.ran pre")?.textContent ?? ""`);
     check("what it found is on the card", found.includes("src/config.rs:1:"), found.slice(0, 120));
@@ -408,17 +418,21 @@ try {
 
   // 8 ── a listing, declined ───────────────────────────────────────────────
   if (runs(8)) {
-  console.log("\n8. a listing can be declined, and the model is told");
+  console.log("\n8. with ask_every_call on, a listing asks, can be declined, and the model is told");
+  // Since H5 a listing inside the folder runs without asking, so this proves the
+  // off switch: with `ask_every_call` on, the card waits and Deny reads nothing.
+  useCheck(["cargo", "check"], true);
   await newChat(js);
   await say(cdp, "Use list_files to list the Rust files in this project.");
-  const shown = await untilFind(js, "List files");
-  if (check("a list card waits for approval", shown !== null, shown === null ? await threadText(js) : "")) {
+  const hit = await untilFind(js, "List files");
+  if (check("a list card waits for approval", hit !== null && hit.pending, hit === null ? await threadText(js) : "")) {
     await js(`[...document.querySelectorAll(".tool.find.pending .btn")].find(b => b.textContent === "Deny").click(), true`);
     await until(js, `!!document.querySelector(".tool.find.denied")`, "the denial");
     const note = await js(`document.querySelector(".tool.find.denied .tool-note")?.innerText ?? ""`);
     check("the card says nothing was read", note.includes("Nothing was read"), note);
     await drive(js, "deny", "the answer after declining");
   }
+  useCheck(["cargo", "check"], false);
   }
 } catch (e) {
   check("the run completed", false, String(e.message ?? e));

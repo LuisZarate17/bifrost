@@ -87,3 +87,17 @@ written days apart and only one of them was tested end to end.
 
 Approving a call, denying one, and watching the loop close. In
 [PENDING-CHECKS.md](../PENDING-CHECKS.md).
+
+---
+
+**Reversed in part by H5 (2026-10-02).** This chunk's rule that *every* read shows its path and
+waits no longer holds inside the folder you chose. Since H5, a `read_file`, `list_files` or `search`
+**inside the project folder** runs without asking and shows as a quiet card marked *no approval
+needed*. **Still asking, every call:** a read outside the folder (including through a junction or
+symlink that points out, a hard link to a file elsewhere, or a path on another machine — never
+resolved before Allow), a file the project's `.gitignore` hides, a secret-looking file such as
+`.env`, every read, listing and search when the folder is a drive root or the user's profile,
+every edit and create, and every `run_check`. **The off switch:** `"ask_every_call": true`
+in `config.json` brings back the behaviour described above, for everything. The one-shot ticket and
+the exact-path redemption are unchanged for every call that still asks. The reasoning and the
+numbers are in [H5-results.md](H5-results.md); the text above is left as it was written.

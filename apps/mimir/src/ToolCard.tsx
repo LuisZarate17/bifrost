@@ -47,6 +47,7 @@ function reasonOf(error = ""): string {
   if (error.includes("already exists")) return "that file already exists";
   if (error.includes("could not be read") || error.includes("valid JSON")) return "the request was malformed";
   if (error.includes("does not exist")) return "that file doesn't exist";
+  if (error.includes("is a folder")) return "that is a folder, not a file";
   if (error.includes("decides what the check command runs")) return "that file decides what the check runs";
   if (error.includes("own settings folder")) return "that is Mímir's own settings folder";
   if (error.includes("no check command is set")) return "no check command is chosen for this folder";
@@ -66,10 +67,24 @@ const VERB: Record<string, string> = {
   list_files: "Couldn't list files",
 };
 
+/** Marks a call that ran without asking: said once, quietly, where the state is. */
+function AutoTag() {
+  return (
+    <span
+      className="tool-auto"
+      title="In the project folder. Set ask_every_call in config.json to be asked every time."
+    >
+      no approval needed
+    </span>
+  );
+}
+
 /**
  * A search or a listing the model wants: what it is looking for, and where.
- * Reads nothing outside the project folder, writes nothing — but it does read
- * the folder's files, which is why it still asks.
+ * Reads nothing outside the project folder and writes nothing, so inside a
+ * folder you chose it runs without asking (H5) and arrives as a ran card marked
+ * `auto`. It still asks when `ask_every_call` is set in the config, and the
+ * pending card below is that case.
  */
 function FindCard({ entry, onAllow, onDeny }: { entry: ToolEntry; onAllow: () => void; onDeny: () => void }) {
   const { name, path, state } = entry;
@@ -90,7 +105,7 @@ function FindCard({ entry, onAllow, onDeny }: { entry: ToolEntry; onAllow: () =>
               : found;
 
   return (
-    <div className={"tool find " + state + (failed ? " failed" : "")}>
+    <div className={"tool find " + state + (failed ? " failed" : "") + (entry.auto ? " auto" : "")}>
       <div className="tool-head">
         <span className="tool-icon">
           <I.Search />
@@ -99,6 +114,7 @@ function FindCard({ entry, onAllow, onDeny }: { entry: ToolEntry; onAllow: () =>
         <code className="tool-path" title={path}>
           <bdi dir="ltr">{path}</bdi>
         </code>
+        {entry.auto && <AutoTag />}
         <span className="tool-state">{label}</span>
       </div>
       {state === "pending" && (
@@ -246,7 +262,7 @@ export function ToolCard({
     // `ok` from Rust; a thread saved before it existed says so only in the text.
     const failed = entry.ok === false || entry.result?.startsWith("error:");
     return (
-      <div className={"tool read " + state + (failed ? " failed" : "")}>
+      <div className={"tool read " + state + (failed ? " failed" : "") + (entry.auto ? " auto" : "")}>
         <div className="tool-head">
           <span className="tool-icon">
             <I.File />
@@ -255,6 +271,7 @@ export function ToolCard({
           <code className="tool-path" title={path}>
             <bdi dir="ltr">{path}</bdi>
           </code>
+          {entry.auto && <AutoTag />}
           <span className="tool-state">
             {state === "pending"
               ? "Needs approval"

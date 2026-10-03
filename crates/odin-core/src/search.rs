@@ -8,7 +8,7 @@
 //! unlike retrieval by meaning — finds *every* call site, which is what a rename
 //! needs.
 //!
-//! Four rules, each with a test:
+//! Five rules, each with a test:
 //!
 //! 1. **Nothing outside the folder.** Patterns are relative; `..`, a drive or a
 //!    verbatim path is refused, not resolved. The walk does not follow links or
@@ -24,6 +24,11 @@
 //! 4. **Its answer fits.** About 8 KB, sorted so a rerun reads the same, with the
 //!    full count and a note when lines were left out. 200 matches at 200
 //!    characters would be 12k tokens of a 32k context.
+//! 5. **Secrets are not read unasked.** Since H5 a search runs without asking, and
+//!    the walk includes hidden files — so without this an unasked search for a
+//!    word would read `.env`. Files whose *names* look like they hold secrets
+//!    ([`secret_name`]) are not searched, and the answer says how many were
+//!    skipped. [`list`] still shows their names, and `read_file` asks.
 //!
 //! Blocking, like the rest of this crate. Tauri callers go through
 //! `spawn_blocking`.
@@ -181,39 +186,7 @@ fn walk(
     // `.gitignore` files differently, and a plain root is what every other
     // program is given.
     let root = PathBuf::from(ws.root_display());
-    let skip_app_data = app_data.map(Path::to_path_buf);
-    let mut walker = ignore::WalkBuilder::new(&root);
-    walker
-        .hidden(false)
-        .parents(false)
-        .require_git(false)
-        .git_global(false)
-        .git_exclude(false)
-        .follow_links(false)
-        .sort_by_file_path(|a, b| a.cmp(b))
-        .filter_entry(move |e| {
-            if e.path_is_symlink() {
-                return false;
-            }
-            let name = e.file_name().to_string_lossy();
-            // In a git worktree, `.git` is a file pointing at the real one.
-            // Still git's, never the project's.
-            if name.eq_ignore_ascii_case(".git") {
-                return false;
-            }
-            let is_dir = e.file_type().is_some_and(|t| t.is_dir());
-            if is_dir && e.depth() > 0 {
-                if SKIPPED.iter().any(|s| name.eq_ignore_ascii_case(s)) {
-                    return false;
-                }
-                if let Some(app) = &skip_app_data
-                    && std::fs::canonicalize(e.path()).is_ok_and(|real| real.starts_with(app))
-                {
-                    return false;
-                }
-            }
-            true
-        });
+    let walker = walker(&root, app_data.map(Path::to_path_buf), None);
 
     let started = Instant::now();
     let (mut files, mut read) = (0usize, 0u64);
@@ -240,6 +213,130 @@ fn walk(
         }
     }
     None
+}
+
+/// The one walker both [`walk`] and [`visible`] use, so that what a read may
+/// run unasked is decided by exactly the rules `list_files` shows.
+///
+/// `only`, when given, narrows the walk to the folders on the way to that path
+/// and the path itself — which is how [`visible`] asks the walker about one file
+/// without reading the whole project. The skips are the same either way.
+fn walker(root: &Path, app_data: Option<PathBuf>, only: Option<PathBuf>) -> ignore::WalkBuilder {
+    let mut walker = ignore::WalkBuilder::new(root);
+    walker
+        .hidden(false)
+        .parents(false)
+        .require_git(false)
+        .git_global(false)
+        .git_exclude(false)
+        .follow_links(false)
+        .sort_by_file_path(|a, b| a.cmp(b))
+        .filter_entry(move |e| {
+            if e.path_is_symlink() {
+                return false;
+            }
+            if only.as_ref().is_some_and(|target| !target.starts_with(e.path())) {
+                return false;
+            }
+            let name = e.file_name().to_string_lossy();
+            // In a git worktree, `.git` is a file pointing at the real one.
+            // Still git's, never the project's.
+            if name.eq_ignore_ascii_case(".git") {
+                return false;
+            }
+            let is_dir = e.file_type().is_some_and(|t| t.is_dir());
+            if is_dir && e.depth() > 0 {
+                if SKIPPED.iter().any(|s| name.eq_ignore_ascii_case(s)) {
+                    return false;
+                }
+                if let Some(app) = &app_data
+                    && std::fs::canonicalize(e.path()).is_ok_and(|real| real.starts_with(app))
+                {
+                    return false;
+                }
+            }
+            true
+        });
+    walker
+}
+
+/// Whether `list_files` would show `real` — a canonical path to a file.
+///
+/// The rule behind automatic reads: *if the listing would show it, reading it
+/// does not ask.* So this walks the same way the listing does — hidden files in,
+/// `.gitignore` files honoured wherever they sit, `.git`, `target`,
+/// `node_modules`, Mímir's own settings folder and every link skipped — but only
+/// down the chain of folders from the root to `real`, and asks whether `real`
+/// comes out. A file a `.gitignore` hides, one in a skipped folder, and one
+/// reached through a link are therefore all `false`, with no second copy of
+/// those rules to drift from the first.
+pub fn visible(ws: &Workspace, real: &Path) -> bool {
+    let root = PathBuf::from(ws.root_display());
+    let target = PathBuf::from(edit::plain(real));
+    if !target.starts_with(&root) {
+        return false;
+    }
+    walker(&root, edit::app_data(), Some(target.clone()))
+        .build()
+        .filter_map(Result::ok)
+        .any(|e| e.path() == target && e.file_type().is_some_and(|t| t.is_file()))
+}
+
+/// File names that look like they hold a secret: credentials, keys, tokens.
+///
+/// By name only, case-insensitively — a guess, and a conservative one: a false
+/// positive costs one question, a false negative reads a key to the model.
+/// Exact names, then `.env.*` and the ssh key prefixes, then key-file extensions.
+/// Not `credentials*` as a prefix, which would catch `credentials.rs`. `id_rsa.pub`
+/// is a public key and harmless, but the prefix rule catches it too; asking about
+/// it is an acceptable price for a rule that fits on one screen.
+pub fn secret_name(path: &Path) -> bool {
+    let Some(name) = path.file_name().map(|n| n.to_string_lossy().to_lowercase()) else {
+        return false;
+    };
+    const EXACT: [&str; 20] = [
+        ".env",
+        ".envrc",
+        ".htpasswd",
+        ".dockercfg",
+        ".bash_history",
+        ".my.cnf",
+        ".boto",
+        ".s3cfg",
+        ".netrc",
+        "_netrc",
+        ".npmrc",
+        ".pypirc",
+        ".pgpass",
+        ".git-credentials",
+        "credentials",
+        "credentials.json",
+        "secrets.json",
+        "secrets.yaml",
+        "secrets.yml",
+        "secrets.toml",
+    ];
+    const PREFIXES: [&str; 6] = [".env.", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "service-account"];
+    // `env` catches `prod.env`; `tfstate` and `tfvars` hold Terraform's secrets in the clear.
+    const EXTENSIONS: [&str; 15] = [
+        "pem", "key", "pfx", "p12", "p8", "ppk", "kdbx", "jks", "keystore", "env", "tfstate", "tfvars",
+        "gpg", "pgp", "asc",
+    ];
+    // Names that are only secret in their own folder: `config` is everywhere,
+    // `.kube/config` holds cluster credentials.
+    const IN_FOLDER: [(&str, &str); 4] =
+        [(".kube", "config"), (".aws", "config"), (".docker", "config.json"), (".azure", "accesstokens.json")];
+    let parent = path
+        .parent()
+        .and_then(Path::file_name)
+        .map(|p| p.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    EXACT.contains(&name.as_str())
+        || PREFIXES.iter().any(|p| name.starts_with(p))
+        // A backup keeps the secret: `terraform.tfstate.backup`.
+        || name.ends_with(".tfstate.backup")
+        || Path::new(&name).extension().is_some_and(|e| EXTENSIONS.iter().any(|x| e == *x))
+        || IN_FOLDER.iter().any(|(dir, file)| parent == *dir && name == *file)
 }
 
 /// The note that goes at the end of an answer the walk cut short.
@@ -320,18 +417,39 @@ fn search_in(
     let exact = text.chars().any(char::is_uppercase);
     let needle = if exact { text.to_string() } else { text.to_lowercase() };
 
-    let (mut matches, mut files) = (0usize, 0usize);
+    let (mut matches, mut files, mut secrets, mut unsafe_files) = (0usize, 0usize, 0usize, 0usize);
     let mut lines: Vec<String> = Vec::new();
     let mut size = 0usize;
     let cut = walk(ws, app_data, cancelled, |rel, full| {
         if glob.as_ref().is_some_and(|g| !g.matches(rel)) {
             return 0;
         }
-        let Ok(meta) = std::fs::metadata(full) else { return 0 };
+        if secret_name(full) {
+            secrets += 1;
+            return 0;
+        }
+        // The walk saw a path, and a path is not a file: a link may have replaced it
+        // since, and a hard link makes a file here be one outside the folder. So the
+        // file is opened through the checks an automatic read gets, and read from
+        // that handle.
+        let checked = std::fs::canonicalize(full)
+            .ok()
+            .filter(|real| real.starts_with(ws.root()))
+            .and_then(|real| edit::open_checked(&real));
+        let Some(file) = checked else {
+            unsafe_files += 1;
+            return 0;
+        };
+        let Ok(meta) = file.metadata() else { return 0 };
         if meta.len() > MAX_FILE_BYTES {
             return 0;
         }
-        let Ok(bytes) = std::fs::read(full) else { return 0 };
+        let mut bytes = Vec::new();
+        if std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_FILE_BYTES + 1), &mut bytes).is_err()
+            || bytes.len() as u64 > MAX_FILE_BYTES
+        {
+            return 0;
+        }
         // A NUL early on means binary: an image, an archive, a compiled file.
         if bytes[..bytes.len().min(8192)].contains(&0) {
             return bytes.len() as u64;
@@ -356,8 +474,20 @@ fn search_in(
     });
 
     let what = describe_search(text, pattern);
+    let mut skipped = String::new();
+    if secrets > 0 {
+        skipped.push_str(&format!(
+            "\n({secrets} file(s) whose names look like they hold secrets were not searched; \
+             read_file one to ask the user.)"
+        ));
+    }
+    if unsafe_files > 0 {
+        skipped.push_str(&format!(
+            "\n({unsafe_files} file(s) with a second name or reached through a link were not searched.)"
+        ));
+    }
     if matches == 0 {
-        return Ok(format!("No matches for {what}.{}", cut_note(cut)));
+        return Ok(format!("No matches for {what}.{skipped}{}", cut_note(cut)));
     }
     let mut out = format!(
         "{matches} match{} for {what} in {files} file{}:",
@@ -374,6 +504,7 @@ fn search_in(
             matches - lines.len()
         ));
     }
+    out.push_str(&skipped);
     out.push_str(&cut_note(cut));
     Ok(out)
 }
@@ -664,5 +795,156 @@ mod tests {
         assert!(validate(&ws, None, None).is_ok());
         assert!(validate(&ws, None, Some("../**")).unwrap_err().contains("not inside"));
         assert!(validate(&ws, Some("a\nb"), None).unwrap_err().contains("one line"));
+    }
+
+    // ── what automatic reads may open ──
+
+    /// `visible` takes the canonical path a read resolves to.
+    fn seen(ws: &Workspace, rel: &str) -> bool {
+        match std::fs::canonicalize(ws.root().join(rel)) {
+            Ok(real) => visible(ws, &real),
+            Err(_) => false,
+        }
+    }
+
+    #[test]
+    fn a_plain_file_is_visible() {
+        let s = Sandbox::new("visible");
+        s.write("src/main.rs", "fn main() {}\n");
+        s.write(".github/ci.yml", "x\n");
+        let ws = s.ws();
+        assert!(seen(&ws, "src/main.rs"));
+        // Hidden files are the project's own, as in the listing.
+        assert!(seen(&ws, ".github/ci.yml"));
+    }
+
+    #[test]
+    fn what_the_listing_hides_is_not_visible() {
+        let s = Sandbox::new("invisible");
+        s.write(".gitignore", "local.txt\n");
+        s.write("local.txt", "x\n");
+        s.write("app/.gitignore", "generated/\n*.log\n");
+        s.write("app/generated/out.rs", "x\n");
+        s.write("app/run.log", "x\n");
+        s.write("app/src/lib.rs", "x\n");
+        s.write(".git/config", "x\n");
+        s.write("target/debug/x.rs", "x\n");
+        s.write("web/node_modules/lib/index.js", "x\n");
+        let ws = s.ws();
+        assert!(seen(&ws, "app/src/lib.rs"));
+        for hidden in [
+            "local.txt",
+            "app/generated/out.rs",
+            "app/run.log",
+            ".git/config",
+            "target/debug/x.rs",
+            "web/node_modules/lib/index.js",
+        ] {
+            assert!(!seen(&ws, hidden), "{hidden}");
+        }
+        // And it agrees with the listing on every one of them.
+        assert_eq!(listed(&ws, None), [".gitignore", "app/.gitignore", "app/src/lib.rs"]);
+    }
+
+    #[test]
+    fn a_file_reached_through_a_junction_is_not_visible() {
+        let s = Sandbox::new("visible-junction");
+        let outside = s.dir.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.rs"), "x\n").unwrap();
+        s.write("src/main.rs", "x\n");
+        let link = s.dir.join("project").join("link");
+        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&outside).output();
+        if !matches!(made, Ok(ref o) if o.status.success()) {
+            eprintln!("could not create a junction here; skipping");
+            return;
+        }
+        let ws = s.ws();
+        // Through the link as written, and as it canonicalises.
+        assert!(!visible(&ws, &ws.root().join("link").join("secret.rs")));
+        assert!(!visible(&ws, &std::fs::canonicalize(outside.join("secret.rs")).unwrap()));
+    }
+
+    #[test]
+    fn secret_names_are_recognised_by_the_name_alone() {
+        for yes in [
+            ".env", ".ENV", ".env.local", ".env.production", ".netrc", "_netrc", ".npmrc", ".pypirc",
+            ".pgpass", ".git-credentials", "credentials", "credentials.json", "secrets.json",
+            "secrets.yaml", "secrets.yml", "secrets.toml", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
+            // A public key is harmless, but the prefix rule catches it; one question is cheap.
+            "id_rsa.pub", "ID_RSA", "server.pem", "TLS.KEY", "cert.pfx", "a.p12", "putty.ppk",
+            "vault.kdbx", "app.jks", "debug.keystore", "prod.env", "Local.ENV", "terraform.tfstate",
+            "prod.tfvars", "key.gpg", "key.asc", ".envrc", ".htpasswd", ".dockercfg", ".bash_history",
+            ".my.cnf", ".boto", ".s3cfg", "terraform.tfstate.backup", "msg.pgp", "AuthKey_X.p8",
+            "service-account.json", "service-account-prod.json",
+        ] {
+            assert!(secret_name(Path::new(yes)), "{yes}");
+        }
+        for no in [
+            "credentials.rs", "credentials_test.go", "secrets.rs", "environment.rs", "env.rs", "envrc",
+            "keyboard.rs", "monkey.txt", "key", "README.md", "config.toml", "pem", "config",
+            "config.json", "backup.tfstate.rs",
+        ] {
+            assert!(!secret_name(Path::new(no)), "{no}");
+        }
+        // Mostly the name alone, not the folder it is in…
+        assert!(secret_name(Path::new(r"C:\proj\config\.env")));
+        assert!(!secret_name(Path::new(r"C:\proj\.env\notes.txt")));
+        // …except for a few files that are only secret in their own folder.
+        for yes in [r"C:\proj\.kube\config", r"C:\proj\.AWS\config", r"C:\proj\.docker\config.json"] {
+            assert!(secret_name(Path::new(yes)), "{yes}");
+        }
+        for no in [r"C:\proj\src\config", r"C:\proj\.kube\notes.txt", r"C:\proj\app\config.json"] {
+            assert!(!secret_name(Path::new(no)), "{no}");
+        }
+    }
+
+    #[test]
+    fn a_search_does_not_read_a_secret_named_file_and_says_so() {
+        let s = Sandbox::new("secret");
+        s.write(".env", "TOKEN=needle-in-env\n");
+        s.write("keys/server.pem", "needle-in-pem\n");
+        s.write("src/main.rs", "let needle = 1;\n");
+        let out = search_in(&s.ws(), "needle", None, None, &never).unwrap();
+        assert!(out.starts_with("1 match for \"needle\" in 1 file:"), "{out}");
+        assert!(out.contains("src/main.rs:1:") && !out.contains("in-env") && !out.contains("in-pem"), "{out}");
+        assert!(out.contains("2 file(s) whose names look like they hold secrets were not searched"), "{out}");
+        assert!(out.contains("read_file one to ask the user"), "{out}");
+
+        // With nothing else to find, the note is still there.
+        let only = Sandbox::new("secret-only");
+        only.write(".env", "TOKEN=needle\n");
+        let out = search_in(&only.ws(), "needle", None, None, &never).unwrap();
+        assert!(out.starts_with("No matches") && out.contains("1 file(s) whose names"), "{out}");
+
+        // A pattern that leaves the secret out of the walk leaves the note out too.
+        let out = search_in(&s.ws(), "needle", Some("*.rs"), None, &never).unwrap();
+        assert!(!out.contains("secrets"), "{out}");
+    }
+
+    /// A hard link is a second name for one file, so a file in the folder can be
+    /// one outside it; the handle shows that, the name does not.
+    #[cfg(windows)]
+    #[test]
+    fn a_search_skips_a_file_with_a_second_name_and_says_so() {
+        let s = Sandbox::new("search-hardlink");
+        s.write("a.txt", "needle-in-a\n");
+        s.write("src/main.rs", "let needle = 1;\n");
+        if std::fs::hard_link(s.dir.join("project/a.txt"), s.dir.join("project/b.txt")).is_err() {
+            eprintln!("could not create a hard link here; skipping");
+            return;
+        }
+        let out = search_in(&s.ws(), "needle", None, None, &never).unwrap();
+        assert!(out.starts_with("1 match for \"needle\" in 1 file:"), "{out}");
+        assert!(out.contains("src/main.rs:1:") && !out.contains("in-a"), "{out}");
+        assert!(out.contains("2 file(s) with a second name"), "{out}");
+    }
+
+    #[test]
+    fn a_listing_still_shows_a_secret_named_file() {
+        let s = Sandbox::new("secret-list");
+        s.write(".env", "TOKEN=x\n");
+        s.write("src/main.rs", "x\n");
+        assert_eq!(listed(&s.ws(), None), [".env", "src/main.rs"]);
     }
 }

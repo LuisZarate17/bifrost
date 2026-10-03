@@ -129,6 +129,31 @@ pub struct Config {
     /// a pick made by hand ends the switch-back story outright, rather than
     /// fighting it on the next folder change.
     pub model_before_coding: Option<String>,
+    /// Ask before every tool call again, as G6 did, instead of letting reads,
+    /// listings and searches inside the project folder run on their own (H5,
+    /// see `tools::approval`). Off by default and set only by hand in this file.
+    ///
+    /// **Read leniently, and in the stricter direction.** `load()` answers a
+    /// parse error with *every* default, so a strict bool would turn
+    /// `"ask_every_call": "yes"` into "off" — the one outcome a person who typed
+    /// it does not want. `true`, `"true"` (any case) and `1` mean on; `false`,
+    /// `"false"` and `0` mean off; a missing field is off; anything else is on.
+    #[serde(deserialize_with = "lenient_ask")]
+    pub ask_every_call: bool,
+}
+
+/// `ask_every_call`: only an explicit no is a no.
+fn lenient_ask<'de, D>(d: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde_json::Value;
+    Ok(match Value::deserialize(d)? {
+        Value::Bool(b) => b,
+        Value::String(s) => !s.eq_ignore_ascii_case("false"),
+        Value::Number(n) => n.as_i64() != Some(0) && n.as_u64() != Some(0),
+        _ => true,
+    })
 }
 
 /// `checks`, keeping only entries that are a folder mapped to a list of strings.
@@ -183,6 +208,7 @@ impl Default for Config {
             checks: BTreeMap::new(),
             coding_model: DEFAULT_CODING_MODEL.to_string(),
             model_before_coding: None,
+            ask_every_call: false,
         }
     }
 }
@@ -261,6 +287,7 @@ mod tests {
             checks: BTreeMap::from([(r"C:\work\demo".into(), vec!["cargo".into(), "check".into()])]),
             coding_model: "qwen3-coder:30b".into(),
             model_before_coding: Some("qwen3-vl:8b-instruct-q4_K_M".into()),
+            ask_every_call: true,
         };
         let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(c, back);
@@ -323,5 +350,42 @@ mod tests {
         let mut c = Config::default();
         c.checks.insert(r"C:\x".into(), vec![]);
         assert_eq!(c.check_for(r"C:\x"), None);
+    }
+
+    #[test]
+    fn a_missing_ask_every_call_is_off() {
+        let c: Config = serde_json::from_str(r#"{"model":"x"}"#).unwrap();
+        assert!(!c.ask_every_call);
+        assert!(!Config::default().ask_every_call);
+    }
+
+    #[test]
+    fn ask_every_call_reads_true_false_strings_and_numbers() {
+        let read = |v: &str| {
+            serde_json::from_str::<Config>(&format!(r#"{{"ask_every_call":{v}}}"#))
+                .unwrap()
+                .ask_every_call
+        };
+        for on in ["true", r#""true""#, r#""TRUE""#, "1"] {
+            assert!(read(on), "{on}");
+        }
+        for off in ["false", r#""false""#, r#""False""#, "0"] {
+            assert!(!read(off), "{off}");
+        }
+    }
+
+    /// **A typo can only make Mímir stricter.** Without the lenient reader the
+    /// whole file would fail to parse and every setting would reset.
+    #[test]
+    fn a_malformed_ask_every_call_means_ask_and_everything_else_survives() {
+        for bad in [r#""yes""#, "[1]", "null", "{}", "2.5"] {
+            let c: Config = serde_json::from_str(&format!(
+                r#"{{"model":"llama3.1:8b","workspace":"C:\\w","ask_every_call":{bad}}}"#
+            ))
+            .unwrap();
+            assert!(c.ask_every_call, "{bad}");
+            assert_eq!(c.model, "llama3.1:8b");
+            assert_eq!(c.workspace.as_deref(), Some(r"C:\w"));
+        }
     }
 }

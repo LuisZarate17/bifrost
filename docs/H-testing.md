@@ -47,7 +47,8 @@ loop — these are the parts a person operates, and how it feels.
       **Expect:** a **Run check** card naming `cargo check`, waiting. **Run once** →
       *Running* → **Passed**, and **Show output** shows cargo's own lines.
 - [ ] **A broken build.** In VS Code, delete the `;` at the end of line 6 of `greet.rs` and save.
-      Type: `Run the check and fix what it reports.` Allow what it asks for.
+      Type: `Run the check and fix what it reports.` Allow the check and the edit — those still ask; the
+      read of `greet.rs` does not (§4).
       **Expect:** a **Failed** check (red), then an **Edit file** card putting the `;` back, then a
       **Passed** check. Run `node tools/practice.mjs` afterwards.
 - [ ] **Stop a check.** Type `Run the check.`, click **Run once**, and press **Esc** at once.
@@ -70,20 +71,23 @@ person sees.
 
 - [ ] **Ask where something is.** Type: `Where is the greet function?`
       **Expect:** a **Search** card (magnifier) or a **List files** card, showing what it will look
-      for — e.g. `"greet"` — waiting for **Allow once**. Allowed, its pill says what it found, and
+      for — e.g. `"greet"` — that has already run, with no buttons and a quiet *no approval needed*
+      tag (a search inside the folder does not ask since H5). Its pill says what it found, and
       **Show what was found** lists `greet.rs:1:` and `greet.rs:6:` — and `Cargo.toml`'s lines too,
       since it names the binary `greet`. The answer should name `greet.rs`, line 1.
 - [ ] **Patterns read the right way round.** A card for `*.rs` shows `*.rs`, not `rs.*`.
-- [ ] **Deny a search.** Type `Search the project for "milk".`, click **Deny**. **Expect:** *You
-      declined. Nothing was read, and the model was told.*
+- [ ] **Deny a search.** A search inside the folder no longer waits, so this needs the off switch:
+      add `"ask_every_call": true` to `config.json` (it is read again every round — no restart).
+      Type `Search the project for "milk".`, click **Deny**. **Expect:** *You declined. Nothing was
+      read, and the model was told.* Take the line out again afterwards (§4 does this check too).
 - [ ] **Build output is not searched.** Run `cargo check` in `practice` once (so `target\` exists),
-      then type `List all the files in this project.` and allow it. **Expect:** no `target/` paths,
-      and no `.git`.
+      then type `List all the files in this project.` — it runs at once. **Expect:** no `target/`
+      paths, and no `.git`.
 - [ ] **Nothing outside.** Type `Use list_files with the pattern ../**`. **Expect:** no card to
       approve; the thread says *Couldn't list files — that pattern reaches outside the project
       folder. The model was told.* Nothing from `odin` above `practice` is listed.
 - [ ] **A big folder stays stoppable.** Choose a large folder (your `source\repos`), type `List
-      every file.`, allow it, press **Esc**. **Expect:** the card says *Stopped*, and the window
+      every file.`, press **Esc** while it runs. **Expect:** the card says *Stopped*, and the window
       stays responsive. Choose `practice` again afterwards.
 
 ---
@@ -105,6 +109,41 @@ and the switch back. What it cannot do is press Heimdall's hotkey, so these need
       Switchboard and pick a different model by hand (not the vision default). Close the dialog,
       then clear the folder. **Expect:** no switch-back offer — picking a model yourself is the last
       word on what "back" would even mean.
+
+---
+
+## 4 — Reads that don't ask (H5)
+
+`node tools/e2e/mimir-policy.mjs` covers the rule against the real app and model: an inside read,
+listing and search run without asking; an outside read, a junction, `.env` and a gitignored file
+ask; an edit and a check still ask; `ask_every_call` brings back asking; a reopened conversation
+keeps its cards. What it cannot judge is how it reads and feels.
+
+- [ ] **A search that doesn't ask.** In `practice`, type `Where is the greet function?` (or
+      `Search the project for "milk".`). **Expect:** a **Search** card that has already run — no
+      **Allow once**, no **Deny** — with a quiet **no approval needed** tag beside its name. The
+      card should read as *less* prominent than one that asked, not as an alarm. Hover the tag:
+      *In the project folder. Set ask_every_call in config.json to be asked every time.*
+- [ ] **A read outside the folder asks.** Type `Read C:\Windows\win.ini.` **Expect:** a **Read
+      file** card showing the full path, waiting for **Allow once** — no tag. **Deny** it:
+      *You declined. The model was told.*, and the answer does not quote the file.
+- [ ] **A secret-looking file asks.** In `practice`, create a file named `.env` containing
+      `API_KEY=hunter2`. Type `Read .env.` **Expect:** a card waiting, even though the file is
+      inside the folder. **Deny** it. Then type `Search the project for "hunter2".` **Expect:** the
+      search runs without asking, finds nothing, and its result ends with a note that files whose
+      names look like they hold secrets were not searched. Delete `.env` afterwards (or run
+      `node tools/practice.mjs`).
+- [ ] **The switch.** Add `"ask_every_call": true` to `%APPDATA%\odin\config.json`, with no
+      restart, and type `Read greet.rs.` **Expect:** a card waiting, with no *no approval needed*
+      tag. Type `List the files.` **Expect:** that waits too. Put the line back to `false` (or
+      remove it), and `Read greet.rs.` runs at once again.
+- [ ] **Reopen a conversation.** Open the conversation from the first check in the sidebar, after
+      starting a new chat. **Expect:** its search card is still there, still marked **no approval
+      needed**, and still without buttons.
+- [ ] **A folder too broad to read unasked.** Choose your user folder (`C:\Users\<you>`) as the
+      project folder, and type `List the files.` **Expect:** a card waiting — in a drive root or
+      the whole profile, every read, listing and search asks, because `AppData` and `.ssh` live
+      there. Choose `practice` again afterwards.
 
 ---
 

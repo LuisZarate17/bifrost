@@ -54,8 +54,7 @@ records of what happened.
 - **[STAGE-H.md](../stages/STAGE-H.md)** — Mímir learns to find code, check its work and run
   longer: ten chunks in four phases, each gated on a measurement. H1 (the check command), H2
   (finding code) and H3 (the benchmark of real work) built; H4 measured three coding models;
-  Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5
-  (the approval policy) next.
+  Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5 built; H6 (undo a whole turn) next.
 
 ---
 
@@ -224,7 +223,8 @@ Finished chunks: what was built, what was measured, what the measurement changed
 - **[G5](results/G5-results.md)** — attachments. **An image costs ~2,042 tokens whatever it shows**,
   because the model tiles it — so two images and a little history is most of 32k
 - **[G6](results/G6-results.md)** — the tool loop. Off by default, no allowlist, no “always allow”;
-  approval is a one-shot ticket redeemed in Rust against the exact path that was shown
+  approval is a one-shot ticket redeemed in Rust against the exact path that was shown. *(H5 later
+  let reads, listings and searches inside the folder run without asking; everything else still does.)*
 - **[G7](results/G7-results.md)** — editing files. **76% → 98% byte-exact** over three probe
   rounds; search-and-replace beat whole-file rewrite, which corrupted lines it was never asked to
   touch. Found Ollama crashing on the model's own tool calls, and recovered them
@@ -244,6 +244,10 @@ Finished chunks: what was built, what was measured, what the measurement changed
   and 8 errors; the prompt it re-asks with matches Ollama's token for token
 - **[H4b](results/H4b-results.md)** — choosing a folder offers the coding model, clearing it offers
   the way back. Found two real bugs in its own e2e before passing 14/14
+- **[H5](results/H5-results.md)** — the approval policy. **Reads, listings and searches inside the project folder run without
+  asking** — 2.5 cards per coding task instead of 3.9, none to find code — while edits, checks,
+  outside reads, secret-looking and gitignored files still ask. `ask_every_call` turns it off.
+  Reverses G6 in part
 
 **Stage F — keep testing models**
 

@@ -97,6 +97,11 @@ export type Entry =
       diff?: DiffView;
       /** Handle for Undo, once an edit is written. */
       undo?: string;
+      /** Ran without asking: a read, listing or search inside the project folder
+       *  (H5). Saved with the thread, so reopening it still says nothing was
+       *  approved by hand. Absent on a call you allowed, and on threads saved
+       *  before H5 — which load as plain ran cards. */
+      auto?: boolean;
       error?: string;
     };
 
@@ -529,6 +534,7 @@ function App() {
                     arguments: {
                       path: e.path,
                       ...(e.args && !isEdit(e.name) ? { args: e.args } : {}),
+                      ...(e.auto ? { auto: true } : {}),
                       ...(e.ok === false ? { ok: false } : {}),
                       ...(e.diff ? { diff: e.diff } : {}),
                       ...(e.undo ? { undo: e.undo } : {}),
@@ -623,6 +629,7 @@ function App() {
                     diff?: DiffView;
                     undo?: string;
                     undone?: boolean;
+                    auto?: boolean;
                   };
                 };
               };
@@ -637,6 +644,7 @@ function App() {
                 ...(args.ok === false ? { ok: false } : {}),
                 ...(args.diff ? { diff: args.diff } : {}),
                 ...(args.undo ? { undo: args.undo } : {}),
+                ...(args.auto ? { auto: true } : {}),
               };
             }
             return {
@@ -842,9 +850,21 @@ function App() {
               rawCall: Record<string, unknown>;
             }
           | { kind: "rejected"; name: string; path: string; error: string; rawCall: Record<string, unknown> }
+          | {
+              kind: "auto";
+              name: string;
+              path: string;
+              result: string;
+              ok: boolean;
+              stopped: boolean;
+              rawCall: Record<string, unknown>;
+            }
           | { kind: "stuck"; error: string }
         >("ask_with_tools", { messages: convo, model });
-        if (!live()) return;
+        // An automatic call has already run by the time it comes back, so Stop
+        // pressed meanwhile still gets its card — the branch below shows and
+        // saves it, and sends nothing on — as long as this thread is on screen.
+        if (!live() && !(out.kind === "auto" && threadGen.current === gen)) return;
 
         if (out.kind === "answer") {
           setEntries((prev) => {
@@ -888,6 +908,34 @@ function App() {
             ...convo,
             { role: "assistant", content: "", tool_calls: [out.rawCall] },
             { role: "tool", content: out.error, tool_name: out.name },
+          ];
+          continue;
+        }
+
+        if (out.kind === "auto") {
+          // Already run, in Rust, because the rule says a read, listing or search
+          // inside the project folder needs no approval. Shown as a ran card
+          // marked `auto` so nothing happens unseen, and sent back to the model
+          // exactly as an approved call would be.
+          const { name, path, result, ok, stopped } = out;
+          const args =
+            (out.rawCall as { function?: { arguments?: Record<string, unknown> } }).function?.arguments ?? {};
+          await settle((prev) => [
+            ...prev,
+            { kind: "tool", name, path, args, state: stopped ? "stopped" : "ran", ok, result, auto: true },
+          ]);
+          // Stopped while the card went up: Stop's own save may have missed it,
+          // so the thread is saved again as it now stands — behind that save, so
+          // the two cannot race. The result is not sent to the model.
+          if (!live()) {
+            await saving.current;
+            if (threadGen.current === gen) await persist(await settle((a) => a), convoIdRef.current);
+            return;
+          }
+          convo = [
+            ...convo,
+            { role: "assistant", content: "", tool_calls: [out.rawCall] },
+            { role: "tool", content: result, tool_name: name },
           ];
           continue;
         }
@@ -1532,14 +1580,14 @@ function App() {
                   className={"toggle" + (toolsOn ? " on" : "")}
                   onClick={() => setToolsOn((v) => !v)}
                   aria-pressed={toolsOn}
-                  title="Let the model read files — and edit them inside a folder you choose. Every read and every edit is approved individually."
+                  title="Let the model read files — and edit them inside a folder you choose. Reads, listings and searches inside the folder run without asking. Reads outside it, every edit and every check ask first."
                 >
                   <I.Wrench width={14} height={14} />
                   Tools
                 </button>
                 {/* Where edits may happen. Only while Tools is on, because only
                     then can anything be edited at all. Without a folder the model
-                    can still read, one approved file at a time. */}
+                    can still read, and every read asks. */}
                 {toolsOn &&
                   (folder ? (
                     <span className="folder-chip" title={`Edits are confined to ${folder.path}`}>

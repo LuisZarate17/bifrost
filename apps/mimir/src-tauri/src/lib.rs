@@ -579,6 +579,10 @@ struct Armed {
 #[derive(Debug, Clone, PartialEq)]
 enum Payload {
     Edit(edit::Plan),
+    /// A read that asked: the file the card showed, as `read_target` resolved
+    /// it. `run_tool` opens **this**, never a path from the webview — so an
+    /// approved `src/a.rs` cannot become a read of something else.
+    Read(std::path::PathBuf),
     /// `stop` is this check's number on the Stop counter, taken **when the card
     /// is shown** rather than when the command starts: a Stop pressed between
     /// Allow and the start — while the approval is still on its way — must
@@ -657,16 +661,23 @@ fn workspace(cfg: &config::Config) -> Option<edit::Workspace> {
 
 /// Ask the model, offering the tools, and report back what it wants.
 ///
-/// **This does not run anything.** It returns an answer, a request to approve,
-/// or — for a request that could never succeed, like an edit whose text is not
-/// in the file — a rejection, which goes straight back to the model so it can
-/// read the file again and retry without the user being asked about something
-/// impossible.
+/// **What it runs itself is only what `tools::approval` calls automatic** — a
+/// read inside the project folder of a file the listing would show, a listing, a
+/// search (H5; `ask_every_call` in the config turns it off). Those come back as
+/// `"auto"`, already run. Everything else it returns as an answer, a request to
+/// approve, or — for a request that could never succeed, like an edit whose text
+/// is not in the file — a rejection, which goes straight back to the model so it
+/// can read the file again and retry without the user being asked about
+/// something impossible.
 #[tauri::command]
 async fn ask_with_tools(
     mut messages: Vec<Message>,
     model: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // Taken **before the model is asked**, for an automatic search or listing:
+    // there is no card to take it at, and a Stop pressed while the model is
+    // still answering must reach the walk that follows.
+    let stop = next_stop();
     let cfg = tauri::async_runtime::spawn_blocking(config::load)
         .await
         .unwrap_or_default();
@@ -776,10 +787,48 @@ async fn ask_with_tools(
         }
     }
 
+    // What may run without a card. Decided here, once, by the one rule the probe
+    // shares — and on a blocking thread, because it walks the folder.
+    let decided = {
+        let (ws, request, ask_every_call) = (ws.clone(), request.clone(), cfg.ask_every_call);
+        tauri::async_runtime::spawn_blocking(move || tools::approval(ws.as_ref(), &request, ask_every_call))
+            .await
+            .map_err(|e| format!("deciding the call failed: {e}"))?
+    };
+    match decided {
+        tools::Approval::Reject(why) => {
+            return Ok(reject(request.name(), request.path(), format!("error: {why}")));
+        }
+        tools::Approval::Auto(auto) => {
+            let ws = ws.clone().expect("a call is only automatic inside a project folder");
+            let ran = tauri::async_runtime::spawn_blocking(move || run_auto(&ws, auto, stop))
+                .await
+                .map_err(|e| format!("running the call failed: {e}"))?;
+            // `None`: the read could not be made safely, so it asks like any other.
+            if let Some((name, path, mut ran)) = ran {
+                if !ran.ok && prior > 0 {
+                    ran.result.push_str(tools::repeated_note(name));
+                }
+                // **Never `arm`s a ticket and never touches PENDING**: nothing
+                // here awaits a decision, so nothing may replace or leave one.
+                return Ok(serde_json::json!({
+                    "kind": "auto",
+                    "name": name,
+                    "path": path,
+                    "result": ran.result,
+                    "ok": ran.ok,
+                    "stopped": ran.stopped,
+                    "rawCall": call,
+                }));
+            }
+        }
+        tools::Approval::Ask => {}
+    }
+
     let (name, path, payload) = match request {
         tools::Request::Read { path } => {
-            let target = tools::read_target(&path, ws.as_ref());
-            ("read_file", target, None)
+            let (open, shown) = tools::read_target(&path, ws.as_ref());
+            ("read_file", shown, Some(Payload::Read(open)))
         }
         tools::Request::List { .. } | tools::Request::Search { .. } if ws.is_none() => {
             return Ok(reject(
@@ -911,11 +960,58 @@ impl Ran {
     }
 }
 
+/// Read a file the user approved — the one the ticket holds.
+fn run_read(real: &std::path::Path) -> Ran {
+    Ran::text(tools::run_read_file(real))
+}
+
+/// Run a listing or a search, for an approved card and for an automatic call
+/// alike. The folder is opened again rather than trusted: it may have been moved
+/// or deleted since it was chosen, or while the card was on screen.
+///
+/// `stop` is a place on the Stop counter taken before the call began, so a Stop
+/// pressed at any point since reaches the walk — and one already pressed ends it
+/// at once, having read nothing.
+fn run_find(root: &str, find: &Find, stop: u64) -> Ran {
+    let ws = match edit::Workspace::open(root) {
+        Ok(ws) => ws,
+        Err(e) => return Ran::text(format!("error: {e}")),
+    };
+    let found = match find {
+        Find::List { pattern } => search::list(&ws, pattern.as_deref(), || stopped(stop)),
+        Find::Search { text, pattern } => search::search(&ws, text, pattern.as_deref(), || stopped(stop)),
+    };
+    match found {
+        Ok(text) => Ran { stopped: stopped(stop), ..Ran::text(text) },
+        Err(e) => Ran::text(format!("error: {e}")),
+    }
+}
+
+/// An automatic call, run: `(tool name, what the card would show, outcome)`.
+/// `None` for a read that could not be made safely — see
+/// [`tools::read_unasked`] — which the caller then asks about like any other.
+fn run_auto(ws: &edit::Workspace, auto: tools::Auto, stop: u64) -> Option<(&'static str, String, Ran)> {
+    match auto {
+        tools::Auto::Read(real) => {
+            let text = tools::read_unasked(&real)?;
+            Some(("read_file", edit::plain(&real), Ran::text(text)))
+        }
+        tools::Auto::List { pattern } => {
+            let shown = search::describe_list(pattern.as_deref());
+            Some(("list_files", shown, run_find(&ws.root_display(), &Find::List { pattern }, stop)))
+        }
+        tools::Auto::Search { text, pattern } => {
+            let shown = search::describe_search(&text, pattern.as_deref());
+            Some(("search", shown, run_find(&ws.root_display(), &Find::Search { text, pattern }, stop)))
+        }
+    }
+}
+
 /// Run a call the user has just approved.
 ///
-/// Redeems the ticket and runs **what the ticket holds** — for an edit, the plan
-/// computed when the diff was shown; for a check, the folder and argv the card
-/// showed. The webview names the call it approved; it never supplies what to
+/// Redeems the ticket and runs **what the ticket holds** — for a read, the file
+/// the card showed; for an edit, the plan computed when the diff was shown; for a
+/// check, the folder and argv the card showed. The webview names the call it approved; it never supplies what to
 /// write or what to run.
 ///
 /// **A check can be stopped.** Its ticket holds a number from the same counter as
@@ -928,7 +1024,7 @@ async fn run_tool(name: String, path: String, token: String) -> Result<Ran, Stri
     // approved, and it runs once.
     let payload = redeem(&token, &name, &path)?;
     tauri::async_runtime::spawn_blocking(move || match (name.as_str(), payload) {
-        ("read_file", None) => Ok(Ran::text(tools::run_read_file(&path))),
+        ("read_file", Some(Payload::Read(real))) => Ok(run_read(&real)),
         ("edit_file" | "create_file", Some(Payload::Edit(plan))) => {
             let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
             // A file changed since the diff was shown is refused, not written:
@@ -961,22 +1057,7 @@ async fn run_tool(name: String, path: String, token: String) -> Result<Ran, Stri
                 Err(e) => Ran::text(format!("error: {e}")),
             })
         }
-        ("list_files" | "search", Some(Payload::Find { root, find, stop })) => {
-            // Opened again rather than trusted: the folder may have been moved
-            // or deleted while the card was on screen.
-            let ws = match edit::Workspace::open(&root) {
-                Ok(ws) => ws,
-                Err(e) => return Ok(Ran::text(format!("error: {e}"))),
-            };
-            let found = match &find {
-                Find::List { pattern } => search::list(&ws, pattern.as_deref(), || stopped(stop)),
-                Find::Search { text, pattern } => search::search(&ws, text, pattern.as_deref(), || stopped(stop)),
-            };
-            Ok(match found {
-                Ok(text) => Ran { stopped: stopped(stop), ..Ran::text(text) },
-                Err(e) => Ran::text(format!("error: {e}")),
-            })
-        }
+        ("list_files" | "search", Some(Payload::Find { root, find, stop })) => Ok(run_find(&root, &find, stop)),
         (other, _) => Err(format!("no such tool: {other}")),
     })
     .await
@@ -1478,6 +1559,57 @@ mod tests {
         assert!(redeem_in(&mut armed(), "t", "read_file", shown).is_err());
         assert!(redeem_in(&mut armed(), "t", "list_files", shown).is_err());
         assert_eq!(redeem_in(&mut armed(), "t", "search", shown).unwrap(), Some(payload.clone()));
+    }
+
+    /// **The file that is read is the one that was resolved when the card was
+    /// shown** — the ticket hands back that path, and nothing about it comes from
+    /// the caller.
+    #[test]
+    fn a_read_ticket_redeems_the_file_it_was_armed_with() {
+        let open = std::path::PathBuf::from(r"C:\work\demo\src\a.rs");
+        let shown = r"C:\work\demo\src\a.rs";
+        let mut slot = Some(Armed {
+            token: "t".into(),
+            name: "read_file".into(),
+            path: shown.into(),
+            payload: Some(Payload::Read(open.clone())),
+        });
+        assert_eq!(redeem_in(&mut slot, "t", "read_file", shown).unwrap(), Some(Payload::Read(open)));
+    }
+
+    #[test]
+    fn a_read_ticket_cannot_be_redeemed_as_a_search() {
+        let shown = r"C:\work\demo\src\a.rs";
+        let armed = || {
+            Some(Armed {
+                token: "t".into(),
+                name: "read_file".into(),
+                path: shown.into(),
+                payload: Some(Payload::Read(shown.into())),
+            })
+        };
+        assert!(redeem_in(&mut armed(), "t", "search", shown).is_err());
+        assert!(redeem_in(&mut armed(), "t", "list_files", shown).is_err());
+    }
+
+    /// Stop pressed before an automatic walk starts: it ends at once, says so,
+    /// and has read no file.
+    #[test]
+    fn run_find_with_an_already_stopped_number_reports_stopped_and_reads_nothing() {
+        let dir = std::env::temp_dir().join(format!("mimir-stopped-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "needle\n").unwrap();
+        let root = edit::Workspace::open(&dir).unwrap().root_display();
+        let stop = next_stop();
+        STREAMS_STOPPED.fetch_max(stop, Ordering::SeqCst);
+        let ran = run_find(&root, &Find::Search { text: "needle".into(), pattern: None }, stop);
+        assert!(ran.stopped);
+        assert!(!ran.result.contains("a.txt:1"), "{}", ran.result);
+        assert!(ran.result.contains("stopped"), "{}", ran.result);
+        // And a number taken after the Stop is not caught by it.
+        let later = run_find(&root, &Find::Search { text: "needle".into(), pattern: None }, next_stop());
+        assert!(!later.stopped && later.result.contains("a.txt:1"), "{}", later.result);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

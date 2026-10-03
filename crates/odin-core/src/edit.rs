@@ -53,6 +53,17 @@ pub struct Workspace {
     root: PathBuf,
 }
 
+/// Where [`Workspace::locate`] found a path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Located {
+    /// An existing file or folder in the project, canonical.
+    Inside(PathBuf),
+    /// Exists, or would, somewhere else — canonical, or as near as could be told.
+    Outside(PathBuf),
+    /// Nothing is there, and the place it would be is in the project.
+    MissingInside,
+}
+
 impl Workspace {
     /// Open a folder as the workspace. It must exist and be a directory.
     pub fn open(dir: impl AsRef<Path>) -> Result<Self, String> {
@@ -94,6 +105,62 @@ impl Workspace {
         Ok(real)
     }
 
+    /// Where a path the model gave for a **read** lands, for deciding whether
+    /// the read needs asking about (`tools::approval`).
+    ///
+    /// Shares [`join`](Self::join) and `canonicalize` with
+    /// [`resolve_existing`](Self::resolve_existing), so `..`, symlinks and
+    /// junctions resolve the same way. Inside or outside is the same component-wise
+    /// `starts_with` test [`contain_with`](Self::contain_with) makes — and **none of
+    /// its edit-only refusals** (`.git`, streams, `.cargo`, the toolchain files,
+    /// `.npmrc`, app data) apply: whether a read of those is automatic is
+    /// `search::visible` and `search::secret_name`'s call, not this one's.
+    ///
+    /// A path that does not exist is placed by its nearest existing ancestor,
+    /// canonicalised, with the missing tail put back — so `linked/missing.txt`
+    /// under a junction that points out is `Outside`, not a missing file in the
+    /// project. A tail holding `..` is folded in lexically for the same reason.
+    ///
+    /// A network or device path (`\\host\share`, `\\.\…`) is `Outside` as given,
+    /// without a filesystem call: resolving one is how Windows opens a connection to
+    /// the host, and nothing has been approved yet. See [`remote_or_device`].
+    pub fn locate(&self, requested: &str) -> Located {
+        let Ok(joined) = self.join_any(requested) else {
+            return Located::MissingInside;
+        };
+        if remote_or_device(&joined, &self.root) {
+            return Located::Outside(joined);
+        }
+        if let Ok(real) = std::fs::canonicalize(&joined) {
+            return if real.starts_with(&self.root) { Located::Inside(real) } else { Located::Outside(real) };
+        }
+        let mut tail = Vec::new();
+        let mut base = joined.as_path();
+        let real_base = loop {
+            let Some(parent) = base.parent() else {
+                break joined.clone();
+            };
+            if let Some(name) = base.file_name() {
+                tail.push(name.to_owned());
+            } else {
+                tail.push(std::ffi::OsString::from(".."));
+            }
+            base = parent;
+            if let Ok(real) = std::fs::canonicalize(base) {
+                break real;
+            }
+        };
+        let mut real = real_base;
+        for part in tail.into_iter().rev() {
+            if part == ".." {
+                real.pop();
+            } else {
+                real.push(part);
+            }
+        }
+        if real.starts_with(&self.root) { Located::MissingInside } else { Located::Outside(real) }
+    }
+
     /// Resolve a path for a file that **must not exist yet**.
     ///
     /// The folder it goes in must already exist: creating directories on the
@@ -124,9 +191,24 @@ impl Workspace {
         Ok(real)
     }
 
+    /// [`join_any`](Self::join_any), refusing a network or device path outright.
+    /// Callers canonicalise what this returns, and canonicalising `\\host\share`
+    /// reaches out to `host` — before [`contain`] has had a say.
+    fn join(&self, requested: &str) -> Result<PathBuf, String> {
+        let joined = self.join_any(requested)?;
+        if remote_or_device(&joined, &self.root) {
+            return Err(format!(
+                "{} is outside the project folder ({}). Only files inside it can be changed.",
+                clean(requested),
+                self.root_display()
+            ));
+        }
+        Ok(joined)
+    }
+
     /// Relative paths are relative to the workspace; absolute ones stand as given
     /// and are checked by [`contain`] like any other.
-    fn join(&self, requested: &str) -> Result<PathBuf, String> {
+    fn join_any(&self, requested: &str) -> Result<PathBuf, String> {
         let r = clean(requested);
         if r.is_empty() {
             return Err("no path was given".to_string());
@@ -197,6 +279,104 @@ impl Workspace {
     }
 }
 
+/// Whether `path` names a network share or a device (`\\host\share`, `\\?\UNC\…`,
+/// `\\.\…`, `\\?\GLOBALROOT\…`) that is not the project folder's own place.
+///
+/// **A pure function of the text**, because it exists to run before anything
+/// touches the filesystem: `canonicalize` on a UNC path makes Windows open an SMB
+/// connection and send the user's NTLM hash to whoever runs the host. Such a path
+/// is only trusted when it lies lexically under `root` (compared in plain form,
+/// case-insensitively, component by component, with no `..`) — a project folder
+/// that itself lives on a share must keep working.
+pub fn remote_or_device(path: &Path, root: &Path) -> bool {
+    use std::path::Prefix;
+    let remote = match path.components().next() {
+        Some(Component::Prefix(p)) => match p.kind() {
+            Prefix::UNC(..) | Prefix::VerbatimUNC(..) | Prefix::DeviceNS(_) | Prefix::Verbatim(_) => true,
+            Prefix::VerbatimDisk(_) | Prefix::Disk(_) => false,
+        },
+        _ => false,
+    };
+    if !remote {
+        return false;
+    }
+    let parts = |p: &Path| -> Vec<String> {
+        PathBuf::from(plain(p))
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    let (under, base) = (parts(path), parts(root));
+    let lexically_inside = !path.components().any(|c| c == Component::ParentDir)
+        && !base.is_empty()
+        && under.len() >= base.len()
+        && under[..base.len()] == base[..];
+    !lexically_inside
+}
+
+/// Open `real` for an automatic read, only if it is still the file that was
+/// approved — `None` means "do not read this unasked".
+///
+/// A path is not a file: between the decision and the open, a link can be swapped
+/// in, and a hard link makes a file inside the folder *be* a file outside it
+/// (`mklink /H` needs no admin rights), which no check of its name can see. So, on
+/// Windows:
+///
+/// 1. canonicalise `real` again and require it is still the same path;
+/// 2. open it, and ask the **open handle** where it really is
+///    (`GetFinalPathNameByHandleW`) and require that is `real`;
+/// 3. ask the handle how many names the file has (`GetFileInformationByHandle`)
+///    and require exactly one — a second name is a hard link.
+///
+/// The caller reads from the returned handle, so nothing can change between the
+/// checks and the read. Where this is not Windows nothing is checkable, so nothing
+/// is automatic.
+#[cfg(windows)]
+pub fn open_checked(real: &Path) -> Option<std::fs::File> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_NAME_NORMALIZED, GetFileInformationByHandle,
+        GetFinalPathNameByHandleW,
+    };
+
+    if std::fs::canonicalize(real).ok().as_deref() != Some(real) {
+        return None;
+    }
+    let file = std::fs::File::open(real).ok()?;
+    let handle = HANDLE(file.as_raw_handle());
+
+    let mut buf = vec![0u16; 1024];
+    let at = loop {
+        // SAFETY: `handle` belongs to `file`, which is open until the end of this
+        // function, and `buf` is a live buffer whose length is passed with it.
+        // FILE_NAME_NORMALIZED is 0, which is also the DOS volume form `canonicalize` gives.
+        let n = unsafe { GetFinalPathNameByHandleW(handle, &mut buf, FILE_NAME_NORMALIZED) } as usize;
+        if n == 0 {
+            return None;
+        }
+        if n <= buf.len() {
+            break PathBuf::from(String::from_utf16_lossy(&buf[..n]));
+        }
+        buf.resize(n + 1, 0);
+    };
+    if at != real {
+        return None;
+    }
+
+    let mut info = BY_HANDLE_FILE_INFORMATION::default();
+    // SAFETY: as above; `info` is a live, correctly sized out-parameter.
+    if unsafe { GetFileInformationByHandle(handle, &mut info) }.is_err() || info.nNumberOfLinks != 1 {
+        return None;
+    }
+    Some(file)
+}
+
+#[cfg(not(windows))]
+pub fn open_checked(_real: &Path) -> Option<std::fs::File> {
+    None
+}
+
 /// `.cargo/…`, `rust-toolchain(.toml)` and `.npmrc`, anywhere in the folder.
 fn decides_what_the_check_runs(inside: &Path) -> bool {
     let named = |n: &std::ffi::OsStr, what: &str| n.eq_ignore_ascii_case(what);
@@ -213,7 +393,7 @@ pub(crate) fn app_data() -> Option<PathBuf> {
 }
 
 /// Models wrap paths in quotes or backticks surprisingly often.
-fn clean(requested: &str) -> String {
+pub(crate) fn clean(requested: &str) -> String {
     requested
         .trim()
         .trim_matches(|c| c == '"' || c == '\'' || c == '`')
@@ -224,7 +404,7 @@ fn clean(requested: &str) -> String {
 /// `\\?\C:\x` → `C:\x`, and `\\?\UNC\server\share` → `\\server\share`, for
 /// anything a person reads — and anything handed to a program as a folder,
 /// which the verbatim form of a network share would reach as a relative path.
-fn plain(p: &Path) -> String {
+pub fn plain(p: &Path) -> String {
     let s = p.to_string_lossy();
     if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
         return format!(r"\\{rest}");
@@ -858,6 +1038,86 @@ mod tests {
         assert!(err.contains("outside"), "{err}");
     }
 
+    // ── locate ──────────────────────────────────────────────────────────────
+
+    /// A junction `ws/link` pointing at `s.dir/target`, or `None` where junctions
+    /// cannot be made — the caller skips its assertions, like the test above.
+    fn junction_out(s: &Sandbox, ws: &Workspace) -> Option<PathBuf> {
+        let target = s.dir.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("there.txt"), b"x").unwrap();
+        let link = ws.root().join("linked");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(plain(&link))
+            .arg(plain(&target))
+            .output();
+        if !matches!(made, Ok(ref o) if o.status.success()) {
+            eprintln!("could not create a junction here; skipping");
+            return None;
+        }
+        Some(target)
+    }
+
+    #[test]
+    fn locate_finds_a_file_inside() {
+        let s = Sandbox::new("loc-in");
+        let ws = s.ws();
+        s.write("src/a.rs", b"x");
+        match ws.locate("src/a.rs") {
+            Located::Inside(p) => assert_eq!(ws.relative(&p), "src/a.rs"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn locate_puts_dot_dot_and_absolute_paths_elsewhere_outside() {
+        let s = Sandbox::new("loc-out");
+        let ws = s.ws();
+        std::fs::write(s.dir.join("x"), b"x").unwrap();
+        assert!(matches!(ws.locate("../x"), Located::Outside(_)));
+        let abs = s.dir.join("x");
+        assert!(matches!(ws.locate(abs.to_str().unwrap()), Located::Outside(_)));
+        // Missing, and still outside: a `..` in the tail cannot climb back in.
+        assert!(matches!(ws.locate("nope/../../missing.txt"), Located::Outside(_)));
+    }
+
+    #[test]
+    fn locate_follows_a_junction_out_even_to_a_missing_file() {
+        let s = Sandbox::new("loc-junction");
+        let ws = s.ws();
+        let Some(target) = junction_out(&s, &ws) else { return };
+        match ws.locate("linked/there.txt") {
+            Located::Outside(p) => assert_eq!(p, std::fs::canonicalize(target.join("there.txt")).unwrap()),
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(ws.locate("linked/missing.txt"), Located::Outside(_)));
+    }
+
+    #[test]
+    fn locate_says_a_missing_file_inside_is_missing() {
+        let s = Sandbox::new("loc-missing");
+        let ws = s.ws();
+        s.write("src/a.rs", b"x");
+        assert_eq!(ws.locate("src/none.rs"), Located::MissingInside);
+        assert_eq!(ws.locate("no/such/dir/none.rs"), Located::MissingInside);
+        assert_eq!(ws.locate("src/../other/none.rs"), Located::MissingInside);
+    }
+
+    /// Editing refuses `.cargo/`; reading is decided by `search`, not here.
+    #[test]
+    fn locate_applies_none_of_the_edit_only_refusals() {
+        let s = Sandbox::new("loc-cargo");
+        let ws = s.ws();
+        s.write(".cargo/config.toml", b"[build]
+");
+        s.write(".git/config", b"[core]
+");
+        assert!(ws.resolve_existing(".cargo/config.toml").is_err());
+        assert!(matches!(ws.locate(".cargo/config.toml"), Located::Inside(_)));
+        assert!(matches!(ws.locate(".git/config"), Located::Inside(_)));
+    }
+
     #[test]
     fn files_that_decide_what_the_check_runs_are_never_edited() {
         let s = Sandbox::new("checkcfg");
@@ -1337,5 +1597,47 @@ mod tests {
     #[test]
     fn reads_are_normalised_the_way_edits_match() {
         assert_eq!(for_model(b"\xEF\xBB\xBFa\r\nb\r\n"), "a\nb\n");
+    }
+
+    #[test]
+    fn a_network_or_device_path_is_recognised_from_its_text_alone() {
+        let local = Path::new(r"C:\proj");
+        for p in [
+            r"\\host\share\x.txt",
+            "//host/share/x.txt",
+            r"\\?\UNC\host\share\x.txt",
+            r"\\.\PhysicalDrive0",
+            r"\\?\GLOBALROOT\Device\x",
+        ] {
+            assert!(remote_or_device(Path::new(p), local), "{p} should be treated as remote");
+        }
+        for p in [r"C:\proj\a.txt", r"C:\elsewhere\a.txt", r"\\?\C:\proj\a.txt", "a.txt"] {
+            assert!(!remote_or_device(Path::new(p), local), "{p} is a local path");
+        }
+    }
+
+    #[test]
+    fn a_project_on_a_share_keeps_its_own_paths_and_nothing_else() {
+        let root = Path::new(r"\\?\UNC\srv\share\proj");
+        assert!(!remote_or_device(Path::new(r"\\srv\share\proj\a.txt"), root));
+        assert!(!remote_or_device(Path::new(r"\\SRV\Share\Proj\src\b.rs"), root), "case-insensitive");
+        assert!(remote_or_device(Path::new(r"\\srv\share\proj\..\other\a.txt"), root), "no climbing out");
+        assert!(remote_or_device(Path::new(r"\\srv\share\other\a.txt"), root));
+        assert!(remote_or_device(Path::new(r"\\evil\share\proj\a.txt"), root));
+        // With no project folder there is nothing for a remote path to be under.
+        assert!(remote_or_device(Path::new(r"\\srv\share\proj\a.txt"), Path::new("")));
+    }
+
+    #[test]
+    fn locate_never_resolves_a_path_on_another_machine() {
+        // A host that cannot exist: had `locate` canonicalised it, Windows would
+        // have tried an SMB connection first. It comes back as given, outside.
+        let s = Sandbox::new("loc-remote");
+        let ws = s.ws();
+        let given = r"\\odin-test-no-such-host\share\x.txt";
+        match ws.locate(given) {
+            Located::Outside(p) => assert_eq!(p, PathBuf::from(given)),
+            other => panic!("{other:?}"),
+        }
     }
 }

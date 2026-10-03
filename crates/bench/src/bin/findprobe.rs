@@ -302,6 +302,8 @@ struct Outcome {
     why: String,
     calls: Vec<String>,
     rounds: usize,
+    asks: usize,
+    asks_every_call: usize,
     secs: f64,
     log: Vec<String>,
 }
@@ -322,7 +324,16 @@ fn run(model: &str, q: &Question, variant: Variant, opts: Options, ws: &Workspac
             Err(e) => (Verdict::Fail, e),
         }
     };
-    Outcome { verdict, why, calls: r.calls, rounds: r.rounds, secs: started.elapsed().as_secs_f64(), log: r.log }
+    Outcome {
+        verdict,
+        why,
+        calls: r.calls,
+        rounds: r.rounds,
+        asks: r.asks,
+        asks_every_call: r.asks_every_call,
+        secs: started.elapsed().as_secs_f64(),
+        log: r.log,
+    }
 }
 
 /// The pinned commit as a detached worktree, removed when dropped.
@@ -417,6 +428,7 @@ fn main() {
             // Per kind: passes within the app's bound, and runs.
             let mut tally = [(0usize, 0usize); 3];
             let (mut late, mut errors, mut calls, mut secs) = (0, 0, 0, 0.0);
+            let (mut asks, mut asks_every_call) = (0usize, 0usize);
             println!("── {} · {} ──", variant.name(), label);
             for q in &questions {
                 let k = kinds.iter().position(|&k| k == q.kind).unwrap();
@@ -431,6 +443,8 @@ fn main() {
                         Verdict::Fail => {}
                     }
                     calls += o.calls.len();
+                    asks += o.asks;
+                    asks_every_call += o.asks_every_call;
                     secs += o.secs;
                     line.push_str(&format!("{:<5} ", o.verdict.label()));
                     if o.verdict != Verdict::Pass {
@@ -442,7 +456,7 @@ fn main() {
                     json.push(serde_json::json!({
                         "variant": variant.name(), "setting": label, "question": q.id, "kind": q.kind.name(),
                         "run": i + 1, "verdict": o.verdict.label(), "why": o.why, "calls": o.calls,
-                        "rounds": o.rounds, "log": o.log, "secs": (o.secs * 10.0).round() / 10.0,
+                        "rounds": o.rounds, "asks": o.asks, "asksEveryCall": o.asks_every_call, "log": o.log, "secs": (o.secs * 10.0).round() / 10.0,
                     }));
                 }
                 println!("  {:<20} {line}", q.id);
@@ -451,30 +465,33 @@ fn main() {
             let per = |i: usize| format!("{}/{}", tally[i].0, tally[i].1);
             println!(
                 "  → {pass}/{total} pass within the app's {} rounds · named {} · vague {} · no tool {} · {late} late · \
-                 {errors} error · {:.1} calls/run · {:.1}s avg\n",
+                 {errors} error · {:.1} calls/run · {:.1} asks/run ({:.1} asking every call) · {:.1}s avg\n",
                 tools::MAX_ROUNDS,
                 per(0),
                 per(1),
                 per(2),
                 calls as f64 / total.max(1) as f64,
+                asks as f64 / total.max(1) as f64,
+                asks_every_call as f64 / total.max(1) as f64,
                 secs / total.max(1) as f64,
             );
             rows.push(format!(
-                "| {} | {} | {pass}/{total} | {} | {} | {} | {late} | {errors} | {:.1} | {:.1}s |",
+                "| {} | {} | {pass}/{total} | {} | {} | {} | {late} | {errors} | {:.1} | {:.1} | {:.1}s |",
                 variant.name(),
                 label,
                 per(0),
                 per(1),
                 per(2),
                 calls as f64 / total.max(1) as f64,
+                asks as f64 / total.max(1) as f64,
                 secs / total.max(1) as f64,
             ));
         }
     }
 
     println!("─── {model} ───");
-    println!("| variant | setting | pass | named | vague | no tool | late | error | calls/run | time/run |");
-    println!("|---|---|---|---|---|---|---|---|---|---|");
+    println!("| variant | setting | pass | named | vague | no tool | late | error | calls/run | asks/run | time/run |");
+    println!("|---|---|---|---|---|---|---|---|---|---|---|");
     for r in &rows {
         println!("{r}");
     }

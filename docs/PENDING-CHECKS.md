@@ -7,6 +7,27 @@ machine.
 **[G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
+## Open — H5, reads that don't ask, 2026-10-02
+
+**Already proven mechanically.** Unit tests on the rule itself: a read, listing and search inside
+the folder run without asking; a read outside, one reached through a junction, a gitignored file and
+a secret-named one (`.env`, keys, `.npmrc` and the like) ask; so does everything in a drive root or the whole profile folder, and a path on another machine is never resolved before Allow; a missing file and a folder are
+rejected without a card; every edit and check asks; and `ask_every_call` makes everything ask, with
+a malformed value counting as on. `node tools/e2e/mimir-policy.mjs` drives the real app and model
+through the same cases — a model that declines a prompt on its own is reported as SKIP, not PASS —
+and `mimir-check.mjs` proves the off switch by declining a listing with it on. **What needs a
+person** is how the quiet card reads, what the tag's tooltip says, and that the switch works from a
+hand-edited config.
+
+- [ ] **A search inside the folder runs without a card to approve**, marked *no approval needed*,
+      and it reads as quieter than a card that asked. [H-testing.md §4](H-testing.md)
+- [ ] **A read of `C:\Windows\win.ini` asks**, and Deny keeps it out of the answer.
+- [ ] **A hand-made `.env` asks**, and a search for what is in it runs without showing it.
+- [ ] **`"ask_every_call": true` in `config.json` makes reads and listings ask again**, with no
+      restart.
+- [ ] **Reopening a conversation keeps the tags** and the missing buttons.
+- [ ] **Choosing your whole user folder makes everything ask** — a listing there waits for Allow.
+
 ## Open — H4b, switching to the coding model, 2026-10-01
 
 **Already proven mechanically.** `offer_for` has unit tests for every combination that decides
@@ -80,6 +101,8 @@ that already works is far easier to debug than one arriving with a protocol atta
 allowlist, no remembered folder and no "always allow": every read shows the exact path and waits.
 That is deliberately the most annoying design that is still usable, because the alternative is a
 model reading whatever it names and nobody noticing.
+
+*Changed by H5 (2026-10-02): reads, listings and searches inside the chosen folder no longer ask; reads outside it, every edit and every check still do. See the H5 section above.*
 
 **Already proven mechanically.** Given a temp file containing a fact it could not know, the model
 asked for `read_file`, the tool returned the contents, and the next turn answered *"The launch code

@@ -135,6 +135,8 @@ export function Conversations({
                   ) : (
                     <button
                       className="cv-open"
+                      // Lets a script open one conversation among several with the same title.
+                      data-id={c.id}
                       onClick={() => onOpen(c.id)}
                       onDoubleClick={() => {
                         setRenaming(c.id);

@@ -24,7 +24,7 @@ good enough, the fix is a different local model, not a fallback.
 ## Three decisions already made — do not relitigate them mid-build
 
 1. **Every new tool asks on every call**, exactly as `read_file` does, until H5 revisits the policy
-   on evidence. G6's reasoning still holds until then: every tool call is code the model chose to
+   on evidence *(revisited at H5, 2026-10-02 — see H5)*. G6's reasoning still holds until then: every tool call is code the model chose to
    run, and every convenience works by removing the moment where you look.
 
 2. **The check command is picked, not typed.** Rust detects candidates from the folder
@@ -295,6 +295,11 @@ often chosen before the first question — the offer must start it.
 
 ## H5 — The approval policy
 
+> **Built 2026-10-02** — [H5-results.md](../docs/results/H5-results.md). Option B: reads, listings and searches
+> inside the folder run without asking — cards per coding task 3.9 → 2.5, finding code 0 —
+> with gitignored, secret-named, linked, remote and broad-folder reads still asking, and
+> `ask_every_call` to switch it off. Benchmark 29/48 after the wording change (28 before).
+
 **Do:** Starts with a decision: keep every call asking (A), let in-folder reads and searches run
 freely (B), or review a whole turn at its end (C). If B: in-folder `read_file`, `list_files` and
 `search` run without asking and show as quiet cards; reads outside the folder, `run_check` and
@@ -371,6 +376,7 @@ check, and fixed what the check said.
 - **Do not let a command string cross the IPC boundary.** Checks are chosen by position from what
   Rust detected; anything else goes in `config.json` by hand.
 - **Do not auto-approve anything before H5.** The policy changes on evidence, in one place, once.
+  *(revisited at H5, 2026-10-02 — see H5)*
 - **Do not start Phase 2 before Gate 1.** A benchmark built on tools that do not help measures the
   wrong thing.
 - **Do not build embeddings before the repo map has been measured.** Grep finds every call site;
