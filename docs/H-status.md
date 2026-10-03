@@ -1,9 +1,9 @@
 # Stage H — where it stands
 
 Every chunk and gate of [STAGE-H.md](../stages/STAGE-H.md), done or not. **Updated at the end of
-every chunk**, alongside its results doc. Last updated 2026-10-02, after H7.
+every chunk**, alongside its results doc. Last updated 2026-10-03, after H8.
 
-**9 of 12 chunks done · 3 of 3 gates passed.** Next: H8.
+**10 of 12 chunks done · 3 of 3 gates passed.** Next: H9.
 
 | Phase | Chunk | What it is | Status | Result |
 |---|---|---|---|---|
@@ -19,12 +19,12 @@ every chunk**, alongside its results doc. Last updated 2026-10-02, after H7.
 | | H6 | Undo a whole turn | ✅ Done · local | A two-file turn back byte for byte — [H6](results/H6-results.md) |
 | | Gate 3 | Does it work in daily use? | ✅ Passed on your "continue" — daily use is still the real test | |
 | **4. Longer runs** | H7 | Context budget inside a turn | ✅ Done · local | At 8k the request survives; benchmark unharmed — [H7](results/H7-results.md) |
-| | H8 | Partial reads (line ranges) | ⬜ **Next** | |
-| | H9 | File operations (delete, move, new folders) | ⬜ | |
+| | H8 | Partial reads (line ranges) | ✅ Done · local | A 120 KB file edited at line 2102; benchmark holds — [H8](results/H8-results.md) |
+| | H9 | File operations (delete, move, new folders) | ⬜ **Next** | |
 | | H10 | AGENTS.md, a task list, a repo map | ⬜ | Measure the repo map first: Qwen3-Coder already answers 15 of 21 vague find-code questions |
 
 ## Also open
 
-- **Unpushed:** H4a, H4b, H5, H6 and H7 are local, not pushed to origin/main.
-- **Checks by hand waiting** in [PENDING-CHECKS.md](PENDING-CHECKS.md): H1, H2, H4b, H5, H6 and H7, with
+- **Unpushed:** H4a through H8 are local; they go up together at the end of Stage H.
+- **Checks by hand waiting** in [PENDING-CHECKS.md](PENDING-CHECKS.md): H1, H2, H4b, H5, H6, H7 and H8, with
   the steps in [H-testing.md](H-testing.md).

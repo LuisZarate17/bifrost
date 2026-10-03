@@ -130,11 +130,21 @@ pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
         ran
     };
     match request {
-        Request::Read { path } if s.confine_reads => match s.ws.resolve_existing(&path) {
-            Ok(real) => read(tools::run_read_file(&real), false),
+        // A read that fails is marked so, as the app marks it, and gets the app's
+        // repeat note; `run` still does not count it among the edit errors.
+        Request::Read { path, range } if s.confine_reads => match s.ws.resolve_existing(&path) {
+            Ok(real) => {
+                let t = tools::run_read_file(&real, range);
+                let failed = t.starts_with("error:");
+                read(t, failed)
+            }
             Err(e) => read(format!("error: {e}"), true),
         },
-        Request::Read { path } => read(tools::run_read_file(&tools::read_target(&path, Some(s.ws)).0), false),
+        Request::Read { path, range } => {
+            let t = tools::run_read_file(&tools::read_target(&path, Some(s.ws)).0, range);
+            let failed = t.starts_with("error:");
+            read(t, failed)
+        }
         Request::Edit { path, old_text, new_text } => {
             edit_result(edit::plan_replace(s.ws, &path, &old_text, &new_text))
         }
@@ -186,6 +196,9 @@ pub struct Run {
     pub calls: Vec<String>,
     /// Calls other than reads that came back as errors.
     pub edit_errors: usize,
+    /// Reads that named a line range. In taskprobe every file is under 64 KB, so
+    /// one means the model chose to page a file it could have read whole.
+    pub ranged_reads: usize,
     pub rounds: usize,
     /// Still calling tools when the bound ran out.
     pub hit_bound: bool,
@@ -303,6 +316,9 @@ pub fn run_loop(
             break;
         };
         run.calls.push(call.function.name.clone());
+        if call.function.name == "read_file" && tools::read_range(&call.function.arguments).ok().flatten().is_some() {
+            run.ranged_reads += 1;
+        }
         // The app's loop-breaking, measured rather than assumed: the third
         // identical failure ends the turn instead of burning every round.
         let prior = tools::prior_failures(messages, &call);
@@ -355,6 +371,31 @@ mod tests {
 
     fn call(name: &str, args: serde_json::Value) -> ToolCall {
         ToolCall { id: None, function: chat::FunctionCall { name: name.into(), arguments: args } }
+    }
+
+    /// A failed read is told to change the range, not to copy text — and is not
+    /// an edit error, since a probe counts those to judge the edit tools.
+    #[test]
+    fn a_failed_read_gets_the_read_repeat_note_and_is_not_an_edit_error() {
+        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("odin-probe-read-{}-{n}", std::process::id()));
+        let tree = base.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        std::fs::write(tree.join("a.txt"), "one\ntwo\n").unwrap();
+        let ws = Workspace::open(&tree).unwrap();
+        let backups = base.join("backups");
+        let setup = Setup { ws: &ws, backups: &backups, check: None, confine_reads: true, compact: true };
+
+        let past = call("read_file", serde_json::json!({ "path": "a.txt", "start_line": 9 }));
+        let ran = execute(&past, &setup);
+        assert!(ran.failed && ran.text.contains("start_line 9 is past the end"), "{}", ran.text);
+        let ok = execute(&call("read_file", serde_json::json!({ "path": "a.txt", "start_line": "2" })), &setup);
+        assert!(!ok.failed);
+        assert_eq!(ok.text, "[lines 2–2 of 2]\ntwo\n");
+        // The app appends this to a failed read it has already seen fail.
+        let note = tools::repeated_note("read_file");
+        assert!(note.contains("a different range") && !note.contains("copy the text"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// **What counts as an ask is the app's own rule.** An in-folder read, list

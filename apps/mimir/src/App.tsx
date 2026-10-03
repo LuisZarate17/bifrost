@@ -75,6 +75,11 @@ export type Entry =
       /** What the card names: the file for a read or an edit, the command for a
        *  check. */
       path: string;
+      /** For a read of part of a file: the lines, as Rust normalised them (a
+       *  start of 0 is 1; no end is `null`, the rest of the file). Replayed in
+       *  later turns in place of the model's own arguments, which can be a
+       *  string of digits or out of range. */
+      range?: LineRange;
       /** The arguments the model sent, replayed as sent. Rebuilding them from
        *  `path` taught the model a shape no tool takes — and it copies what it
        *  sees. Not kept for edits, whose text can be the size of a file. */
@@ -104,6 +109,9 @@ export type Entry =
       auto?: boolean;
       error?: string;
     };
+
+/** `odin_core::tools::Lines`: 1-based and inclusive; `end` null is "to the end". */
+export type LineRange = { start: number; end: number | null };
 
 export type DiffLine = { tag: " " | "-" | "+"; text: string; old: number | null; new: number | null };
 export type DiffView = { hunks: { lines: DiffLine[] }[]; added: number; removed: number; create: boolean };
@@ -179,7 +187,16 @@ function refusalFor(name: string, path: string): string {
  *  the full path that was read: the model's relative one would name a file in
  *  whatever folder is chosen *now*. */
 function replayArgs(e: Extract<Entry, { kind: "tool" }>): Record<string, unknown> {
-  return isEdit(e.name) || e.name === "read_file" || !e.args ? { path: e.path } : e.args;
+  if (e.name === "read_file") {
+    // From the range Rust normalised, never the model's raw arguments: a read
+    // that sent `"120"` must not teach the model the next one may.
+    return {
+      path: e.path,
+      ...(e.range ? { start_line: e.range.start } : {}),
+      ...(e.range?.end != null ? { end_line: e.range.end } : {}),
+    };
+  }
+  return isEdit(e.name) || !e.args ? { path: e.path } : e.args;
 }
 
 /**
@@ -307,7 +324,14 @@ type ToolReply = (
   | { kind: "answer"; content: string; evalCount: number }
   | {
       kind: "call";
-      call: { name: string; path: string; token: string; diff?: DiffView; changedBuildFiles?: string[] };
+      call: {
+        name: string;
+        path: string;
+        token: string;
+        diff?: DiffView;
+        range?: LineRange;
+        changedBuildFiles?: string[];
+      };
       rawCall: Record<string, unknown>;
     }
   | { kind: "rejected"; name: string; path: string; error: string; rawCall: Record<string, unknown> }
@@ -315,6 +339,7 @@ type ToolReply = (
       kind: "auto";
       name: string;
       path: string;
+      range?: LineRange | null;
       result: string;
       ok: boolean;
       stopped: boolean;
@@ -639,6 +664,7 @@ function App() {
                       ...(e.args && !isEdit(e.name) ? { args: e.args } : {}),
                       ...(e.auto ? { auto: true } : {}),
                       ...(e.ok === false ? { ok: false } : {}),
+                      ...(e.range ? { range: e.range } : {}),
                       ...(e.diff ? { diff: e.diff } : {}),
                       ...(e.undo ? { undo: e.undo } : {}),
                       ...(e.state === "undone" ? { undone: true } : {}),
@@ -729,6 +755,7 @@ function App() {
                   arguments?: {
                     path?: string;
                     args?: Record<string, unknown>;
+                    range?: LineRange;
                     ok?: boolean;
                     diff?: DiffView;
                     undo?: string;
@@ -745,6 +772,7 @@ function App() {
                 state: args.undone ? "undone" : "ran",
                 result: m.content,
                 ...(args.args ? { args: args.args } : {}),
+                ...(args.range ? { range: args.range } : {}),
                 ...(args.ok === false ? { ok: false } : {}),
                 ...(args.diff ? { diff: args.diff } : {}),
                 ...(args.undo ? { undo: args.undo } : {}),
@@ -1030,12 +1058,22 @@ function App() {
           // inside the project folder needs no approval. Shown as a ran card
           // marked `auto` so nothing happens unseen, and sent back to the model
           // exactly as an approved call would be.
-          const { name, path, result, ok, stopped } = out;
+          const { name, path, range, result, ok, stopped } = out;
           const args =
             (out.rawCall as { function?: { arguments?: Record<string, unknown> } }).function?.arguments ?? {};
           await settle((prev) => [
             ...prev,
-            { kind: "tool", name, path, args, state: stopped ? "stopped" : "ran", ok, result, auto: true },
+            {
+              kind: "tool",
+              name,
+              path,
+              args,
+              state: stopped ? "stopped" : "ran",
+              ok,
+              result,
+              auto: true,
+              ...(range ? { range } : {}),
+            },
           ]);
           // Stopped while the card went up: Stop's own save may have missed it,
           // so the thread is saved again as it now stands — behind that save, so
@@ -1057,7 +1095,7 @@ function App() {
         // edit, the command for a check — and stop. Nothing is read, written or
         // run until it is approved, and what is approved is what runs: the
         // ticket carries the whole plan.
-        const { name, path, token, diff, changedBuildFiles } = out.call;
+        const { name, path, token, diff, range, changedBuildFiles } = out.call;
         // Always an object: a call with no arguments at all (a check, say) is
         // replayed as `{}`, not rebuilt as `{path}`.
         const args =
@@ -1069,6 +1107,7 @@ function App() {
           state: "pending",
           args,
           ...(diff ? { diff } : {}),
+          ...(range ? { range } : {}),
           ...(changedBuildFiles?.length ? { changedBuildFiles } : {}),
         };
         // The card is updated by its position, not as "the last entry": a

@@ -47,7 +47,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use odin_core::chat::{Message, Options};
+use odin_core::chat::{Message, Options, Tool};
 use odin_core::edit::Workspace;
 use odin_core::{check, config, ollama, tools};
 
@@ -56,6 +56,26 @@ use probe::{Check, Setup, Transport};
 /// Past the app's own bound: a real task can need more rounds than the app
 /// allows, and how many it really needs is exactly what this measures.
 const PROBE_ROUNDS: usize = 20;
+
+/// **H8's on/off switch**: the read as it was before ranges — no `start_line` or
+/// `end_line` in the schema and no sentence about them in the description — so
+/// that one build measures both, which a comparison across builds could not.
+/// Taking the sentence out asserts it was there, as findprobe does for its own:
+/// a description that changed would otherwise leave the "old" read half new.
+fn whole_reads(mut offered: Vec<Tool>) -> Vec<Tool> {
+    let read = offered.iter_mut().find(|t| t.function.name == "read_file").expect("read_file is always offered");
+    let sentence = format!(" {}", tools::READ_RANGE_SENTENCE);
+    assert!(
+        read.function.description.contains(&sentence),
+        "the range sentence changed; update tools::READ_RANGE_SENTENCE or the way it is stripped"
+    );
+    read.function.description = read.function.description.replace(&sentence, "");
+    if let Some(props) = read.function.parameters.get_mut("properties").and_then(|p| p.as_object_mut()) {
+        props.remove("start_line");
+        props.remove("end_line");
+    }
+    offered
+}
 
 /// The pinned commit every removal task starts from.
 const PIN: &str = "6653c27";
@@ -836,6 +856,9 @@ struct Outcome {
     files: Vec<String>,
     secs: f64,
     log: Vec<String>,
+    /// Reads that named a line range. Every file here is under 64 KB, so each is
+    /// a file the model chose to page rather than read whole.
+    ranged_reads: usize,
     /// Ollama's prompt token count for each request, the largest of them, how
     /// many things were set aside (H7), and the rounds where the prompt shrank
     /// with nothing set aside — Ollama cutting it to fit `num_ctx`.
@@ -852,7 +875,9 @@ fn run(
     scratch: &Path,
     target_dir: &Path,
     keep: bool,
-    compact: bool,
+    // `--compact` and `--read`: whether results are set aside (H7) and whether
+    // the read offers ranges (H8).
+    (compact, parts): (bool, bool),
 ) -> Outcome {
     let started = Instant::now();
     let start = match task.kind {
@@ -879,6 +904,7 @@ fn run(
                 files: Vec::new(),
                 secs: started.elapsed().as_secs_f64(),
                 log: Vec::new(),
+                ranged_reads: 0,
                 prompt_tokens: Vec::new(),
                 max_prompt: 0,
                 set_aside: 0,
@@ -901,6 +927,7 @@ fn run(
                 files: Vec::new(),
                 secs: started.elapsed().as_secs_f64(),
                 log: Vec::new(),
+                ranged_reads: 0,
                 prompt_tokens: Vec::new(),
                 max_prompt: 0,
                 set_aside: 0,
@@ -926,6 +953,7 @@ fn run(
                 files: Vec::new(),
                 secs: started.elapsed().as_secs_f64(),
                 log: Vec::new(),
+                ranged_reads: 0,
                 prompt_tokens: Vec::new(),
                 max_prompt: 0,
                 set_aside: 0,
@@ -951,6 +979,7 @@ fn run(
         ],
     };
     let offered = tools::available(true, Some(&check::label(&cargo.argv)));
+    let offered = if parts { offered } else { whole_reads(offered) };
     let mut messages =
         vec![Message::system(tools::system_prompt(&ws, true)), Message::user(task.prompt)];
     // Reads stay in the worktree. It sits on the same disk as the repo it came
@@ -989,6 +1018,7 @@ fn run(
         files,
         secs: 0.0,
         log: r.log,
+        ranged_reads: r.ranged_reads,
         max_prompt: r.prompt_tokens.iter().copied().max().unwrap_or(0),
         prompt_tokens: r.prompt_tokens,
         set_aside: r.set_aside,
@@ -1056,6 +1086,17 @@ fn main() {
         }
     };
 
+    // Parts, like the app: the read offers `start_line` and `end_line`. `--read
+    // whole` offers the read as it was, to measure H8 on and off in one build.
+    let parts = match arg(&args, "--read").as_deref() {
+        None | Some("parts") => true,
+        Some("whole") => false,
+        Some(other) => {
+            eprintln!("--read takes whole or parts, not {other}");
+            std::process::exit(2);
+        }
+    };
+
     let tasks: Vec<Task> =
         tasks().into_iter().filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o))).collect();
 
@@ -1075,6 +1116,7 @@ fn main() {
     println!("model:  {model}");
     println!("ctx:    {}", cfg.num_ctx);
     println!("compact: {}", if compact { "on" } else { "off" });
+    println!("read:   {}", if parts { "parts (start_line and end_line offered)" } else { "whole (the read before H8)" });
     println!(
         "tasks:  {} · {} real commits · {} removals",
         tasks.len(),
@@ -1115,12 +1157,13 @@ fn main() {
         let (mut secs, mut rounds, mut checks) = (0.0, 0usize, 0usize);
         let (mut asks, mut asks_every_call) = (0usize, 0usize);
         let (mut max_prompt, mut set_aside, mut cut_runs) = (0u32, 0usize, 0usize);
+        let mut ranged_reads = 0usize;
         println!("── {label} ──");
         for task in &tasks {
             let mut line = String::new();
             for i in 0..*n {
                 let scratch = scratch_root.join(format!("{}-{}-{i}", label.replace('=', ""), task.id));
-                let o = run(&model, task, *opts, &scratch, &target_dir, keep, compact);
+                let o = run(&model, task, *opts, &scratch, &target_dir, keep, (compact, parts));
                 if !keep {
                     let _ = std::fs::remove_dir_all(&scratch);
                 }
@@ -1145,6 +1188,7 @@ fn main() {
                 asks_every_call += o.asks_every_call;
                 max_prompt = max_prompt.max(o.max_prompt);
                 set_aside += o.set_aside;
+                ranged_reads += o.ranged_reads;
                 cut_runs += (o.truncated > 0) as usize;
                 let shown = if o.verdict == Verdict::Pass && o.late { "LATE" } else { o.verdict.label() };
                 line.push_str(&format!("{shown:<5} "));
@@ -1159,7 +1203,7 @@ fn main() {
                     "verdict": o.verdict.label(), "why": o.why, "rounds": o.rounds, "late": o.late,
                     "checks": o.checks, "asks": o.asks, "asksEveryCall": o.asks_every_call, "calls": o.calls, "filesChanged": o.files, "log": o.log,
                     "promptTokens": o.prompt_tokens, "maxPrompt": o.max_prompt, "setAside": o.set_aside,
-                    "truncated": o.truncated,
+                    "truncated": o.truncated, "rangedReads": o.ranged_reads,
                     "secs": (o.secs * 10.0).round() / 10.0,
                 }));
             }
@@ -1170,7 +1214,7 @@ fn main() {
             "  → {pass}/{total} pass within the app's {} rounds ({:.0}%) · {late} only later · {fail} fail · \
              {error} error · real commits {}/{} · removals {}/{} · {:.1} rounds/run · {:.1} checks/run · \
              {:.1} asks/run ({:.1} asking every call) · max prompt {max_prompt} · {:.1} set aside/run · \
-             {cut_runs} cut runs · {:.1}s avg\n",
+             {cut_runs} cut runs · {ranged_reads} ranged reads · {:.1}s avg\n",
             tools::MAX_ROUNDS,
             100.0 * pass as f64 / total.max(1) as f64,
             kind_a.0,
@@ -1185,7 +1229,7 @@ fn main() {
             secs / total.max(1) as f64,
         );
         rows.push(format!(
-            "| {label} | {pass}/{total} ({:.0}%) | {late} | {fail} | {error} | {:.1} | {:.1} | {:.1} | {:.1}s | {max_prompt} | {cut_runs} |",
+            "| {label} | {pass}/{total} ({:.0}%) | {late} | {fail} | {error} | {:.1} | {:.1} | {:.1} | {:.1}s | {max_prompt} | {cut_runs} | {ranged_reads} |",
             100.0 * pass as f64 / total.max(1) as f64,
             rounds as f64 / total.max(1) as f64,
             checks as f64 / total.max(1) as f64,
@@ -1195,8 +1239,8 @@ fn main() {
     }
 
     println!("─── {model} ───");
-    println!("| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | checks/run | asks/run | time/run | max prompt | cut runs |", tools::MAX_ROUNDS);
-    println!("|---|---|---|---|---|---|---|---|---|---|---|");
+    println!("| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | checks/run | asks/run | time/run | max prompt | cut runs | ranged reads |", tools::MAX_ROUNDS);
+    println!("|---|---|---|---|---|---|---|---|---|---|---|---|");
     for r in &rows {
         println!("{r}");
     }
@@ -1217,6 +1261,30 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--read whole` is the read as shipped before H8, word for word.
+    #[test]
+    fn the_whole_read_is_the_old_schema_and_the_old_description() {
+        let old = whole_reads(tools::available(true, None));
+        let read = old.iter().find(|t| t.function.name == "read_file").unwrap();
+        assert_eq!(
+            read.function.description,
+            "Read a text file and return its contents. Paths inside the project folder may be \
+             relative to it. The user may be asked to approve a read."
+        );
+        assert_eq!(
+            read.function.parameters,
+            serde_json::json!({
+                "type": "object",
+                "properties": { "path": { "type": "string", "description": "Path to the file" } },
+                "required": ["path"]
+            })
+        );
+        // The other tools are untouched.
+        let new = tools::available(true, None);
+        assert_eq!(old.len(), new.len());
+        assert_eq!(old[1].function.description, new[1].function.description);
+    }
 
     /// **The model cannot read its way to the answer.** A worktree's `.git`
     /// names the repo it came from, and that repo holds every reference

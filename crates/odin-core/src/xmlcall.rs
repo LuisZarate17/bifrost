@@ -916,4 +916,15 @@ mod tests {
         let (_, calls, _) = extract_calls(content, &small_tools());
         assert_eq!(calls[0].function.arguments["path"], json!("123"));
     }
+
+    #[test]
+    fn a_line_number_parameter_becomes_a_number_by_the_real_read_schema() {
+        let content = "<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.rs\n</parameter>\n<parameter=start_line>\n120\n</parameter>\n<parameter=end_line>\n180\n</parameter>\n</function>\n</tool_call>";
+        let (_, calls, failures) = extract_calls(content, &crate::tools::available(false, None));
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(calls[0].function.arguments["path"], json!("src/a.rs"));
+        assert_eq!(calls[0].function.arguments["start_line"], json!(120));
+        assert_eq!(calls[0].function.arguments["end_line"], json!(180));
+        assert!(calls[0].function.arguments["start_line"].is_number());
+    }
 }

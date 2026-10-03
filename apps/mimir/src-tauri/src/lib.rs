@@ -544,6 +544,10 @@ struct PendingCall {
     /// so what is approved and what is written cannot disagree.
     #[serde(skip_serializing_if = "Option::is_none")]
     diff: Option<DiffView>,
+    /// For a read of part of a file: the lines, as Rust normalised them. What the
+    /// card shows is what the ticket holds — see [`Payload::Read`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    range: Option<tools::Lines>,
     /// For a check: build files an edit changed earlier in this turn. A check
     /// runs them, so the card names them before you approve it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -580,9 +584,10 @@ struct Armed {
 enum Payload {
     Edit(edit::Plan),
     /// A read that asked: the file the card showed, as `read_target` resolved
-    /// it. `run_tool` opens **this**, never a path from the webview — so an
-    /// approved `src/a.rs` cannot become a read of something else.
-    Read(std::path::PathBuf),
+    /// it, and the lines the card showed. `run_tool` opens **this**, never a path
+    /// or a range from the webview — so an approved `src/a.rs` cannot become a
+    /// read of something else, nor lines 1–50 a read of the whole file.
+    Read { real: std::path::PathBuf, range: Option<tools::Lines> },
     /// `stop` is this check's number on the Stop counter, taken **when the card
     /// is shown** rather than when the command starts: a Stop pressed between
     /// Allow and the start — while the approval is still on its way — must
@@ -852,7 +857,7 @@ async fn ask_with_tools(
         }
         let request = match tools::interpret(&call) {
             Ok(r) => r,
-            Err(e) => return Ok(reject(&call.function.name, "", e)),
+            Err(e) => return Ok(reject(&call.function.name, request_path(&call), e)),
         };
 
         // A finding call that could never run — a pattern outside the folder, text
@@ -886,7 +891,7 @@ async fn ask_with_tools(
                     .await
                     .map_err(|e| format!("running the call failed: {e}"))?;
                 // `None`: the read could not be made safely, so it asks like any other.
-                if let Some((name, path, mut ran)) = ran {
+                if let Some((name, path, range, mut ran)) = ran {
                     if !ran.ok && prior > 0 {
                         ran.result.push_str(tools::repeated_note(name));
                     }
@@ -896,6 +901,7 @@ async fn ask_with_tools(
                         "kind": "auto",
                         "name": name,
                         "path": path,
+                        "range": range,
                         "result": ran.result,
                         "ok": ran.ok,
                         "stopped": ran.stopped,
@@ -907,9 +913,9 @@ async fn ask_with_tools(
         }
 
         let (name, path, payload) = match request {
-            tools::Request::Read { path } => {
+            tools::Request::Read { path, range } => {
                 let (open, shown) = tools::read_target(&path, ws.as_ref());
-                ("read_file", shown, Some(Payload::Read(open)))
+                ("read_file", shown, Some(Payload::Read { real: open, range }))
             }
             tools::Request::List { .. } | tools::Request::Search { .. } if ws.is_none() => {
                 return Ok(reject(
@@ -992,6 +998,10 @@ async fn ask_with_tools(
             }),
             _ => None,
         };
+        let range = match &payload {
+            Some(Payload::Read { range, .. }) => *range,
+            _ => None,
+        };
         let changed_build_files =
             if name == "run_check" { tools::build_files_changed(&history) } else { Vec::new() };
         Ok(serde_json::json!({
@@ -1001,6 +1011,7 @@ async fn ask_with_tools(
                 name: name.to_string(),
                 path,
                 diff,
+                range,
                 changed_build_files,
             },
             // The raw call, so the caller can put the assistant turn that asked
@@ -1051,9 +1062,9 @@ impl Ran {
     }
 }
 
-/// Read a file the user approved — the one the ticket holds.
-fn run_read(real: &std::path::Path) -> Ran {
-    Ran::text(tools::run_read_file(real))
+/// Read a file the user approved — the one the ticket holds, the lines it holds.
+fn run_read(real: &std::path::Path, range: Option<tools::Lines>) -> Ran {
+    Ran::text(tools::run_read_file(real, range))
 }
 
 /// Run a listing or a search, for an approved card and for an automatic call
@@ -1078,22 +1089,27 @@ fn run_find(root: &str, find: &Find, stop: u64) -> Ran {
     }
 }
 
-/// An automatic call, run: `(tool name, what the card would show, outcome)`.
+/// An automatic call, run: `(tool name, what the card would show, the lines of a
+/// read, outcome)`.
 /// `None` for a read that could not be made safely — see
 /// [`tools::read_unasked`] — which the caller then asks about like any other.
-fn run_auto(ws: &edit::Workspace, auto: tools::Auto, stop: u64) -> Option<(&'static str, String, Ran)> {
+fn run_auto(
+    ws: &edit::Workspace,
+    auto: tools::Auto,
+    stop: u64,
+) -> Option<(&'static str, String, Option<tools::Lines>, Ran)> {
     match auto {
-        tools::Auto::Read(real) => {
-            let text = tools::read_unasked(&real)?;
-            Some(("read_file", edit::plain(&real), Ran::text(text)))
+        tools::Auto::Read { real, range } => {
+            let text = tools::read_unasked(&real, range)?;
+            Some(("read_file", edit::plain(&real), range, Ran::text(text)))
         }
         tools::Auto::List { pattern } => {
             let shown = search::describe_list(pattern.as_deref());
-            Some(("list_files", shown, run_find(&ws.root_display(), &Find::List { pattern }, stop)))
+            Some(("list_files", shown, None, run_find(&ws.root_display(), &Find::List { pattern }, stop)))
         }
         tools::Auto::Search { text, pattern } => {
             let shown = search::describe_search(&text, pattern.as_deref());
-            Some(("search", shown, run_find(&ws.root_display(), &Find::Search { text, pattern }, stop)))
+            Some(("search", shown, None, run_find(&ws.root_display(), &Find::Search { text, pattern }, stop)))
         }
     }
 }
@@ -1115,7 +1131,7 @@ async fn run_tool(name: String, path: String, token: String) -> Result<Ran, Stri
     // approved, and it runs once.
     let payload = redeem(&token, &name, &path)?;
     tauri::async_runtime::spawn_blocking(move || match (name.as_str(), payload) {
-        ("read_file", Some(Payload::Read(real))) => Ok(run_read(&real)),
+        ("read_file", Some(Payload::Read { real, range })) => Ok(run_read(&real, range)),
         ("edit_file" | "create_file", Some(Payload::Edit(plan))) => {
             let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
             let _edits = edits_lock();
@@ -1768,9 +1784,45 @@ mod tests {
             token: "t".into(),
             name: "read_file".into(),
             path: shown.into(),
-            payload: Some(Payload::Read(open.clone())),
+            payload: Some(Payload::Read { real: open.clone(), range: None }),
         });
-        assert_eq!(redeem_in(&mut slot, "t", "read_file", shown).unwrap(), Some(Payload::Read(open)));
+        assert_eq!(
+            redeem_in(&mut slot, "t", "read_file", shown).unwrap(),
+            Some(Payload::Read { real: open, range: None })
+        );
+    }
+
+    /// **The lines are the ticket's too**: the webview names the call it approved
+    /// and gets back the range the card showed, which it cannot change.
+    #[test]
+    fn a_read_ticket_redeems_with_its_range() {
+        let open = std::path::PathBuf::from(r"C:\work\demo\src\a.rs");
+        let shown = r"C:\work\demo\src\a.rs";
+        let range = Some(tools::Lines { start: 120, end: Some(180) });
+        let payload = Payload::Read { real: open, range };
+        let mut slot = Some(Armed {
+            token: "t".into(),
+            name: "read_file".into(),
+            path: shown.into(),
+            payload: Some(payload.clone()),
+        });
+        assert_eq!(redeem_in(&mut slot, "t", "read_file", shown).unwrap(), Some(payload));
+    }
+
+    /// Run as `run_tool` runs it, the ticket's range is what is read.
+    #[test]
+    fn run_read_gives_the_ticket_range_and_the_whole_file_with_none() {
+        let dir = std::env::temp_dir().join(format!("mimir-range-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "one\r\ntwo\r\nthree\r\n").unwrap();
+        let part = run_read(&file, Some(tools::Lines { start: 2, end: Some(3) }));
+        assert!(part.ok);
+        assert_eq!(part.result, "[lines 2–3 of 3]\ntwo\nthree\n");
+        assert_eq!(run_read(&file, None).result, "one\ntwo\nthree\n");
+        let past = run_read(&file, Some(tools::Lines { start: 9, end: None }));
+        assert!(!past.ok && past.result.contains("is past the end"), "{}", past.result);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1781,7 +1833,7 @@ mod tests {
                 token: "t".into(),
                 name: "read_file".into(),
                 path: shown.into(),
-                payload: Some(Payload::Read(shown.into())),
+                payload: Some(Payload::Read { real: shown.into(), range: None }),
             })
         };
         assert!(redeem_in(&mut armed(), "t", "search", shown).is_err());

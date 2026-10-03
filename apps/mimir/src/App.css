@@ -957,6 +957,15 @@ kbd {
   background: var(--bg-sunk);
   color: var(--text-3);
 }
+/* Which lines of the file a read took: next to the path, never inside it, so a
+   long path still loses its start and the range stays readable. */
+.tool-range {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .tool-auto {
   flex: none;
   font-size: 11.5px;

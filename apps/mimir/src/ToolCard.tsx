@@ -37,6 +37,10 @@ export function Diff({ diff }: { diff: DiffView }) {
 /** Why a request went straight back to the model, in words — the full message
  *  is one click away. */
 function reasonOf(error = ""): string {
+  // The read-range refusals by their own wording: a missed edit in a big file
+  // also mentions start_line, in its advice, and must not land here.
+  if (/(start|end)_line (must be a line number|is the last line to read)/.test(error) || error.includes("is past the end"))
+    return "the lines it asked for make no sense";
   if (error.includes("was not found")) return "the text it gave isn't in the file";
   if (/appears \d+ times/.test(error)) return "that text appears in more than one place";
   if (error.includes("identical")) return "the change would not have changed anything";
@@ -274,6 +278,11 @@ export function ToolCard({
           <code className="tool-path" title={path}>
             <bdi dir="ltr">{path}</bdi>
           </code>
+          {entry.range && (
+            <span className="tool-range">
+              {entry.range.end != null ? `lines ${entry.range.start}–${entry.range.end}` : `from line ${entry.range.start}`}
+            </span>
+          )}
           {entry.auto && <AutoTag />}
           <span className="tool-state">
             {state === "pending"

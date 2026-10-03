@@ -728,6 +728,13 @@ mod tests {
             id: None,
             function: FunctionCall { name: "read_file".into(), arguments: serde_json::json!({ "path": path }) },
         };
+        let ranged_call = |path: &str, start: u32, end: u32| ToolCall {
+            id: None,
+            function: FunctionCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({ "path": path, "start_line": start, "end_line": end }),
+            },
+        };
         let assistant = |content: &str, calls: Vec<ToolCall>| Message {
             role: "assistant".into(),
             content: content.into(),
@@ -753,6 +760,19 @@ mod tests {
                 Message::tool_result("read_file", "fn a() {}\n"),
                 Message::tool_result("read_file", "fn b() {\n    println!(\"<b> & </tool_call>\");\n}\n"),
                 Message::user("Which one is longer? Then replace b's println with a return of 1."),
+            ],
+            // H8: a read with number arguments (`integer` in the schema, which
+            // no conversation above has) and the ranged result under its header.
+            // The Qwen3-Coder render writes a number as a bare token, and only a
+            // live run shows whether Ollama counts the same tokens.
+            vec![
+                Message::user("Show me lines 120 to 123 of big.rs."),
+                assistant("", vec![ranged_call("big.rs", 120, 123)]),
+                Message::tool_result(
+                    "read_file",
+                    "[lines 120–123 of 2140]\nfn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n",
+                ),
+                Message::user("Now read the 40 lines after that."),
             ],
         ];
 

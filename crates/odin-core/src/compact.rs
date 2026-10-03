@@ -24,6 +24,7 @@
 //! message, the last message, the newest tool result, and anything already set
 //! aside — which is what makes it one-way, and keeps the prefix of the next
 //! request identical for Ollama's prompt cache. **The newest read of each file
+//! (and range: lines 1–100 and lines 300–400 of one file are two reads, since H8)
 //! goes last**: a first pass leaves them alone, and only if the turn still does
 //! not fit does a second pass take them too, oldest first. Protecting them
 //! outright would protect every file read once — five different files read in a
@@ -42,6 +43,7 @@
 use std::collections::HashMap;
 
 use crate::chat::{Message, Tool, ToolCall};
+use crate::tools;
 
 /// How much of `num_ctx` the request may use. The rest is left for the reply.
 /// The same 0.75 the app's per-send trimming uses.
@@ -161,6 +163,27 @@ fn call_path(call: &ToolCall) -> Option<String> {
     })
 }
 
+/// What a read read, for deciding which is the newest copy: the file and the
+/// lines. **Two ranges of one file are two reads** — lines 1–100 and lines
+/// 300–400 do not replace each other, and the second would otherwise let the
+/// first be set aside, making the model read what it already had. The range goes
+/// through [`tools::read_range`], so `120` and `"120"` are one key.
+fn read_key(call: &ToolCall) -> Option<String> {
+    let path = call_path(call)?;
+    Some(match tools::read_range(&call.function.arguments).ok().flatten() {
+        Some(r) => format!("{path}#{}-{}", r.start, r.end.map_or(String::new(), |e| e.to_string())),
+        None => path,
+    })
+}
+
+/// How a range is said in a stub: `lines 120–180`, or `from line 120`.
+fn describe_range(range: tools::Lines) -> String {
+    match range.end {
+        Some(e) => format!("lines {}–{e}", range.start),
+        None => format!("from line {}", range.start),
+    }
+}
+
 /// The call that produced the tool result at `i`: the assistant message before.
 fn paired_call(messages: &[Message], i: usize) -> Option<&ToolCall> {
     let before = messages.get(i.checked_sub(1)?)?;
@@ -195,9 +218,9 @@ pub fn compact(messages: &[Message], tools: &[Tool], budget: &Budget) -> Compact
             let call = paired_call(messages, i);
             let name = call.map(|c| c.function.name.as_str()).or(m.tool_name.as_deref());
             if name == Some("read_file")
-                && let Some(path) = call.and_then(call_path)
+                && let Some(key) = call.and_then(read_key)
             {
-                newest_read.insert(path, i);
+                newest_read.insert(key, i);
             }
         }
         let last = messages.len().saturating_sub(1);
@@ -211,7 +234,7 @@ pub fn compact(messages: &[Message], tools: &[Tool], budget: &Budget) -> Compact
         };
         let newest_of_its_file = |i: usize, m: &Message| {
             m.role == "tool"
-                && paired_call(messages, i).and_then(call_path).is_some_and(|p| newest_read.get(&p) == Some(&i))
+                && paired_call(messages, i).and_then(read_key).is_some_and(|k| newest_read.get(&k) == Some(&i))
         };
 
         // Two passes, oldest first in each. The first leaves alone the newest read
@@ -252,6 +275,13 @@ pub fn set_aside(message: &mut Message, call: Option<&ToolCall>) {
         let lines = message.content.lines().count();
         let name = call.map(|c| c.function.name.clone()).or_else(|| message.tool_name.clone());
         let path = call.and_then(|c| c.function.arguments["path"].as_str().map(str::to_string));
+        let range = call
+            .filter(|c| c.function.name == "read_file")
+            .and_then(|c| tools::read_range(&c.function.arguments).ok().flatten());
+        let path = match (path, range) {
+            (Some(p), Some(r)) => Some(format!("{p} {}", describe_range(r))),
+            (p, _) => p,
+        };
         let what = match (&name, &path) {
             (Some(n), Some(p)) => format!("the earlier result of {n} {p}"),
             (Some(n), None) => format!("the earlier result of {n}"),
@@ -462,6 +492,63 @@ mod tests {
             "[Set aside to fit the model's context: the earlier result of read_file src/x.rs (3 lines). \
              Read it again if you still need it.]"
         );
+    }
+
+    #[test]
+    fn a_ranged_stub_names_the_lines() {
+        let mut m = Message::tool_result("read_file", "a\nb\nc\n");
+        let ask = call("read_file", json!({ "path": "src/x.rs", "start_line": "120", "end_line": 180 }));
+        set_aside(&mut m, Some(&ask));
+        assert_eq!(
+            m.content,
+            "[Set aside to fit the model's context: the earlier result of read_file src/x.rs lines 120–180 (3 lines). \
+             Read it again if you still need it.]"
+        );
+        let mut m = Message::tool_result("read_file", "a\n");
+        set_aside(&mut m, Some(&call("read_file", json!({ "path": "src/x.rs", "start_line": 120 }))));
+        assert!(m.content.contains("src/x.rs from line 120 (1 line)"), "{}", m.content);
+    }
+
+    /// A read of some lines of a file, and its result.
+    fn ranged(path: &str, start: serde_json::Value, end: u32, chars: usize) -> [Message; 2] {
+        [
+            asks("read_file", json!({ "path": path, "start_line": start, "end_line": end })),
+            Message::tool_result("read_file", "x".repeat(chars)),
+        ]
+    }
+
+    #[test]
+    fn two_ranges_of_one_file_are_both_the_newest_of_their_own_read() {
+        // First pass: neither range of a.rs is "the older read of a.rs", so the
+        // search between them and the last read is what goes — not the first range.
+        let mut m = vec![Message::system("sys"), Message::user("go")];
+        m.extend(ranged("a.rs", json!(1), 100, 5000));
+        m.extend(ranged("a.rs", json!(300), 400, 5000));
+        m.extend(found(5000));
+        m.extend(read("b.rs", 5000));
+        let c = compact(&m, &[], &tight(7000));
+        assert_eq!(c.set_aside, vec![7]);
+        assert!(c.fits);
+    }
+
+    #[test]
+    fn a_repeat_of_the_same_range_is_the_older_read_and_goes_first() {
+        let mut m = vec![Message::system("sys"), Message::user("go")];
+        m.extend(ranged("a.rs", json!(10), 20, 5000));
+        m.extend(ranged("a.rs", json!(10), 20, 5000));
+        m.extend(read("b.rs", 5000));
+        let c = compact(&m, &[], &tight(5000));
+        assert_eq!(c.set_aside, vec![3]);
+    }
+
+    #[test]
+    fn a_range_sent_as_a_string_is_the_same_range() {
+        let mut m = vec![Message::system("sys"), Message::user("go")];
+        m.extend(ranged("a.rs", json!("10"), 20, 5000));
+        m.extend(ranged("a.rs", json!(10), 20, 5000));
+        m.extend(read("b.rs", 5000));
+        let c = compact(&m, &[], &tight(5000));
+        assert_eq!(c.set_aside, vec![3]);
     }
 
     #[test]

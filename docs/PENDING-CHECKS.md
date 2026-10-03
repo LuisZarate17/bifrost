@@ -7,6 +7,28 @@ machine.
 **[G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
+## Open — H8, partial reads, 2026-10-03
+
+**Already proven mechanically.** Unit tests on `odin_core::tools`: the line arguments (a number, a
+string of one, a float with no fraction, null, blank; negative, fractional and non-numeric refused;
+an end before the start refused); `read_text` for a whole read (unchanged up to 64 KB, an error
+with the size and line count over it), a middle range, CRLF with a BOM, a lone `\r`, no final
+newline, a clamped end, a start past the end, an empty file, a cut that names the next line, one
+line over the limit, a NUL refused whole and ranged, and a file over 1 MiB refused; search giving a
+line number that reading that line then finds; the card and the automatic read agreeing; and the
+approval carrying the range. Also: a header pasted into `old_text` refused by name, a bare number
+repaired in a malformed call, `<parameter=start_line>` read as a number, two ranges of one file
+kept apart in `compact`, and `cargo test -p mimir` redeeming a read ticket with its range.
+`tools/e2e/mimir-bigfile.mjs` drives an edit past line 2000 of a ~120 KB CRLF file. **What needs a
+person** is how the **lines …** tag reads on a card, and that the answer quotes the part that was
+read.
+
+- [ ] **A question about the end of a big file** shows a read card with **lines …** and an answer
+      that quotes it. [H-testing.md §7](H-testing.md)
+- [ ] **A question only a count can answer** shows a failed read whose message gives the line count,
+      and the answer uses it.
+- [ ] **Reopening the conversation** keeps the **lines …** tag on the read card.
+
 ## Open — H7, a context budget inside the turn, 2026-10-02
 
 **Already proven mechanically.** Unit tests on `odin_core::compact`: nothing set aside under

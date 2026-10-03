@@ -32,10 +32,21 @@
 //! that is enforced. `run_check` exists only once that folder also has a check
 //! command chosen for it, and runs exactly that command — see [`crate::check`].
 //!
+//! **A read can take part of a file (H8).** `read_file` has `start_line` and
+//! `end_line`, 1-based and inclusive, because a read over 64 KB was refused whole
+//! and five of Mímir's own source files are over that — `edit_file` can change a
+//! file up to 1 MiB, but it needs text only a read gives. The range is stated in
+//! one header line, `[lines 120–180 of 2140]`, and the lines are **not** numbered:
+//! a small model copies numbers it is shown into the text it then edits. A file
+//! too big to read whole answers with its size and line count and says to read in
+//! parts; search already gives line numbers. See [`read_text`], and [`Lines`] for
+//! what the ticket and the card carry.
+//!
 //! The descriptions and the system prompt live here, not in the app, so the G7
 //! probe measures the exact words the app ships with. A probe that tested
 //! different wording would be measuring a different product.
 
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::chat::{Message, Tool, ToolCall};
@@ -51,6 +62,11 @@ use crate::search;
 /// file answered confidently is worse than being told it was too big.
 pub const MAX_READ_BYTES: u64 = 64 * 1024;
 
+/// The most a read will take from a file, whole or in parts. The same 1 MiB
+/// [`search`] and [`edit`] stop at, so a file the model can find a line in and
+/// edit is a file it can read the part of.
+pub const MAX_RANGED_SOURCE_BYTES: u64 = 1024 * 1024;
+
 /// How many tool calls one answer may make before the loop stops it.
 ///
 /// A bound, not a timeout — without one, a model that keeps asking loops
@@ -65,15 +81,25 @@ pub const MAX_READ_BYTES: u64 = 64 * 1024;
 /// would only let a lost model run longer.
 pub const MAX_ROUNDS: usize = 10;
 
+/// The sentence in `read_file`'s description that offers ranges. A constant so
+/// that the probes can offer the old read — the taskprobe's `--read whole` takes
+/// exactly this out, and says so if it is not there.
+pub const READ_RANGE_SENTENCE: &str =
+    "A file over 64 KB is read in parts with start_line and end_line; search shows line numbers.";
+
 fn read_tool() -> Tool {
     Tool::function(
         "read_file",
-        "Read a text file and return its contents. Paths inside the project folder may be \
-         relative to it. The user may be asked to approve a read.",
+        format!(
+            "Read a text file and return its contents. Paths inside the project folder may be \
+             relative to it. {READ_RANGE_SENTENCE} The user may be asked to approve a read."
+        ),
         json!({
             "type": "object",
             "properties": {
-                "path": { "type": "string", "description": "Path to the file" }
+                "path": { "type": "string", "description": "Path to the file" },
+                "start_line": { "type": "integer", "description": "First line to read, counting from 1" },
+                "end_line": { "type": "integer", "description": "Last line to read, inclusive" }
             },
             "required": ["path"]
         }),
@@ -236,7 +262,7 @@ pub fn system_prompt(ws: &Workspace, check: bool) -> String {
 /// What the model asked for, in a form the UI can show before anything happens.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
-    Read { path: String },
+    Read { path: String, range: Option<Lines> },
     Edit { path: String, old_text: String, new_text: String },
     Create { path: String, content: String },
     /// Which files match a glob — all of them, with none.
@@ -266,7 +292,7 @@ impl Request {
     /// The file a request is about, or `""` for one that is not about a file.
     pub fn path(&self) -> &str {
         match self {
-            Request::Read { path }
+            Request::Read { path, .. }
             | Request::Edit { path, .. }
             | Request::Create { path, .. }
             | Request::Rewrite { path, .. } => path,
@@ -284,6 +310,75 @@ fn arg(call: &ToolCall, key: &str) -> Option<String> {
     call.function.arguments.get(key).and_then(|v| v.as_str()).map(str::to_string)
 }
 
+/// The part of a file a read asked for: 1-based, inclusive, and already
+/// normalised — a start of 0 is 1, and no end means the rest of the file.
+///
+/// What the ticket holds and what the card shows, so the webview cannot ask for
+/// one range and be shown another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lines {
+    pub start: usize,
+    pub end: Option<usize>,
+}
+
+/// A line number the model sent, in whichever of its spellings: `120`, `120.0`,
+/// `"120"`, `" 120 "`. Absent, `null` and blank are none; anything else that is
+/// not a whole number of 0 or more is an error the model is told about.
+///
+/// **Strings are accepted because a small model sends them** — a number typed into
+/// a JSON string is the commonest slip in a tool call, and refusing it costs a
+/// round for no safety. Shared by [`interpret`] and by `compact`, so two spellings
+/// of one range are one range there too.
+pub fn line_arg(args: &serde_json::Value, key: &str) -> Result<Option<usize>, String> {
+    let bad = || format!("{key} must be a line number, counting from 1");
+    let whole = |n: f64| (n.is_finite() && n >= 0.0 && n.fract() == 0.0 && n < 1e12).then_some(n as usize);
+    let value = match args.get(key) {
+        None | Some(serde_json::Value::Null) => return Ok(None),
+        Some(v) => v,
+    };
+    match value {
+        serde_json::Value::Number(n) => {
+            if let Some(u) = n.as_u64() {
+                return Ok(Some(u as usize));
+            }
+            n.as_f64().and_then(whole).map(Some).ok_or_else(bad)
+        }
+        serde_json::Value::String(s) => {
+            let s = s.trim();
+            if s.is_empty() {
+                return Ok(None);
+            }
+            if let Ok(n) = s.parse::<u64>() {
+                return Ok(Some(n as usize));
+            }
+            s.parse::<f64>().ok().and_then(whole).map(Some).ok_or_else(bad)
+        }
+        _ => Err(bad()),
+    }
+}
+
+/// The range a `read_file` call asked for, or why it cannot be honoured.
+///
+/// - Neither argument: no range, a whole read.
+/// - `start_line` 0 is 1; `end_line` alone is `1..=end`.
+/// - An end before the start is refused rather than swapped: it usually means the
+///   model sent a count, and a count read as a line would read the wrong lines.
+pub fn read_range(args: &serde_json::Value) -> Result<Option<Lines>, String> {
+    let start = line_arg(args, "start_line")?;
+    let end = line_arg(args, "end_line")?;
+    if start.is_none() && end.is_none() {
+        return Ok(None);
+    }
+    let start = start.unwrap_or(1).max(1);
+    if end == Some(0) {
+        return Err("end_line must be a line number, counting from 1".to_string());
+    }
+    if end.is_some_and(|e| e < start) {
+        return Err("end_line is the last line to read, not a count".to_string());
+    }
+    Ok(Some(Lines { start, end }))
+}
+
 /// Read a call, or say why it cannot be honoured.
 ///
 /// **An unknown tool is refused here, not at execution.** The model can name
@@ -295,7 +390,7 @@ pub fn interpret(call: &ToolCall) -> Result<Request, String> {
         return Err(format!("{name} was called without a path"));
     }
     match name {
-        "read_file" => Ok(Request::Read { path }),
+        "read_file" => Ok(Request::Read { path, range: read_range(&call.function.arguments)? }),
         "edit_file" => Ok(Request::Edit {
             path,
             old_text: arg(call, "old_text").ok_or("edit_file was called without old_text")?,
@@ -338,8 +433,8 @@ pub enum Approval {
 /// A call that runs unasked, in the form the app runs it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Auto {
-    /// The canonical path to read, inside the project folder.
-    Read(PathBuf),
+    /// The canonical path to read, inside the project folder, and which lines.
+    Read { real: PathBuf, range: Option<Lines> },
     List { pattern: Option<String> },
     Search { text: String, pattern: Option<String> },
 }
@@ -372,13 +467,13 @@ pub fn approval(ws: Option<&Workspace>, req: &Request, ask_every_call: bool) -> 
         return Approval::Ask;
     }
     match req {
-        Request::Read { path } => match ws.locate(path) {
+        Request::Read { path, range } => match ws.locate(path) {
             Located::Inside(real) if real.is_dir() => Approval::Reject(format!(
                 "{} is a folder; use list_files to see what is in it",
                 edit::clean(path)
             )),
             Located::Inside(real) if search::visible(ws, &real) && !search::secret_name(&real) => {
-                Approval::Auto(Auto::Read(real))
+                Approval::Auto(Auto::Read { real, range: *range })
             }
             Located::MissingInside => {
                 Approval::Reject(format!("{} does not exist in the project folder", edit::clean(path)))
@@ -439,6 +534,100 @@ pub fn read_target(path: &str, ws: Option<&Workspace>) -> (PathBuf, String) {
     (open, shown)
 }
 
+/// What a read answers with, from a file's bytes: the whole text, or the lines
+/// asked for under a one-line header. Pure, so every path that reads — the card,
+/// the automatic read and the probe — gives the same answer for the same bytes.
+/// `shown` is the path as a person reads it, for the errors.
+///
+/// 1. **A NUL in the first 8 KB is a binary (or UTF-16) file**, refused as text —
+///    [`search`]'s own rule, which until now a read did not apply: a UTF-16 file
+///    came back as `l\0i\0n\0e\0` and the model tried to edit that. It runs before
+///    anything about size.
+/// 2. The text is [`edit::for_model`]'s — no BOM, `\n` endings — and a line is what
+///    ends in `\n`, which is how `search` numbers `path:line:` and how an edit
+///    finds text, so a number from a search is the number here.
+/// 3. **No range** and 64 KB or less on disk: the text, exactly as before, with no
+///    header. Over that, an error that gives the size and the line count and says
+///    to read in parts. It stays an error, so a model that keeps asking for the
+///    whole file is stopped by the repeat rule rather than fed a prefix it would
+///    take for the file. The numbers carry no separators a model could copy.
+/// 4. **A range** reads whole lines, up to 64 KB of them, under
+///    `[lines A–B of L]` — or `…; cut at 65536 bytes — read on from line B+1]`
+///    when the limit stopped it before the end asked for. An end past the last line
+///    is clamped, and the header says so by saying "of L". **The header is one line,
+///    and the lines are not numbered**: a small model copies numbers it is shown
+///    into the `old_text` of an edit, and the header is refused there too — see
+///    [`is_read_header`]. The path is not in it; a canonical Windows path copied
+///    into JSON loses its backslashes.
+pub fn read_text(shown: &str, bytes: &[u8], range: Option<Lines>) -> String {
+    if bytes[..bytes.len().min(8192)].contains(&0) {
+        return format!("error: {shown} looks like a binary (or UTF-16) file, so it is not read as text");
+    }
+    let text = edit::for_model(bytes);
+    let Some(range) = range else {
+        if bytes.len() as u64 <= MAX_READ_BYTES {
+            return text;
+        }
+        return format!(
+            "error: {shown} is {} bytes and {} lines, over the {MAX_READ_BYTES}-byte limit for one \
+             read. Read it in parts with start_line and end_line; search gives the line numbers.",
+            bytes.len(),
+            text.split_inclusive('\n').count()
+        );
+    };
+
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let total = lines.len();
+    if total == 0 {
+        return format!("error: {shown} is empty, so it has no lines to read");
+    }
+    if range.start > total {
+        return format!(
+            "error: {shown} has {total} line{}; start_line {} is past the end",
+            if total == 1 { "" } else { "s" },
+            range.start
+        );
+    }
+    let last = range.end.map_or(total, |e| e.min(total));
+    let mut body = String::new();
+    let mut taken = 0;
+    for line in &lines[range.start - 1..last] {
+        if body.len() + line.len() > MAX_READ_BYTES as usize {
+            break;
+        }
+        body.push_str(line);
+        taken += 1;
+    }
+    if taken == 0 {
+        return format!(
+            "error: line {} of {shown} is {} bytes, over the {MAX_READ_BYTES}-byte limit for one read",
+            range.start,
+            lines[range.start - 1].len()
+        );
+    }
+    let to = range.start + taken - 1;
+    let cut = if to < last {
+        format!("; cut at {MAX_READ_BYTES} bytes — read on from line {}", to + 1)
+    } else {
+        String::new()
+    };
+    format!("[lines {}–{to} of {total}{cut}]\n{body}", range.start)
+}
+
+/// Whether a line is the header a ranged read puts first — which is never part
+/// of the file. Checked by `edit` on an `old_text` that matched nothing.
+pub fn is_read_header(line: &str) -> bool {
+    let line = line.trim();
+    line.starts_with("[lines ") && line.ends_with(']') && line.contains(" of ")
+}
+
+/// A file too big to read even in parts. Said before anything is read.
+fn over_source(shown: &str, len: u64) -> String {
+    format!(
+        "error: {shown} is {len} bytes, over the {MAX_RANGED_SOURCE_BYTES}-byte limit for reading any part of a file"
+    )
+}
+
 /// Run an **already approved** read.
 ///
 /// Errors come back as text for the model rather than as a failure, because a
@@ -446,8 +635,11 @@ pub fn read_target(path: &str, ws: Option<&Workspace>) -> (PathBuf, String) {
 /// be told "that file does not exist" and continue, not have the turn collapse.
 ///
 /// The contents are normalised the way edits match them — `\n` endings, no
-/// BOM — so text the model copies out of a read is text an edit can find.
-pub fn run_read_file(p: &Path) -> String {
+/// BOM — so text the model copies out of a read is text an edit can find. What is
+/// answered, and when, is [`read_text`]'s.
+pub fn run_read_file(p: &Path, range: Option<Lines>) -> String {
+    use std::io::Read;
+
     let path = edit::plain(p);
 
     let meta = match std::fs::metadata(p) {
@@ -457,16 +649,14 @@ pub fn run_read_file(p: &Path) -> String {
     if meta.is_dir() {
         return format!("error: {path} is a directory, not a file");
     }
-    if meta.len() > MAX_READ_BYTES {
-        return format!(
-            "error: {path} is {} bytes, over the {} byte limit for a single read",
-            meta.len(),
-            MAX_READ_BYTES
-        );
+    if meta.len() > MAX_RANGED_SOURCE_BYTES {
+        return over_source(&path, meta.len());
     }
 
-    match std::fs::read(p) {
-        Ok(bytes) => edit::for_model(&bytes),
+    let mut bytes = Vec::new();
+    match std::fs::File::open(p).and_then(|f| f.take(MAX_RANGED_SOURCE_BYTES + 1).read_to_end(&mut bytes)) {
+        Ok(_) if bytes.len() as u64 > MAX_RANGED_SOURCE_BYTES => over_source(&path, bytes.len() as u64),
+        Ok(_) => read_text(&path, &bytes, range),
         Err(e) => format!("error: cannot read {path}: {e}"),
     }
 }
@@ -494,7 +684,7 @@ pub fn run_read_file(p: &Path) -> String {
 /// that cannot work. Where this is not Windows nothing is checkable, so nothing
 /// is automatic.
 #[cfg(windows)]
-pub fn read_unasked(real: &Path) -> Option<String> {
+pub fn read_unasked(real: &Path, range: Option<Lines>) -> Option<String> {
     use std::io::Read;
 
     let mut file = edit::open_checked(real)?;
@@ -503,24 +693,22 @@ pub fn read_unasked(real: &Path) -> Option<String> {
         Ok(m) => m.len(),
         Err(e) => return Some(format!("error: cannot read {shown}: {e}")),
     };
-    if len > MAX_READ_BYTES {
-        return Some(format!(
-            "error: {shown} is {len} bytes, over the {MAX_READ_BYTES} byte limit for a single read"
-        ));
+    if len > MAX_RANGED_SOURCE_BYTES {
+        return Some(over_source(&shown, len));
     }
     let mut bytes = Vec::new();
     // One past the limit, so a file that grew since `metadata` is still refused.
-    if let Err(e) = (&mut file).take(MAX_READ_BYTES + 1).read_to_end(&mut bytes) {
+    if let Err(e) = (&mut file).take(MAX_RANGED_SOURCE_BYTES + 1).read_to_end(&mut bytes) {
         return Some(format!("error: cannot read {shown}: {e}"));
     }
-    if bytes.len() as u64 > MAX_READ_BYTES {
-        return Some(format!("error: {shown} is over the {MAX_READ_BYTES} byte limit for a single read"));
+    if bytes.len() as u64 > MAX_RANGED_SOURCE_BYTES {
+        return Some(over_source(&shown, bytes.len() as u64));
     }
-    Some(edit::for_model(&bytes))
+    Some(read_text(&shown, &bytes, range))
 }
 
 #[cfg(not(windows))]
-pub fn read_unasked(_real: &Path) -> Option<String> {
+pub fn read_unasked(_real: &Path, _range: Option<Lines>) -> Option<String> {
     None
 }
 
@@ -533,9 +721,18 @@ pub const REPEATED_NOTE: &str = " You already sent exactly this call and it fail
 const REPEATED_CHECK_NOTE: &str = " You already sent this call and it failed the same way. Do not \
      call it again — tell the user what happened.";
 
+/// The same, for a read. There is no text to copy from a file when the call
+/// was the read: what can change is which lines, or whether to search first.
+const REPEATED_READ_NOTE: &str = " You already sent exactly this call and it failed the same way. \
+     Change it before trying again — a different range, or search first.";
+
 /// Which repeat note fits this tool.
 pub fn repeated_note(name: &str) -> &'static str {
-    if name == "run_check" { REPEATED_CHECK_NOTE } else { REPEATED_NOTE }
+    match name {
+        "run_check" => REPEATED_CHECK_NOTE,
+        "read_file" => REPEATED_READ_NOTE,
+        _ => REPEATED_NOTE,
+    }
 }
 
 /// The third identical failure stops the loop.
@@ -756,16 +953,23 @@ mod tests {
     }
 
     #[test]
+    fn a_repeated_read_is_told_to_change_the_range_not_to_copy_text() {
+        let note = repeated_note("read_file");
+        assert!(note.contains("a different range, or search first"), "{note}");
+        assert!(!note.contains("copy the text"), "{note}");
+    }
+
+    #[test]
     fn errors_come_back_as_text_for_the_model() {
         // Not a Result: a tool that cannot answer is a normal conversational
         // event, and the model should be told rather than the turn collapsing.
-        let out = run_read_file(Path::new("C:\\definitely\\not\\here.txt"));
+        let out = run_read_file(Path::new("C:\\definitely\\not\\here.txt"), None);
         assert!(out.starts_with("error:"), "{out}");
     }
 
     #[test]
     fn a_directory_is_refused_clearly() {
-        let out = run_read_file(Path::new("."));
+        let out = run_read_file(Path::new("."), None);
         assert!(out.contains("directory"), "{out}");
     }
 
@@ -774,7 +978,7 @@ mod tests {
         let mut p = std::env::temp_dir();
         p.push(format!("odin-tools-test-{}.txt", std::process::id()));
         std::fs::write(&p, "hello\r\nfrom a tool\r\n").unwrap();
-        assert_eq!(run_read_file(&p), "hello\nfrom a tool\n");
+        assert_eq!(run_read_file(&p, None), "hello\nfrom a tool\n");
         let _ = std::fs::remove_file(p);
     }
 
@@ -847,11 +1051,14 @@ mod tests {
     }
 
     fn read(path: &str) -> Request {
-        Request::Read { path: path.to_string() }
+        Request::Read { path: path.to_string(), range: None }
     }
 
     fn auto_read(s: &Sandbox, rel: &str) -> Approval {
-        Approval::Auto(Auto::Read(std::fs::canonicalize(s.dir.join("project").join(rel)).unwrap()))
+        Approval::Auto(Auto::Read {
+            real: std::fs::canonicalize(s.dir.join("project").join(rel)).unwrap(),
+            range: None,
+        })
     }
 
     #[test]
@@ -938,11 +1145,11 @@ mod tests {
         let s = Sandbox::new("unasked");
         s.write("a.txt", "one\r\ntwo\r\n");
         let real = std::fs::canonicalize(s.dir.join("project/a.txt")).unwrap();
-        assert_eq!(read_unasked(&real).as_deref(), Some("one\ntwo\n"));
+        assert_eq!(read_unasked(&real, None).as_deref(), Some("one\ntwo\n"));
         // Too big is an answer for the model, not a question for the user.
         s.write("big.txt", &"x".repeat(MAX_READ_BYTES as usize + 1));
         let big = std::fs::canonicalize(s.dir.join("project/big.txt")).unwrap();
-        assert!(read_unasked(&big).unwrap().starts_with("error:"));
+        assert!(read_unasked(&big, None).unwrap().starts_with("error:"));
     }
 
     /// **A hard link is a second name for the same file**, so a file inside the
@@ -960,7 +1167,7 @@ mod tests {
         }
         for name in ["a.txt", "b.txt"] {
             let real = std::fs::canonicalize(s.dir.join("project").join(name)).unwrap();
-            assert_eq!(read_unasked(&real), None, "{name}");
+            assert_eq!(read_unasked(&real, None), None, "{name}");
         }
     }
 
@@ -970,8 +1177,8 @@ mod tests {
         let s = Sandbox::new("moved");
         s.write("src/a.txt", "x");
         let via_dots = s.dir.join("project/src/../src/a.txt");
-        assert_eq!(read_unasked(&via_dots), None);
-        assert_eq!(read_unasked(&s.dir.join("project/missing.txt")), None);
+        assert_eq!(read_unasked(&via_dots, None), None);
+        assert_eq!(read_unasked(&s.dir.join("project/missing.txt"), None), None);
     }
 
     #[test]
@@ -1139,5 +1346,262 @@ mod tests {
             assert_eq!(open, PathBuf::from(r"\\odin-test-no-such-host\share\x.txt"));
             assert_eq!(shown, r"\\odin-test-no-such-host\share\x.txt");
         }
+    }
+
+    // ── reading part of a file ──
+
+    fn lines(start: usize, end: Option<usize>) -> Option<Lines> {
+        Some(Lines { start, end })
+    }
+
+    /// `n` lines, `line 1` to `line n`.
+    fn numbered(n: usize) -> String {
+        (1..=n).map(|i| format!("line {i}\n")).collect()
+    }
+
+    #[test]
+    fn a_line_number_is_a_number_or_a_string_of_one() {
+        let get = |v: serde_json::Value| line_arg(&json!({ "start_line": v }), "start_line");
+        for (v, want) in [
+            (json!(120), Some(120)),
+            (json!("120"), Some(120)),
+            (json!(" 180 "), Some(180)),
+            (json!(120.0), Some(120)),
+            (json!(null), None),
+            (json!(""), None),
+            (json!("   "), None),
+        ] {
+            assert_eq!(get(v.clone()), Ok(want), "{v}");
+        }
+        assert_eq!(line_arg(&json!({}), "start_line"), Ok(None));
+        for bad in [json!(-3), json!("abc"), json!(12.5), json!("12.5"), json!("-1"), json!(true)] {
+            assert_eq!(
+                get(bad.clone()),
+                Err("start_line must be a line number, counting from 1".to_string()),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_read_carries_the_range_it_asked_for() {
+        let r = |args: serde_json::Value| interpret(&call("read_file", args));
+        let read = |range| Ok(Request::Read { path: "a.rs".into(), range });
+        assert_eq!(r(json!({ "path": "a.rs" })), read(None));
+        assert_eq!(r(json!({ "path": "a.rs", "start_line": null, "end_line": "" })), read(None));
+        assert_eq!(r(json!({ "path": "a.rs", "start_line": 120, "end_line": 180 })), read(lines(120, Some(180))));
+        assert_eq!(
+            r(json!({ "path": "a.rs", "start_line": "120", "end_line": " 180 " })),
+            read(lines(120, Some(180)))
+        );
+        assert_eq!(r(json!({ "path": "a.rs", "start_line": 120.0 })), read(lines(120, None)));
+        // An end alone is the top of the file down to it; a start of 0 is 1.
+        assert_eq!(r(json!({ "path": "a.rs", "end_line": 40 })), read(lines(1, Some(40))));
+        assert_eq!(r(json!({ "path": "a.rs", "start_line": 0, "end_line": 5 })), read(lines(1, Some(5))));
+        assert_eq!(r(json!({ "path": "a.rs", "start_line": 0 })), read(lines(1, None)));
+    }
+
+    #[test]
+    fn a_range_that_cannot_be_read_is_refused_with_the_reason() {
+        let r = |args: serde_json::Value| interpret(&call("read_file", args)).unwrap_err();
+        assert_eq!(
+            r(json!({ "path": "a", "start_line": 90, "end_line": 20 })),
+            "end_line is the last line to read, not a count"
+        );
+        assert_eq!(
+            r(json!({ "path": "a", "start_line": -1 })),
+            "start_line must be a line number, counting from 1"
+        );
+        assert_eq!(
+            r(json!({ "path": "a", "end_line": "abc" })),
+            "end_line must be a line number, counting from 1"
+        );
+        assert_eq!(
+            r(json!({ "path": "a", "start_line": 12.5 })),
+            "start_line must be a line number, counting from 1"
+        );
+        assert_eq!(r(json!({ "path": "a", "end_line": 0 })), "end_line must be a line number, counting from 1");
+    }
+
+    #[test]
+    fn the_read_schema_offers_a_range_and_the_description_says_when() {
+        let tool = available(false, None).pop().unwrap();
+        let schema = serde_json::to_value(&tool).unwrap();
+        let props = &schema["function"]["parameters"]["properties"];
+        assert_eq!(props["start_line"]["type"], "integer");
+        assert_eq!(props["end_line"]["type"], "integer");
+        assert_eq!(schema["function"]["parameters"]["required"], json!(["path"]));
+        assert!(tool.function.description.contains(READ_RANGE_SENTENCE));
+        assert!(tool.function.description.ends_with("The user may be asked to approve a read."));
+    }
+
+    #[test]
+    fn a_whole_read_of_a_small_file_is_the_text_and_nothing_else() {
+        assert_eq!(read_text("f", b"hello\r\nfrom a tool\r\n", None), "hello\nfrom a tool\n");
+        assert_eq!(read_text("f", b"\xEF\xBB\xBFone\r\ntwo", None), "one\ntwo");
+        assert_eq!(read_text("f", b"", None), "");
+    }
+
+    #[test]
+    fn a_whole_read_over_the_limit_gives_the_size_and_the_lines_and_says_to_read_in_parts() {
+        let text = "x\n".repeat(40000);
+        assert_eq!(
+            read_text("big.rs", text.as_bytes(), None),
+            "error: big.rs is 80000 bytes and 40000 lines, over the 65536-byte limit for one read. \
+             Read it in parts with start_line and end_line; search gives the line numbers."
+        );
+    }
+
+    #[test]
+    fn a_range_comes_back_under_one_header_line_with_the_lines_unnumbered() {
+        let text = numbered(100);
+        assert_eq!(
+            read_text("f", text.as_bytes(), lines(20, Some(22))),
+            "[lines 20–22 of 100]\nline 20\nline 21\nline 22\n"
+        );
+        // No end: to the last line.
+        assert_eq!(read_text("f", text.as_bytes(), lines(99, None)), "[lines 99–100 of 100]\nline 99\nline 100\n");
+        // A big file is read in parts whatever its size.
+        let big = numbered(20000);
+        assert!(big.len() > MAX_READ_BYTES as usize);
+        let part = read_text("f", big.as_bytes(), lines(15000, Some(15001)));
+        assert_eq!(part, "[lines 15000–15001 of 20000]\nline 15000\nline 15001\n");
+    }
+
+    #[test]
+    fn lines_are_counted_the_way_search_and_edit_count_them() {
+        // CRLF and a BOM go; a lone \r is not a line break to either.
+        assert_eq!(
+            read_text("f", b"\xEF\xBB\xBFone\r\ntwo\r\nthree\r\n", lines(2, Some(2))),
+            "[lines 2–2 of 3]\ntwo\n"
+        );
+        assert_eq!(read_text("f", b"a\rb\nc\n", lines(1, Some(1))), "[lines 1–1 of 2]\na\rb\n");
+        // No final newline: the last line is still a line, and is not given one.
+        assert_eq!(read_text("f", b"a\nb", lines(2, None)), "[lines 2–2 of 2]\nb");
+    }
+
+    #[test]
+    fn an_end_past_the_last_line_is_clamped_and_a_start_past_it_is_an_error() {
+        let text = numbered(5);
+        assert_eq!(
+            read_text("f", text.as_bytes(), lines(4, Some(99))),
+            "[lines 4–5 of 5]\nline 4\nline 5\n"
+        );
+        assert_eq!(
+            read_text("f", text.as_bytes(), lines(6, None)),
+            "error: f has 5 lines; start_line 6 is past the end"
+        );
+        assert_eq!(read_text("f", b"x\n", lines(2, None)), "error: f has 1 line; start_line 2 is past the end");
+        assert_eq!(read_text("f", b"", lines(1, None)), "error: f is empty, so it has no lines to read");
+    }
+
+    #[test]
+    fn a_range_over_the_limit_is_cut_at_a_line_and_says_where_to_read_on() {
+        // 100 lines of 1000 bytes: 65 fit under 65536, a 66th would not.
+        let text = format!("{}\n", "x".repeat(999)).repeat(100);
+        let out = read_text("f", text.as_bytes(), lines(1, Some(100)));
+        let (header, body) = out.split_once('\n').unwrap();
+        assert_eq!(header, "[lines 1–65 of 100; cut at 65536 bytes — read on from line 66]");
+        assert_eq!(body.len(), 65 * 1000);
+        // Starting later, the cut is counted from there.
+        let out = read_text("f", text.as_bytes(), lines(50, None));
+        assert!(out.starts_with("[lines 50–100 of 100]\n"), "50 lines fit: {}", &out[..40]);
+    }
+
+    #[test]
+    fn a_single_line_over_the_limit_is_an_error_not_half_a_line() {
+        let text = format!("{}\nshort\n", "x".repeat(70000));
+        assert_eq!(
+            read_text("f", text.as_bytes(), lines(1, Some(2))),
+            "error: line 1 of f is 70001 bytes, over the 65536-byte limit for one read"
+        );
+        assert!(read_text("f", text.as_bytes(), lines(2, Some(2))).ends_with("short\n"));
+    }
+
+    #[test]
+    fn a_binary_or_utf16_file_is_not_read_as_text_whole_or_in_part() {
+        let utf16: Vec<u8> = "fn main() {}\n".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        for bytes in [&b"ab\0cd"[..], &utf16[..]] {
+            for range in [None, lines(1, Some(1))] {
+                assert_eq!(
+                    read_text("f", bytes, range),
+                    "error: f looks like a binary (or UTF-16) file, so it is not read as text"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_file_over_a_mebibyte_is_refused_before_it_is_read() {
+        let s = Sandbox::new("huge");
+        s.write("huge.txt", &"x\n".repeat(MAX_RANGED_SOURCE_BYTES as usize / 2 + 1));
+        let real = std::fs::canonicalize(s.dir.join("project/huge.txt")).unwrap();
+        for range in [None, lines(1, Some(2))] {
+            let out = run_read_file(&real, range);
+            assert!(
+                out.starts_with("error: ") && out.contains("over the 1048576-byte limit for reading any part"),
+                "{out}"
+            );
+        }
+        #[cfg(windows)]
+        assert!(read_unasked(&real, lines(1, Some(2))).unwrap().contains("limit for reading any part"));
+    }
+
+    #[test]
+    fn search_gives_a_line_number_and_reading_that_line_finds_the_text() {
+        let s = Sandbox::new("searchread");
+        let ws = s.ws();
+        let mut text = String::from("\u{feff}");
+        for i in 1..=3000 {
+            text.push_str(&if i == 2500 {
+                "    let marker_x = 1;\r\n".to_string()
+            } else {
+                format!("    let filler_{i} = {i};\r\n")
+            });
+        }
+        s.write("src/big.rs", &text);
+        let found = search::search(&ws, "marker_x", None, || false).unwrap();
+        assert!(found.contains("src/big.rs:2500:"), "{found}");
+        let real = std::fs::canonicalize(s.dir.join("project/src/big.rs")).unwrap();
+        let out = run_read_file(&real, lines(2500, Some(2500)));
+        assert_eq!(out, "[lines 2500–2500 of 3000]\n    let marker_x = 1;\n");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_card_and_the_automatic_read_answer_a_range_identically() {
+        let s = Sandbox::new("samerange");
+        s.write("a.txt", &numbered(300).replace('\n', "\r\n"));
+        let real = std::fs::canonicalize(s.dir.join("project/a.txt")).unwrap();
+        for range in [None, lines(10, Some(12)), lines(299, None), lines(500, None)] {
+            assert_eq!(read_unasked(&real, range), Some(run_read_file(&real, range)), "{range:?}");
+        }
+    }
+
+    #[test]
+    fn an_approval_carries_the_range_and_a_ranged_read_is_still_automatic_inside_the_folder() {
+        let s = Sandbox::new("approvalrange");
+        let ws = s.ws();
+        s.write("src/main.rs", "fn main() {}\n");
+        let range = lines(2, Some(9));
+        let req = Request::Read { path: "src/main.rs".into(), range };
+        assert_eq!(
+            approval(Some(&ws), &req, false),
+            Approval::Auto(Auto::Read {
+                real: std::fs::canonicalize(s.dir.join("project/src/main.rs")).unwrap(),
+                range
+            })
+        );
+        assert_eq!(approval(Some(&ws), &req, true), Approval::Ask);
+    }
+
+    #[test]
+    fn a_read_header_is_recognised_and_ordinary_text_is_not() {
+        assert!(is_read_header("[lines 120–180 of 2140]"));
+        assert!(is_read_header("[lines 1–65 of 100; cut at 65536 bytes — read on from line 66]"));
+        assert!(is_read_header("  [lines 3–4 of 9]\r"));
+        assert!(!is_read_header("let lines = [1, 2];"));
+        assert!(!is_read_header("[lines]"));
+        assert!(!is_read_header("[lines 3-4]"));
     }
 }

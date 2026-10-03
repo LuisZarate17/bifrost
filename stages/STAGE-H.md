@@ -358,6 +358,10 @@ user's request, calibrated against the last `promptEvalCount`. It says what it d
 
 ## H8 — Partial reads
 
+> **Built 2026-10-03** — [H8-results.md](../docs/results/H8-results.md). `read_file` takes `start_line`/`end_line`, the range in
+> a header; a file over 64 KB answers with its line count. A 120 KB file edited at line 2102, byte for
+> byte (e2e 18/18); taskprobe 29/48 with ranges, 28/48 without, at almost one more round a task.
+
 **Do:** `read_file(path, start_line?, end_line?)`, the range in a header line and never as
 line-number prefixes (a small model copies them into `old_text`). Over 64 KB, return the line
 count. `repair()` only recovers strings, so accept numbers sent as strings.

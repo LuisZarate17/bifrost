@@ -234,6 +234,62 @@ fn find_key(s: &str, key: &str, from: usize) -> Option<(usize, usize)> {
     None
 }
 
+/// The same, for a key whose value is a bare number or `null` — only ever asked
+/// of an argument the schema types `integer` or `number`. Where the value starts
+/// and the value, which must be a whole token ending at `,` or `}`: `120`, `-3`,
+/// `1.5`, `null`. Anything else — `12x`, `true`, a quote — is not found, so a
+/// string argument written with no quotes is still the failure it was.
+fn find_bare_key(s: &str, key: &str, from: usize) -> Option<(usize, Value)> {
+    let b = s.as_bytes();
+    let needle = format!("\"{key}\"");
+    let mut search = from;
+    while let Some(off) = s[search..].find(&needle) {
+        let at = search + off;
+        let mut before = at;
+        while before > 0 && b[before - 1].is_ascii_whitespace() {
+            before -= 1;
+        }
+        let key_position = before > 0 && matches!(b[before - 1], b'{' | b',');
+        let mut i = skip_ws(b, at + needle.len());
+        if key_position && i < b.len() && b[i] == b':' {
+            i = skip_ws(b, i + 1);
+            let start = i;
+            while i < b.len() && !b[i].is_ascii_whitespace() && !matches!(b[i], b',' | b'}') {
+                i += 1;
+            }
+            let token = &s[start..i];
+            let digits = token.strip_prefix('-').unwrap_or(token);
+            let (whole, fraction) = digits.split_once('.').map_or((digits, None), |(w, f)| (w, Some(f)));
+            let all_digits = |t: &str| !t.is_empty() && t.bytes().all(|c| c.is_ascii_digit());
+            let number = all_digits(whole) && fraction.is_none_or(all_digits);
+            let end = skip_ws(b, i);
+            if (number || token == "null")
+                && end < b.len()
+                && matches!(b[end], b',' | b'}')
+                && let Ok(v) = serde_json::from_str::<Value>(token)
+            {
+                return Some((start, v));
+            }
+        }
+        search = at + needle.len();
+    }
+    None
+}
+
+/// The arguments the schema types as numbers — the only ones [`repair`] will
+/// read without quotes.
+fn numeric_names<'a>(tools: &'a [Tool], name: &str) -> Vec<&'a str> {
+    let Some(tool) = tools.iter().find(|t| t.function.name == name) else { return Vec::new() };
+    let Some(props) = tool.function.parameters.get("properties").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    props
+        .iter()
+        .filter(|(_, p)| matches!(p.get("type").and_then(Value::as_str), Some("integer" | "number")))
+        .map(|(k, _)| k.as_str())
+        .collect()
+}
+
 /// Undo JSON escapes, and leave everything else — a bare `"` included — as it is.
 fn unescape_tolerant(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
@@ -286,22 +342,43 @@ fn repair(block: &str, tools: &[Tool]) -> Result<ToolCall, String> {
     let args_at = block.find("\"arguments\"").ok_or_else(|| fail("no arguments"))?;
     let brace = block[args_at..].find('{').ok_or_else(|| fail("arguments are not an object"))? + args_at;
 
-    // Every argument we can find, in the order it appears.
-    let mut found: Vec<(&str, usize, usize)> = keys
+    // Every argument we can find, in the order it appears. A string argument is
+    // anchored on its quote; one the schema types as a number may instead be a
+    // bare number or `null` — measured as the way a model writes a line number
+    // after a path whose quote it has already broken — and is read as that.
+    // String repair is not loosened for it: a bare value on a string key is still
+    // not found.
+    let numeric = numeric_names(tools, &name);
+    let mut found: Vec<(&str, usize, Option<usize>, Option<Value>)> = keys
         .iter()
-        .filter_map(|k| find_key(block, k, brace).map(|(ks, vs)| (*k, ks, vs)))
+        .filter_map(|k| {
+            if let Some((ks, vs)) = find_key(block, k, brace) {
+                return Some((*k, ks, Some(vs), None));
+            }
+            if !numeric.contains(k) {
+                return None;
+            }
+            let (vs, v) = find_bare_key(block, k, brace)?;
+            let ks = block[..vs].rfind(&format!("\"{k}\""))?;
+            Some((*k, ks, None, Some(v)))
+        })
         .collect();
-    found.sort_by_key(|(_, ks, _)| *ks);
+    found.sort_by_key(|(_, ks, _, _)| *ks);
     if found.is_empty() {
         return Err(fail("no recognisable arguments"));
     }
 
     let b = block.as_bytes();
     let mut args = Map::new();
-    for (i, (key, _, value_start)) in found.iter().enumerate() {
+    for (i, (key, _, value_start, bare)) in found.iter().enumerate() {
+        if let Some(v) = bare {
+            args.insert(key.to_string(), v.clone());
+            continue;
+        }
+        let value_start = &value_start.expect("a string argument has a start");
         // A value ends at the quote before the next key's `,` — or, for the last
         // one, at the quote before the closing `}}`.
-        let end_quote = if let Some((_, next_key, _)) = found.get(i + 1) {
+        let end_quote = if let Some((_, next_key, _, _)) = found.get(i + 1) {
             let mut j = *next_key;
             while j > 0 && b[j - 1].is_ascii_whitespace() {
                 j -= 1;
@@ -413,6 +490,37 @@ mod tests {
         let c = parse_call(raw, &tools()).unwrap();
         assert_eq!(arg(&c, "path"), "cfg.json");
         assert_eq!(arg(&c, "old_text"), r#"{"path": "x"}"#);
+    }
+
+    #[test]
+    fn a_broken_path_followed_by_bare_line_numbers_is_repaired_with_numbers() {
+        let raw = r#"{"name": "read_file", "arguments": {"path": "src/a"b.rs", "start_line": 120, "end_line": 180}}"#;
+        assert!(serde_json::from_str::<Value>(raw).is_err());
+        let c = parse_call(raw, &tools()).unwrap();
+        assert_eq!(arg(&c, "path"), "src/a\"b.rs");
+        assert_eq!(c.function.arguments["start_line"], json!(120));
+        assert_eq!(c.function.arguments["end_line"], json!(180));
+    }
+
+    #[test]
+    fn a_bare_number_as_the_last_argument_and_a_bare_null_are_read() {
+        let raw = r#"{"name": "read_file", "arguments": {"path": "a"b", "end_line": 180}}"#;
+        let c = parse_call(raw, &tools()).unwrap();
+        assert_eq!(arg(&c, "path"), "a\"b");
+        assert_eq!(c.function.arguments["end_line"], json!(180));
+        let raw = r#"{"name": "read_file", "arguments": {"path": "a"b", "start_line": null, "end_line": 7}}"#;
+        let c = parse_call(raw, &tools()).unwrap();
+        assert_eq!(c.function.arguments["start_line"], Value::Null);
+        assert_eq!(c.function.arguments["end_line"], json!(7));
+    }
+
+    #[test]
+    fn a_bare_value_on_a_string_key_is_still_not_repaired() {
+        let raw = r#"{"name": "edit_file", "arguments": {"path": "a"b.rs", "old_text": 5, "new_text": "x"}}"#;
+        assert!(parse_call(raw, &tools()).is_err());
+        // And a number-typed key does not take a word.
+        let raw = r#"{"name": "read_file", "arguments": {"path": "a"b", "start_line": twelve}}"#;
+        assert!(parse_call(raw, &tools()).is_err());
     }
 
     #[test]

@@ -196,7 +196,27 @@ answer still addresses what you asked.
 
 ---
 
-*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. H8 onward add
+## 7 — Reading part of a big file (H8)
+
+Unit tests in `odin_core::tools` cover the range, the header and the errors, `cargo test -p mimir`
+the ticket, and `node tools/e2e/mimir-bigfile.mjs` an edit past line 2000 of a ~120 KB file. What
+they cannot judge is how the real card reads, and whether the answer uses what the read gave. These
+need a file past 64 KB, which `practice` does not have, so choose **odin itself**
+(`C:\Users\you\source\repos\odin`) as the folder — they only read, so decline any edit it offers.
+
+- [ ] **A question about the end of a big file.** Ask `What does the last function in
+      crates/odin-core/src/edit.rs before its tests do?` (or anything near the end of that file).
+      **Expect:** a read card with **lines …** next to the path (two numbers with a dash), marked
+      *no approval needed*, and an answer that quotes what that read returned.
+- [ ] **A question only a count can answer.** Ask `How many lines does apps/mimir/src/App.tsx
+      have?` **Expect:** a failed read card (Failed), whose message gives the number of lines and
+      says to read in parts, and an answer that uses that number.
+- [ ] **Reopen the conversation.** **Expect:** the read card still shows its **lines …**, and a
+      follow-up question about the same part of the file is answered without a refusal.
+
+---
+
+*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. H9 onward add
 sections here as they are built.*
 
 ## After this

@@ -620,6 +620,23 @@ pub fn plan_replace(ws: &Workspace, path: &str, old: &str, new: &str) -> Result<
     }
 
     if count == 0 {
+        // The header of a ranged read is not in the file. Never stripped silently:
+        // `new_text` may carry it too, and guessing which half to clean is how a
+        // header ends up written into someone's source.
+        if old.lines().next().is_some_and(crate::tools::is_read_header) {
+            return Err(format!(
+                "old_text starts with the read's header line, which is not part of {}. Copy only \
+                 the file's own text, starting after that line.",
+                ws.relative(&real)
+            ));
+        }
+        // Past the size `closest` gives up at, "read the file again" is the very
+        // thing that cannot work, so the model is told how to read part of it.
+        let again = if text.body.len() > CLOSEST_MAX_BODY {
+            " Read those lines again with start_line and end_line, and copy the text from them."
+        } else {
+            " Read the file again and copy the text from it."
+        };
         return Err(format!(
             "old_text was not found in {}. It must match the file exactly, including \
              indentation.{}",
@@ -629,7 +646,7 @@ pub fn plan_replace(ws: &Workspace, path: &str, old: &str, new: &str) -> Result<
                     " The closest text in the file is lines {from}–{to}:\n{s}\nCopy it exactly \
                      as old_text."
                 ))
-                .unwrap_or_else(|| " Read the file again and copy the text from it.".to_string())
+                .unwrap_or_else(|| again.to_string())
         ));
     }
     if count > 1 {
@@ -659,6 +676,9 @@ pub fn plan_replace(ws: &Workspace, path: &str, old: &str, new: &str) -> Result<
     })
 }
 
+/// The largest file [`closest`] compares against.
+const CLOSEST_MAX_BODY: usize = 64 * 1024;
+
 /// The lines of `body` that look most like `wanted`, for telling the model what
 /// the file actually says when its text did not match.
 ///
@@ -671,13 +691,12 @@ pub fn plan_replace(ws: &Workspace, path: &str, old: &str, new: &str) -> Result<
 /// similarity. Skipped for large files or long snippets, where it would be
 /// slow and a hint matters less than a prompt answer.
 fn closest(body: &str, wanted: &str) -> Option<(usize, usize, String)> {
-    const MAX_BODY: usize = 64 * 1024;
     const MAX_LINES: usize = 60;
     const MIN_RATIO: f32 = 0.6;
 
     let want_lines = wanted.trim_end_matches('\n').lines().count().max(1);
     let lines: Vec<&str> = body.lines().collect();
-    if body.len() > MAX_BODY || want_lines > MAX_LINES || lines.len() < want_lines {
+    if body.len() > CLOSEST_MAX_BODY || want_lines > MAX_LINES || lines.len() < want_lines {
         return None;
     }
     let wanted = wanted.trim_end_matches('\n');
@@ -1428,6 +1447,42 @@ mod tests {
         let err = plan_replace(&ws, "a.txt", "struct Unrelated;", "x").unwrap_err();
         assert!(err.contains("not found") && err.contains("Read the file again"), "{err}");
         assert_eq!(s.read("a.txt"), b"fn main() {}\n");
+    }
+
+    #[test]
+    fn a_read_header_pasted_into_old_text_is_named_as_the_mistake() {
+        let s = Sandbox::new("header");
+        let ws = s.ws();
+        s.write("a.rs", b"fn one() {}\nfn two() {}\n");
+        for old in [
+            "[lines 1–2 of 2]\nfn one() {}\n",
+            "[lines 1–2 of 2; cut at 65536 bytes — read on from line 3]\nfn one() {}",
+        ] {
+            let err = plan_replace(&ws, "a.rs", old, "fn uno() {}\n").unwrap_err();
+            assert!(
+                err.contains("old_text starts with the read's header line") && err.contains("a.rs"),
+                "{err}"
+            );
+        }
+        // Never stripped for the model: nothing was written.
+        assert_eq!(s.read("a.rs"), b"fn one() {}\nfn two() {}\n");
+        // A header-looking line that is really in the file is just text.
+        s.write("b.rs", b"[lines 1-2 of 2]\nx\n");
+        assert!(plan_replace(&ws, "b.rs", "[lines 1-2 of 2]\nx\n", "y\n").is_ok());
+    }
+
+    #[test]
+    fn a_miss_in_a_big_file_says_to_read_those_lines_again() {
+        // Past 64 KB there is no "closest text" hint, and "read the file again"
+        // would get the model a refusal — so it is told to read a range.
+        let s = Sandbox::new("bigmiss");
+        let ws = s.ws();
+        let body: String = (1..=4000).map(|i| format!("    let value_{i} = {i};\n")).collect();
+        assert!(body.len() > CLOSEST_MAX_BODY);
+        s.write("big.rs", body.as_bytes());
+        let err = plan_replace(&ws, "big.rs", "    let value_3 = 4;\n", "x\n").unwrap_err();
+        assert!(err.contains("Read those lines again with start_line and end_line"), "{err}");
+        assert!(!err.contains("Read the file again"), "{err}");
     }
 
     #[test]

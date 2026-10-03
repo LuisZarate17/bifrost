@@ -57,7 +57,7 @@ records of what happened.
 - **[STAGE-H.md](../stages/STAGE-H.md)** — Mímir learns to find code, check its work and run
   longer: ten chunks in four phases, each gated on a measurement. H1 (the check command), H2
   (finding code) and H3 (the benchmark of real work) built; H4 measured three coding models;
-  Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5 and H6 built. H7 built; H8 next.
+  Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5 and H6 built. H7 built. H8 built; H9 next.
 
 ---
 
@@ -258,6 +258,9 @@ Finished chunks: what was built, what was measured, what the measurement changed
 - **[H7](results/H7-results.md)** — a context budget inside the turn. **Old tool results are set aside before a turn outgrows the context**,
   instead of Ollama silently cutting the request out of the prompt (measured). At 8k the request
   survives; at 32k the benchmark stays under budget and is unharmed (30/48 on, 26/48 off, no cuts)
+- **[H8](results/H8-results.md)** — partial reads. **`read_file` reads a range of lines**, so the files over 64 KB — five of
+  odin's own core files — can be read and edited. A 120 KB file edited at line 2102 byte for byte;
+  the benchmark holds (29/48 with ranges, 28/48 without), at almost one more round a task
 
 **Stage F — keep testing models**
 
