@@ -552,6 +552,18 @@ struct PendingCall {
     /// runs them, so the card names them before you approve it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     changed_build_files: Vec<String>,
+    /// For a move: where the file goes, relative to the project folder, as the
+    /// plan resolved it. The webview sends back only `(name, path, token)`; the
+    /// destination is in the ticket's plan, so what is approved is what is moved.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to: Option<String>,
+    /// For a create or a move: the folders it will make, shallowest first, each
+    /// with a trailing slash.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    folders: Vec<String>,
+    /// For a delete or a move: the size of the file, in bytes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -577,6 +589,18 @@ struct Armed {
     name: String,
     path: String,
     payload: Option<Payload>,
+}
+
+/// The tool name a plan belongs to. A ticket for one kind of change is never
+/// redeemed as another: a delete's plan has no bytes to write, and a move's has
+/// a destination an edit's does not.
+fn plan_name(p: &edit::Plan) -> &'static str {
+    match p.op {
+        edit::Op::Edit => "edit_file",
+        edit::Op::Create => "create_file",
+        edit::Op::Delete => "delete_file",
+        edit::Op::Move => "move_file",
+    }
 }
 
 /// What an approval carries beyond its name and path.
@@ -957,7 +981,12 @@ async fn ask_with_tools(
             tools::Request::Rewrite { path, .. } => {
                 return Ok(reject("write_file", &path, "no such tool: write_file — use edit_file".into()));
             }
-            tools::Request::Edit { .. } | tools::Request::Create { .. } if ws.is_none() => {
+            tools::Request::Edit { .. }
+            | tools::Request::Create { .. }
+            | tools::Request::Delete { .. }
+            | tools::Request::Move { .. }
+                if ws.is_none() =>
+            {
                 return Ok(reject(
                     request.name(),
                     request.path(),
@@ -987,6 +1016,38 @@ async fn ask_with_tools(
                     Err(e) => return Ok(reject("create_file", request_path(&call), format!("error: {e}"))),
                 }
             }
+            tools::Request::Delete { path } => {
+                let ws = ws.clone().expect("checked above");
+                let planned = tauri::async_runtime::spawn_blocking(move || edit::plan_delete(&ws, &path))
+                    .await
+                    .map_err(|e| format!("planning the delete failed: {e}"))?;
+                match planned {
+                    Ok(p) => ("delete_file", p.display.clone(), Some(Payload::Edit(p))),
+                    Err(e) => return Ok(reject("delete_file", request_path(&call), format!("error: {e}"))),
+                }
+            }
+            tools::Request::Move { path, to } => {
+                let ws = ws.clone().expect("checked above");
+                let planned = tauri::async_runtime::spawn_blocking(move || edit::plan_move(&ws, &path, &to))
+                    .await
+                    .map_err(|e| format!("planning the move failed: {e}"))?;
+                match planned {
+                    Ok(p) => ("move_file", p.display.clone(), Some(Payload::Edit(p))),
+                    Err(e) => return Ok(reject("move_file", request_path(&call), format!("error: {e}"))),
+                }
+            }
+        };
+        // The plan's kind is the call's name; `run_tool` checks it again.
+        if let Some(Payload::Edit(p)) = &payload {
+            assert_eq!(plan_name(p), name, "a plan must be armed under its own tool name");
+        }
+        let (to, folders, size) = match &payload {
+            Some(Payload::Edit(p)) => (
+                p.to_display.clone(),
+                p.folders.clone(),
+                matches!(p.op, edit::Op::Delete | edit::Op::Move).then_some(p.size),
+            ),
+            _ => (None, Vec::new(), None),
         };
 
         let diff = match &payload {
@@ -1013,6 +1074,9 @@ async fn ask_with_tools(
                 diff,
                 range,
                 changed_build_files,
+                to,
+                folders,
+                size,
             },
             // The raw call, so the caller can put the assistant turn that asked
             // for it back into the conversation before the tool result.
@@ -1132,7 +1196,10 @@ async fn run_tool(name: String, path: String, token: String) -> Result<Ran, Stri
     let payload = redeem(&token, &name, &path)?;
     tauri::async_runtime::spawn_blocking(move || match (name.as_str(), payload) {
         ("read_file", Some(Payload::Read { real, range })) => Ok(run_read(&real, range)),
-        ("edit_file" | "create_file", Some(Payload::Edit(plan))) => {
+        ("edit_file" | "create_file" | "delete_file" | "move_file", Some(Payload::Edit(plan))) => {
+            if plan_name(&plan) != name {
+                return Err(format!("this approval was for {}, not {name}", plan_name(&plan)));
+            }
             let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
             let _edits = edits_lock();
             // A file changed since the diff was shown is refused, not written:
@@ -1716,6 +1783,58 @@ mod tests {
         });
         let got = redeem_in(&mut slot, "t", "edit_file", "a.txt").unwrap();
         assert_eq!(got, Some(Payload::Edit(plan)));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **A move's destination is in the ticket**, not in what the webview sends
+    /// back: redeeming it hands over the plan with `to`, and a different path
+    /// does not redeem at all.
+    #[test]
+    fn a_move_ticket_redeems_its_destination() {
+        let dir = std::env::temp_dir().join(format!("mimir-move-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        let ws = edit::Workspace::open(&dir).unwrap();
+        let plan = edit::plan_move(&ws, "a.txt", "sub/b.txt").unwrap();
+        assert_eq!(plan_name(&plan), "move_file");
+        let armed = |plan: &edit::Plan| {
+            Some(Armed {
+                token: "t".into(),
+                name: "move_file".into(),
+                path: "a.txt".into(),
+                payload: Some(Payload::Edit(plan.clone())),
+            })
+        };
+        let mut slot = armed(&plan);
+        let Some(Payload::Edit(got)) = redeem_in(&mut slot, "t", "move_file", "a.txt").unwrap() else {
+            panic!("no plan")
+        };
+        assert_eq!(got.to_display.as_deref(), Some("sub/b.txt"));
+        assert_eq!(got.folders, ["sub/"]);
+        let mut slot = armed(&plan);
+        assert!(redeem_in(&mut slot, "t", "move_file", "other.txt").is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A delete's approval cannot be spent as an edit or a create — the name is
+    /// part of the ticket, and the plan's own kind is checked again on redeeming.
+    #[test]
+    fn a_delete_ticket_cannot_be_redeemed_as_an_edit() {
+        let dir = std::env::temp_dir().join(format!("mimir-delete-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+        let ws = edit::Workspace::open(&dir).unwrap();
+        let plan = edit::plan_delete(&ws, "a.txt").unwrap();
+        assert_eq!(plan_name(&plan), "delete_file");
+        for as_name in ["edit_file", "create_file", "move_file"] {
+            let mut slot = Some(Armed {
+                token: "t".into(),
+                name: "delete_file".into(),
+                path: "a.txt".into(),
+                payload: Some(Payload::Edit(plan.clone())),
+            });
+            assert!(redeem_in(&mut slot, "t", as_name, "a.txt").is_err(), "{as_name}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

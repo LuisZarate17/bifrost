@@ -7,6 +7,34 @@ machine.
 **[G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
+## Open — H9, file operations, 2026-10-03
+
+**Already proven mechanically.** Unit tests on `odin_core::edit`: resolving a new path (a `..` in
+the part that does not exist, a junction out, a dangling link, a file where a folder should be, a
+missing project folder, the eight-folder cap, names Windows cannot handle, `.git` and `.cargo` as
+new folders); creating in new folders and undoing them (with a neighbour in the folder, two creates
+sharing one, a junction swapped in before apply, a failed apply leaving no record and no folder);
+deleting (CRLF, a BOM and binary bytes back exactly; refused for read-only, over 16 MiB, a folder,
+a file reached through a link; undo refused when the path is occupied again or its folder is
+gone); moving (an existing destination, or one that appears after planning, never overwritten;
+case-only refused; undo refused when either end changed); and `undo_turn` over every mix — create
+then delete, delete then create, move then edit, edit then move, move of a move, a delete then a
+move onto the path, case-variant keys, one problem per path, and records written before H9 still
+loading. `cargo test -p mimir` redeems a move ticket with its destination and refuses a delete
+ticket as an edit. `opsprobe` undoes every run it makes and compares the project byte for byte.
+`tools/e2e/mimir-ops.mjs` drives the cards, undo and the refusals. **What needs a person** is how
+the new cards read, and that a delete cannot be mistaken for a read.
+
+- [ ] **A create in new folders** shows *Makes the folders* on its card, and Undo takes them away.
+      [H-testing.md §8](H-testing.md)
+- [ ] **A delete** shows a **Delete file** card with the size, and Undo brings the file back.
+- [ ] **A move** shows *from → to* and the folders it makes, and Undo moves it back.
+- [ ] **A rewrite request** produces an **Edit file** card, not a delete and a create.
+- [ ] **`.git` and outside the folder** are refused with no card.
+- [ ] **Undo all over a mixed turn** reads *N changes in this turn* and refuses, naming the file, when
+      one has been changed by hand.
+- [ ] **Reopening the conversation** keeps *Deleted* and *Moved* cards, with *from → to*.
+
 ## Open — H8, partial reads, 2026-10-03
 
 **Already proven mechanically.** Unit tests on `odin_core::tools`: the line arguments (a number, a

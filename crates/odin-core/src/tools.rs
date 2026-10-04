@@ -24,10 +24,10 @@
 //! - **The switch:** `"ask_every_call": true` in `config.json` brings G6 back
 //!   whole. A value that cannot be read counts as `true`.
 //!
-//! **Six tools, and only the first is always offered.** `read_file` can read
+//! **Eight tools, and only the first is always offered.** `read_file` can read
 //! anywhere — inside the folder without asking, elsewhere one approved file at a
-//! time. `list_files`, `search`, `edit_file`
-//! and `create_file` exist only once a project folder has been chosen, and
+//! time. `list_files`, `search`, `edit_file`, `create_file`, `delete_file`
+//! and `move_file` exist only once a project folder has been chosen, and
 //! cannot reach outside it — see [`crate::search`] and [`crate::edit`] for how
 //! that is enforced. `run_check` exists only once that folder also has a check
 //! command chosen for it, and runs exactly that command — see [`crate::check`].
@@ -166,11 +166,17 @@ fn edit_tool() -> Tool {
     )
 }
 
+/// What `create_file` says about folders. It used to say the folder must already
+/// exist; since H9 a missing one is made, and listed on the card.
+pub const CREATE_FOLDERS: &str = "Folders in the path that do not exist yet are created.";
+
 fn create_tool() -> Tool {
     Tool::function(
         "create_file",
-        "Create a new file in the project folder. Fails if the file already exists — use \
-         edit_file to change an existing file. The folder it goes in must already exist.",
+        format!(
+            "Create a new file in the project folder. Fails if the file already exists — use \
+             edit_file to change an existing file. {CREATE_FOLDERS}"
+        ),
         json!({
             "type": "object",
             "properties": {
@@ -178,6 +184,43 @@ fn create_tool() -> Tool {
                 "content": { "type": "string", "description": "The whole contents of the new file" }
             },
             "required": ["path", "content"]
+        }),
+    )
+}
+
+/// **Not a way to rewrite a file.** The description says so because a model that
+/// wants to change a file can delete it and create it again, which skips the diff
+/// the user would have approved; taskprobe counts that.
+fn delete_tool() -> Tool {
+    Tool::function(
+        "delete_file",
+        "Delete a file in the project folder. Only files can be deleted, not folders. This is \
+         not a way to rewrite a file — use edit_file to change what is in one, and move_file to \
+         rename it. The user approves each delete and can undo it.",
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "File path, relative to the project folder" }
+            },
+            "required": ["path"]
+        }),
+    )
+}
+
+fn move_tool() -> Tool {
+    Tool::function(
+        "move_file",
+        "Move or rename a file in the project folder. The destination must not already exist, \
+         and folders in it that do not exist yet are created. Only files can be moved, not \
+         folders. References to the file are not updated — edit them with edit_file. The user \
+         approves each move and can undo it.",
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Current file path, relative to the project folder" },
+                "to": { "type": "string", "description": "New file path, including the file name, relative to the project folder" }
+            },
+            "required": ["path", "to"]
         }),
     )
 }
@@ -225,6 +268,8 @@ pub fn available(editing: bool, check: Option<&str>) -> Vec<Tool> {
         tools.push(search_tool());
         tools.push(edit_tool());
         tools.push(create_tool());
+        tools.push(delete_tool());
+        tools.push(move_tool());
         if let Some(label) = check {
             tools.push(check_tool(label));
         }
@@ -265,6 +310,10 @@ pub enum Request {
     Read { path: String, range: Option<Lines> },
     Edit { path: String, old_text: String, new_text: String },
     Create { path: String, content: String },
+    /// Delete one file. Backed up first; undoable.
+    Delete { path: String },
+    /// Move or rename one file to a path that does not exist yet.
+    Move { path: String, to: String },
     /// Which files match a glob — all of them, with none.
     List { pattern: Option<String> },
     /// Which lines contain some text, optionally only in files matching a glob.
@@ -282,6 +331,8 @@ impl Request {
             Request::Read { .. } => "read_file",
             Request::Edit { .. } => "edit_file",
             Request::Create { .. } => "create_file",
+            Request::Delete { .. } => "delete_file",
+            Request::Move { .. } => "move_file",
             Request::List { .. } => "list_files",
             Request::Search { .. } => "search",
             Request::Check => "run_check",
@@ -295,6 +346,8 @@ impl Request {
             Request::Read { path, .. }
             | Request::Edit { path, .. }
             | Request::Create { path, .. }
+            | Request::Delete { path }
+            | Request::Move { path, .. }
             | Request::Rewrite { path, .. } => path,
             Request::List { .. } | Request::Search { .. } | Request::Check => "",
         }
@@ -386,7 +439,7 @@ pub fn read_range(args: &serde_json::Value) -> Result<Option<Lines>, String> {
 pub fn interpret(call: &ToolCall) -> Result<Request, String> {
     let name = call.function.name.as_str();
     let path = arg(call, "path").unwrap_or_default().trim().to_string();
-    if path.is_empty() && matches!(name, "read_file" | "edit_file" | "create_file" | "write_file") {
+    if path.is_empty() && matches!(name, "read_file" | "edit_file" | "create_file" | "write_file" | "delete_file" | "move_file") {
         return Err(format!("{name} was called without a path"));
     }
     match name {
@@ -400,6 +453,14 @@ pub fn interpret(call: &ToolCall) -> Result<Request, String> {
         "create_file" => Ok(Request::Create {
             path,
             content: arg(call, "content").ok_or("create_file was called without content")?,
+        }),
+        "delete_file" => Ok(Request::Delete { path }),
+        "move_file" => Ok(Request::Move {
+            path,
+            to: arg(call, "to")
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .ok_or("move_file was called without a destination (to)")?,
         }),
         "write_file" => Ok(Request::Rewrite {
             path,
@@ -451,7 +512,7 @@ pub enum Auto {
 ///   through a link: ask.
 /// - A listing or a search: automatic. Callers have already run
 ///   [`search::validate`], and the walk cannot leave the folder.
-/// - An edit, a create, a check (and the probe's rewrite): ask.
+/// - An edit, a create, a delete, a move, a check (and the probe's rewrite): ask.
 ///
 /// A path the check resolved is checked again by the app just before it opens
 /// the file — see `run_read` in the app.
@@ -484,9 +545,12 @@ pub fn approval(ws: Option<&Workspace>, req: &Request, ask_every_call: bool) -> 
         Request::Search { text, pattern } => {
             Approval::Auto(Auto::Search { text: text.clone(), pattern: pattern.clone() })
         }
-        Request::Edit { .. } | Request::Create { .. } | Request::Check | Request::Rewrite { .. } => {
-            Approval::Ask
-        }
+        Request::Edit { .. }
+        | Request::Create { .. }
+        | Request::Delete { .. }
+        | Request::Move { .. }
+        | Request::Check
+        | Request::Rewrite { .. } => Approval::Ask,
     }
 }
 
@@ -726,11 +790,16 @@ const REPEATED_CHECK_NOTE: &str = " You already sent this call and it failed the
 const REPEATED_READ_NOTE: &str = " You already sent exactly this call and it failed the same way. \
      Change it before trying again — a different range, or search first.";
 
+/// The same, for a delete or a move. What can change is the path, not any text.
+const REPEATED_PATH_NOTE: &str = " You already sent exactly this call and it failed the same way. \
+     Change it before trying again — check the path with list_files.";
+
 /// Which repeat note fits this tool.
 pub fn repeated_note(name: &str) -> &'static str {
     match name {
         "run_check" => REPEATED_CHECK_NOTE,
         "read_file" => REPEATED_READ_NOTE,
+        "delete_file" | "move_file" => REPEATED_PATH_NOTE,
         _ => REPEATED_NOTE,
     }
 }
@@ -770,7 +839,7 @@ pub fn prior_failures(history: &[Message], call: &ToolCall) -> usize {
 }
 
 /// Build files changed by an edit since the user's last message: `build.rs`,
-/// `Cargo.toml`, `package.json`.
+/// `Cargo.toml`, `package.json` — written, deleted, or moved from or to.
 ///
 /// **A check runs them.** `build.rs` is compiled and executed; the manifests say
 /// what else runs. The model may have good reason to change them, so they are
@@ -784,25 +853,26 @@ pub fn build_files_changed(history: &[Message]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for (i, m) in turns.iter().enumerate() {
         let Some(call) = m.tool_calls.as_deref().and_then(|c| c.first()) else { continue };
-        if m.role != "assistant" || !matches!(call.function.name.as_str(), "edit_file" | "create_file") {
+        if m.role != "assistant"
+            || !matches!(call.function.name.as_str(), "edit_file" | "create_file" | "delete_file" | "move_file")
+        {
             continue;
         }
         // Only what was actually written: `applied_message` is the only result
         // that says so. A refusal, a denial or a rejection says something else.
         let written = turns.get(i + 1).is_some_and(|r| {
-            r.role == "tool" && (r.content.starts_with("Edited ") || r.content.starts_with("Created "))
+            r.role == "tool"
+                && ["Edited ", "Created ", "Deleted ", "Moved "].iter().any(|p| r.content.starts_with(p))
         });
-        // Cleaned the way `edit` cleans it before writing, so a path the model
-        // wrapped in quotes or backticks is still recognised.
-        let path = arg(call, "path")
-            .unwrap_or_default()
-            .trim()
-            .trim_matches(|c| c == '"' || c == '\'' || c == '`')
-            .trim()
-            .to_string();
-        let file = path.rsplit(['/', '\\']).next().unwrap_or_default().to_ascii_lowercase();
-        if written && BUILD_FILES.contains(&file.as_str()) && !out.contains(&path) {
-            out.push(path);
+        // A move changes two paths: the build file it took away and the one it
+        // put there. Cleaned the way `edit` cleans it before writing, so a path
+        // the model wrapped in quotes or backticks is still recognised.
+        for key in ["path", "to"] {
+            let path = edit::clean(&arg(call, key).unwrap_or_default());
+            let file = path.rsplit(['/', '\\']).next().unwrap_or_default().to_ascii_lowercase();
+            if written && BUILD_FILES.contains(&file.as_str()) && !out.contains(&path) {
+                out.push(path);
+            }
         }
     }
     out
@@ -811,8 +881,17 @@ pub fn build_files_changed(history: &[Message]) -> Vec<String> {
 /// What the model is told after an edit. Short, and specific enough that it can
 /// tell a one-line fix from a rewrite it did not intend.
 pub fn applied_message(a: &Applied) -> String {
-    if a.create {
-        format!("Created {} ({} lines).", a.display, a.added)
+    let made = if a.folders.is_empty() {
+        String::new()
+    } else {
+        format!(" Made the folder{} {}.", if a.folders.len() == 1 { "" } else { "s" }, a.folders.join(", "))
+    };
+    if a.op == edit::Op::Delete {
+        format!("Deleted {}.", a.display)
+    } else if a.op == edit::Op::Move {
+        format!("Moved {} to {}.{made}", a.display, a.to.as_deref().unwrap_or_default())
+    } else if a.create {
+        format!("Created {} ({} lines).{made}", a.display, a.added)
     } else {
         format!(
             "Edited {}: {} line{} removed, {} added.",
@@ -843,8 +922,22 @@ mod tests {
     fn only_the_tools_we_offer_are_accepted() {
         // The model can name anything; only this list is real.
         assert!(interpret(&call("rm_rf", json!({ "path": "/" }))).is_err());
-        assert!(interpret(&call("delete_file", json!({ "path": "a.txt" }))).is_err());
+        assert!(interpret(&call("remove_file", json!({ "path": "a.txt" }))).is_err());
+        assert!(interpret(&call("rename_file", json!({ "path": "a.txt", "to": "b.txt" }))).is_err());
         assert!(interpret(&call("read_file", json!({ "path": "a.txt" }))).is_ok());
+    }
+
+    #[test]
+    fn a_delete_and_a_move_are_read_whole() {
+        let d = interpret(&call("delete_file", json!({ "path": " old.rs " }))).unwrap();
+        assert_eq!(d, Request::Delete { path: "old.rs".into() });
+        assert_eq!((d.name(), d.path()), ("delete_file", "old.rs"));
+        let m = interpret(&call("move_file", json!({ "path": "a.rs", "to": " src/b.rs " }))).unwrap();
+        assert_eq!(m, Request::Move { path: "a.rs".into(), to: "src/b.rs".into() });
+        assert_eq!((m.name(), m.path()), ("move_file", "a.rs"));
+        // A move needs somewhere to go.
+        assert!(interpret(&call("move_file", json!({ "path": "a.rs" }))).is_err());
+        assert!(interpret(&call("move_file", json!({ "path": "a.rs", "to": "  " }))).is_err());
     }
 
     #[test]
@@ -852,6 +945,8 @@ mod tests {
         assert!(interpret(&call("read_file", json!({}))).is_err());
         assert!(interpret(&call("read_file", json!({ "path": "  " }))).is_err());
         assert!(interpret(&call("edit_file", json!({ "old_text": "a", "new_text": "b" }))).is_err());
+        assert!(interpret(&call("delete_file", json!({}))).is_err());
+        assert!(interpret(&call("move_file", json!({ "to": "b.rs" }))).is_err());
     }
 
     #[test]
@@ -887,10 +982,23 @@ mod tests {
         assert_eq!(names(available(false, None)), ["read_file"]);
         assert_eq!(
             names(available(true, None)),
-            ["read_file", "list_files", "search", "edit_file", "create_file"]
+            ["read_file", "list_files", "search", "edit_file", "create_file", "delete_file", "move_file"]
         );
         // The probe-only rewrite is never offered by the app.
         assert!(!names(available(true, None)).contains(&"write_file".to_string()));
+    }
+
+    #[test]
+    fn the_new_tools_say_what_they_are_not_for_and_what_they_do_not_do() {
+        let tools = available(true, None);
+        let desc = |n: &str| tools.iter().find(|t| t.function.name == n).unwrap().function.description.clone();
+        assert!(desc("delete_file").contains("not a way to rewrite a file — use edit_file"));
+        assert!(desc("move_file").contains("References to the file are not updated — edit them"));
+        let create = desc("create_file");
+        assert!(create.contains(CREATE_FOLDERS) && !create.contains("must already exist"), "{create}");
+        let params = |n: &str| tools.iter().find(|t| t.function.name == n).unwrap().function.parameters.clone();
+        assert_eq!(params("move_file")["required"], json!(["path", "to"]));
+        assert_eq!(params("delete_file")["required"], json!(["path"]));
     }
 
     #[test]
@@ -898,7 +1006,16 @@ mod tests {
         let names = |v: Vec<Tool>| v.into_iter().map(|t| t.function.name).collect::<Vec<_>>();
         assert_eq!(
             names(available(true, Some("cargo check"))),
-            ["read_file", "list_files", "search", "edit_file", "create_file", "run_check"]
+            [
+                "read_file",
+                "list_files",
+                "search",
+                "edit_file",
+                "create_file",
+                "delete_file",
+                "move_file",
+                "run_check"
+            ]
         );
         // A check without a folder has nowhere to run.
         assert_eq!(names(available(false, Some("cargo check"))), ["read_file"]);
@@ -1198,14 +1315,16 @@ mod tests {
     }
 
     #[test]
-    fn edits_creates_and_checks_always_ask() {
+    fn edits_creates_deletes_moves_and_checks_always_ask() {
         let s = Sandbox::new("edits");
         let ws = s.ws();
         s.write("a.rs", "x");
         let edit = Request::Edit { path: "a.rs".into(), old_text: "x".into(), new_text: "y".into() };
         let create = Request::Create { path: "b.rs".into(), content: "x".into() };
         let rewrite = Request::Rewrite { path: "a.rs".into(), content: "y".into() };
-        for req in [edit, create, rewrite, Request::Check] {
+        let delete = Request::Delete { path: "a.rs".into() };
+        let moved = Request::Move { path: "a.rs".into(), to: "b.rs".into() };
+        for req in [edit, create, delete, moved, rewrite, Request::Check] {
             assert_eq!(approval(Some(&ws), &req, false), Approval::Ask, "{req:?}");
         }
     }
@@ -1285,6 +1404,65 @@ mod tests {
             Message::tool_result("edit_file", "error: old_text was not found"),
         ];
         assert_eq!(build_files_changed(&history), ["Cargo.toml", "crates/x/build.rs"]);
+    }
+
+    #[test]
+    fn a_move_to_build_rs_a_move_from_cargo_toml_and_a_delete_of_package_json_are_named() {
+        let to = call("move_file", json!({ "path": "scripts/b.rs", "to": "crates/x/build.rs" }));
+        let from = call("move_file", json!({ "path": "Cargo.toml", "to": "old/Cargo.toml.bak" }));
+        let gone = call("delete_file", json!({ "path": "web/package.json" }));
+        let plain = call("delete_file", json!({ "path": "src/old.rs" }));
+        let refused = call("delete_file", json!({ "path": "build.rs" }));
+        let history = vec![
+            Message::user("go"),
+            asked(&to),
+            Message::tool_result("move_file", "Moved scripts/b.rs to crates/x/build.rs."),
+            asked(&from),
+            Message::tool_result("move_file", "Moved Cargo.toml to old/Cargo.toml.bak."),
+            asked(&gone),
+            Message::tool_result("delete_file", "Deleted web/package.json."),
+            asked(&plain),
+            Message::tool_result("delete_file", "Deleted src/old.rs."),
+            asked(&refused),
+            Message::tool_result("delete_file", "error: build.rs is read-only, so it is never deleted"),
+        ];
+        assert_eq!(
+            build_files_changed(&history),
+            ["crates/x/build.rs", "Cargo.toml", "web/package.json"]
+        );
+    }
+
+    #[test]
+    fn the_results_of_the_new_tools_read_as_what_was_done() {
+        let applied = |op, create, to: Option<&str>, folders: &[&str]| Applied {
+            id: "1".into(),
+            display: "src/a.rs".into(),
+            added: 3,
+            removed: 0,
+            create,
+            op,
+            to: to.map(str::to_string),
+            folders: folders.iter().map(|f| f.to_string()).collect(),
+        };
+        assert_eq!(applied_message(&applied(edit::Op::Delete, false, None, &[])), "Deleted src/a.rs.");
+        assert_eq!(
+            applied_message(&applied(edit::Op::Move, false, Some("src/net/a.rs"), &["src/net/"])),
+            "Moved src/a.rs to src/net/a.rs. Made the folder src/net/."
+        );
+        assert_eq!(
+            applied_message(&applied(edit::Op::Create, true, None, &["src/", "src/x/"])),
+            "Created src/a.rs (3 lines). Made the folders src/, src/x/."
+        );
+        assert_eq!(applied_message(&applied(edit::Op::Create, true, None, &[])), "Created src/a.rs (3 lines).");
+    }
+
+    #[test]
+    fn a_repeated_delete_or_move_is_told_to_check_the_path_not_to_copy_text() {
+        for name in ["delete_file", "move_file"] {
+            let note = repeated_note(name);
+            assert!(note.contains("check the path with list_files"), "{note}");
+            assert!(!note.contains("copy the text"), "{note}");
+        }
     }
 
     #[test]

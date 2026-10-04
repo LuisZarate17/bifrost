@@ -86,19 +86,34 @@ pub struct Ran {
     /// The same, under the policy before H5, where every call that reached a
     /// card asked. The difference is what H5 saved.
     pub asked_every_call: bool,
+    /// The undo id of a change this call made — an edit, a create, a delete or a
+    /// move — so a probe can undo the whole run afterwards, as Undo all does.
+    pub undo: Option<String>,
 }
 
 /// Run one call, approved. Mirrors what `run_tool` does in the app.
 pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
-    let text = |t: String, failed: bool| Ran { text: t, failed, check: None, asked: false, asked_every_call: false };
+    let text = |t: String, failed: bool| Ran {
+        text: t,
+        failed,
+        check: None,
+        asked: false,
+        asked_every_call: false,
+        undo: None,
+    };
     // An edit shows its card only once its plan succeeded; what the apply does
     // after that is the person's to judge, and the card was already shown.
     let edit_result = |r: Result<edit::Plan, String>| {
         let carded = r.is_ok();
+        let mut undo = None;
         let mut ran = match r.and_then(|p| edit::apply(&p, s.backups)) {
-            Ok(a) => text(tools::applied_message(&a), false),
+            Ok(a) => {
+                undo = Some(a.id.clone());
+                text(tools::applied_message(&a), false)
+            }
             Err(e) => text(format!("error: {e}"), true),
         };
+        ran.undo = undo;
         ran.asked = carded;
         ran.asked_every_call = carded;
         ran
@@ -149,6 +164,8 @@ pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
             edit_result(edit::plan_replace(s.ws, &path, &old_text, &new_text))
         }
         Request::Create { path, content } => edit_result(edit::plan_create(s.ws, &path, &content)),
+        Request::Delete { path } => edit_result(edit::plan_delete(s.ws, &path)),
+        Request::Move { path, to } => edit_result(edit::plan_move(s.ws, &path, &to)),
         Request::List { pattern } => {
             let valid = search::validate(s.ws, None, pattern.as_deref()).is_ok();
             let mut ran = found(search::list(s.ws, pattern.as_deref(), || false), valid);
@@ -176,6 +193,7 @@ pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
                     check: Some(o),
                     asked: true,
                     asked_every_call: true,
+                    undo: None,
                 },
                 Err(e) => {
                     let mut ran = text(format!("error: {e}"), true);
@@ -194,6 +212,17 @@ pub struct Run {
     /// The model's final words, if it stopped calling tools.
     pub answer: String,
     pub calls: Vec<String>,
+    /// The undo id of every change the run made, oldest first — what `Undo all`
+    /// would be given for this run.
+    pub undo_ids: Vec<String>,
+    /// `delete_file` and `move_file` calls, whether or not they worked — what H9's
+    /// tools are used for — and how many times a file the run deleted was created
+    /// again at the same path. That last is a rewrite done the long way round, which
+    /// skips the diff an edit would have shown; the delete tool's description argues
+    /// against it, and this counts whether the argument works.
+    pub delete_calls: usize,
+    pub move_calls: usize,
+    pub delete_then_create: usize,
     /// Calls other than reads that came back as errors.
     pub edit_errors: usize,
     /// Reads that named a line range. In taskprobe every file is under 64 KB, so
@@ -265,6 +294,7 @@ pub fn run_loop(
     // The previous round's characters sent and tokens counted, which is how the
     // budget learns this model's characters per token, as the app's does.
     let mut calibration: Option<(u64, u32)> = None;
+    let mut deleted: Vec<String> = Vec::new();
 
     for _ in 0..bound {
         run.rounds += 1;
@@ -338,6 +368,31 @@ pub fn run_loop(
             tool_name: None,
         });
         let ran = execute(&call, s);
+        run.undo_ids.extend(ran.undo.clone());
+        // Paths as the model wrote them, tidied — one file is one entry however it
+        // was spelled.
+        let at = || {
+            call.function.arguments["path"]
+                .as_str()
+                .unwrap_or_default()
+                .trim()
+                .trim_matches(['"', '\'', '`'])
+                .trim()
+                .replace('\\', "/")
+                .trim_start_matches("./")
+                .to_lowercase()
+        };
+        match call.function.name.as_str() {
+            "delete_file" => {
+                run.delete_calls += 1;
+                if !ran.failed {
+                    deleted.push(at());
+                }
+            }
+            "move_file" => run.move_calls += 1,
+            "create_file" if !ran.failed && deleted.contains(&at()) => run.delete_then_create += 1,
+            _ => {}
+        }
         run.asks += ran.asked as usize;
         run.asks_every_call += ran.asked_every_call as usize;
         if let Some(o) = &ran.check {

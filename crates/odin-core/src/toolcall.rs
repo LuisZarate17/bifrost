@@ -623,7 +623,7 @@ mod tests {
     #[test]
     fn every_tool_is_described_in_the_prompt() {
         let section = tools_section(&tools());
-        for name in ["read_file", "edit_file", "create_file"] {
+        for name in ["read_file", "edit_file", "create_file", "delete_file", "move_file"] {
             assert!(section.contains(&format!("\"name\": \"{name}\"")), "{name} missing");
         }
     }

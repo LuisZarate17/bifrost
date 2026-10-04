@@ -49,6 +49,16 @@ function reasonOf(error = ""): string {
   if (error.includes("file stream")) return "that names a file stream";
   if (error.includes("editing is off")) return "no project folder is chosen";
   if (error.includes("already exists")) return "that file already exists";
+  if (error.includes("is an existing folder")) return "that is a folder, not a file name";
+  if (error.includes("is a link") || error.includes("reached through a link")) return "that file is reached through a link";
+  if (error.includes("is read-only")) return "that file is read-only";
+  if (error.includes("byte limit for a delete")) return "that file is too big to delete";
+  if (error.includes("same file")) return "that is the same file, only the case differs";
+  if (error.includes("different drives")) return "that is on another drive";
+  if (error.includes("Windows")) return "Windows cannot use that name";
+  if (error.includes("new folders; at most")) return "that path would make too many folders";
+  if (error.includes("a file, not a folder")) return "a file is in the way of that path";
+  if (error.includes("without a destination")) return "it gave no place to move the file to";
   if (error.includes("could not be read") || error.includes("valid JSON")) return "the request was malformed";
   if (error.includes("does not exist")) return "that file doesn't exist";
   if (error.includes("is a folder")) return "that is a folder, not a file";
@@ -65,6 +75,8 @@ function reasonOf(error = ""): string {
 const VERB: Record<string, string> = {
   edit_file: "Couldn't edit",
   create_file: "Couldn't create",
+  delete_file: "Couldn't delete",
+  move_file: "Couldn't move",
   read_file: "Couldn't read",
   run_check: "Couldn't run the check",
   search: "Couldn't search",
@@ -226,6 +238,72 @@ function CheckCard({ entry, onAllow, onDeny }: { entry: ToolEntry; onAllow: () =
   );
 }
 
+/** A size a person reads. */
+function sizeOf(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** The folders a create or a move makes, before and after. */
+function FolderNote({ folders, made }: { folders: string[]; made?: boolean }) {
+  return (
+    <p className="tool-note tool-folders">
+      {made ? "Made the folder" : "Makes the folder"}
+      {folders.length === 1 ? "" : "s"}:{" "}
+      {folders.map((d, i) => (
+        <span key={d}>
+          {i > 0 && ", "}
+          <code>{d}</code>
+        </span>
+      ))}
+      {made ? "." : " — taken away again if you undo."}
+    </p>
+  );
+}
+
+/**
+ * A tool this build does not draw a card for. It says what it is and shows what
+ * came back, and never presents itself as a read of a file.
+ */
+function PlainCard({ entry, onAllow, onDeny }: { entry: ToolEntry; onAllow: () => void; onDeny: () => void }) {
+  const { name, path, state } = entry;
+  return (
+    <div className={"tool plain " + state}>
+      <div className="tool-head">
+        <span className="tool-icon">
+          <I.File />
+        </span>
+        <span className="tool-name">{name}</span>
+        {path && (
+          <code className="tool-path" title={path}>
+            <bdi dir="ltr">{path}</bdi>
+          </code>
+        )}
+        <span className="tool-state">{state === "pending" ? "Needs approval" : state}</span>
+      </div>
+      {state === "pending" && (
+        <div className="tool-ask">
+          <div className="tool-buttons">
+            <button className="btn primary sm" onClick={onAllow}>
+              Allow once
+            </button>
+            <button className="btn ghost sm" onClick={onDeny}>
+              Deny
+            </button>
+          </div>
+        </div>
+      )}
+      {state === "ran" && entry.result && (
+        <details className="tool-result">
+          <summary>Show result</summary>
+          <pre>{entry.result.slice(0, 4000)}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
 export function ToolCard({
   entry,
   onAllow,
@@ -263,9 +341,13 @@ export function ToolCard({
   if (name === "run_check") return <CheckCard entry={entry} onAllow={onAllow} onDeny={onDeny} />;
   if (name === "search" || name === "list_files") return <FindCard entry={entry} onAllow={onAllow} onDeny={onDeny} />;
 
-  const edit = name === "edit_file" || name === "create_file";
+  // By name, not by elimination: until H9 anything that was not an edit fell
+  // through to the read card, so a tool added later would have been shown as one.
+  const change = name === "edit_file" || name === "create_file" || name === "delete_file" || name === "move_file";
 
-  if (!edit) {
+  if (!change && name !== "read_file") return <PlainCard entry={entry} onAllow={onAllow} onDeny={onDeny} />;
+
+  if (!change) {
     // `ok` from Rust; a thread saved before it existed says so only in the text.
     const failed = entry.ok === false || entry.result?.startsWith("error:");
     return (
@@ -274,7 +356,7 @@ export function ToolCard({
           <span className="tool-icon">
             <I.File />
           </span>
-          <span className="tool-name">{name === "read_file" ? "Read file" : name}</span>
+          <span className="tool-name">Read file</span>
           <code className="tool-path" title={path}>
             <bdi dir="ltr">{path}</bdi>
           </code>
@@ -327,13 +409,20 @@ export function ToolCard({
   }
 
   const create = name === "create_file" || entry.diff?.create;
+  const del = name === "delete_file";
+  const move = name === "move_file";
+  const folders = entry.folders ?? [];
   const label =
     state === "pending"
       ? "Review"
       : state === "running"
         ? "Applying"
         : state === "ran"
-          ? "Applied"
+          ? del
+            ? "Deleted"
+            : move
+              ? "Moved"
+              : "Applied"
           : state === "failed"
             ? "Not written"
             : state === "undone"
@@ -343,13 +432,18 @@ export function ToolCard({
                 : "Declined";
 
   return (
-    <div className={"tool edit " + state}>
+    <div className={"tool edit " + (del ? "delete " : move ? "move " : create ? "create " : "") + state}>
       <div className="tool-head">
-        <span className="tool-icon">{create ? <I.Plus /> : <I.Pencil />}</span>
-        <span className="tool-name">{create ? "Create file" : "Edit file"}</span>
-        <code className="tool-path" title={path}>
-          <bdi dir="ltr">{path}</bdi>
+        <span className="tool-icon">
+          {del ? <I.Trash /> : move ? <I.Move /> : create ? <I.Plus /> : <I.Pencil />}
+        </span>
+        <span className="tool-name">
+          {del ? "Delete file" : move ? "Move file" : create ? "Create file" : "Edit file"}
+        </span>
+        <code className="tool-path" title={move && entry.to ? `${path} → ${entry.to}` : path}>
+          <bdi dir="ltr">{move && entry.to ? `${path} → ${entry.to}` : path}</bdi>
         </code>
+        {(del || move) && entry.size != null && <span className="tool-range">{sizeOf(entry.size)}</span>}
         {entry.diff && (
           <span className="counts" aria-label={`${entry.diff.added} lines added, ${entry.diff.removed} removed`}>
             <span className="plus">+{entry.diff.added}</span>
@@ -362,7 +456,15 @@ export function ToolCard({
             className="btn ghost xs"
             onClick={onUndo}
             disabled={disabled}
-            title="Put the file back the way it was"
+            title={
+              del
+                ? "Put the file back"
+                : move
+                  ? "Move the file back"
+                  : create
+                    ? "Remove the file again"
+                    : "Put the file back the way it was"
+            }
           >
             Undo
           </button>
@@ -371,15 +473,19 @@ export function ToolCard({
 
       {state === "pending" && (
         <>
+          {folders.length > 0 && <FolderNote folders={folders} />}
           {entry.diff && <Diff diff={entry.diff} />}
           <div className="tool-ask">
             <p>
-              Nothing has been changed yet. Applying writes exactly this — and keeps a backup, so
-              it can be undone.
+              {del
+                ? "Nothing has been deleted yet. Deleting keeps a copy of the file, so it can be undone."
+                : move
+                  ? "Nothing has been moved yet. The file keeps its contents, nothing is overwritten, and moving it back is one click. References to it are not updated."
+                  : "Nothing has been changed yet. Applying writes exactly this — and keeps a backup, so it can be undone."}
             </p>
             <div className="tool-buttons">
               <button className="btn primary sm" onClick={onAllow}>
-                {create ? "Create file" : "Apply edit"}
+                {del ? "Delete file" : move ? "Move file" : create ? "Create file" : "Apply edit"}
               </button>
               <button className="btn ghost sm" onClick={onDeny}>
                 Deny
@@ -395,9 +501,26 @@ export function ToolCard({
           <Diff diff={entry.diff} />
         </details>
       )}
-      {state === "undone" && <p className="tool-note">Undone — the file is back as it was.</p>}
+      {state === "ran" && folders.length > 0 && <FolderNote folders={folders} made />}
+      {state === "undone" && (
+        <p className="tool-note">
+          {del
+            ? "Undone — the file is back."
+            : move
+              ? "Undone — the file is moved back."
+              : create
+                ? "Undone — the file is removed."
+                : "Undone — the file is back as it was."}
+        </p>
+      )}
       {state === "denied" && (
-        <p className="tool-note">You declined. Nothing was written, and the model was told.</p>
+        <p className="tool-note">
+          {del
+            ? "You declined. Nothing was deleted, and the model was told."
+            : move
+              ? "You declined. Nothing was moved, and the model was told."
+              : "You declined. Nothing was written, and the model was told."}
+        </p>
       )}
       {state === "failed" && <p className="tool-note err">{entry.error?.replace(/^error:\s*/, "")}</p>}
     </div>

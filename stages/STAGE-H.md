@@ -368,9 +368,35 @@ count. `repair()` only recovers strings, so accept numbers sent as strings.
 
 ## H9 — File operations
 
+> **Built 2026-10-03** — [H9-results.md](../docs/results/H9-results.md). New folders, delete and move, each asked and undoable,
+> nothing able to overwrite. opsprobe 15/15 with Undo all restoring every run byte for byte;
+> taskprobe 28/48 with the tools, 30/48 without, and the model never misused them.
+
 **Do:** `create_file` makes missing parent folders — canonicalise the deepest existing ancestor,
 then contain; H1's refusals still hold. `delete_file` and `move_file` through plan, approve, undo;
 undo removes the folders it created.
+
+**Decided 2026-10-03, before building:**
+- **Nothing overwrites.** Windows' ordinary rename replaces an existing destination, so moves,
+  moving back on undo, creates and restoring a delete all go through one no-replace move
+  (`MoveFileExW` without `REPLACE_EXISTING`); only edits keep the replacing atomic write.
+- **New paths** walk to the deepest existing folder inside the root, refuse `..` in the rest, cap
+  new folders at 8 levels, refuse names Windows mishandles (`CON`, a trailing dot or space) and
+  keep every H1 refusal (`.git`, `.cargo`, streams, app data). Delete and move take files only;
+  a link as the source, a read-only file, a case-only rename and a move across drives are
+  refused; deletes are capped at 16 MiB (the bytes are backed up).
+- **Records gain a kind** (Edit, Create, Delete, Move), the move's destination, and the folders
+  apply *actually* made; undo removes only those, never recursively, and only if empty.
+- **Undo all is generalised:** instead of H6's chain per path, it replays the turn's changes newest
+  first against a snapshot of the real files — edits, creates, deletes and moves alike — and
+  refuses the whole turn if anything does not line up. H6's tests must still pass.
+- **The window routes cards by name**, never falling back to a read card (a delete that looked
+  like a read would be approved as one). Undo all counts "changes", not "edits". A move onto
+  `build.rs` is flagged like an edit of it.
+- **Measured by** a new `opsprobe` (rename, delete, nested create, move, and a trap: "remove a
+  function" must not delete the file; after every run, Undo all must restore the fixture byte for
+  byte), taskprobe with the new tools on and off (bar: ≥ 26/48, no errors), findprobe, and a new
+  `mimir-ops.mjs` e2e.
 
 ## H10 — Project instructions, a task list, a repo map
 

@@ -108,6 +108,12 @@ export const Trash = (p: P) => (
   </svg>
 );
 
+export const Move = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M2.5 8h10.5M9 4l4 4-4 4" />
+  </svg>
+);
+
 export const Refresh = (p: P) => (
   <svg {...base(p)}>
     <path d="M13 8a5 5 0 1 1-1.46-3.54M13 2.75v3h-3" />

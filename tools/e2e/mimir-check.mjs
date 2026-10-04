@@ -216,10 +216,30 @@ const { root, proj } = makeProject();
 const configPath = path.join(proj, "src", "config.rs");
 const configBefore = fs.existsSync(CONFIG) ? fs.readFileSync(CONFIG) : null;
 
+// The fix scenario's edits leave undo records in the user's backups folder.
+// Only this run's — records whose file lies in this run's project — are removed
+// afterwards, so a Mímir session of the user's own keeps its undo history.
+const BACKUPS = path.join(APPDATA, "odin", "backups");
+const backupNames = () => (fs.existsSync(BACKUPS) ? fs.readdirSync(BACKUPS) : []);
+const backupsBefore = new Set(backupNames());
+function cleanBackups() {
+  const mine = (p) => typeof p === "string" && p.replace(/^\\\\\?\\/, "").toLowerCase().startsWith(proj.toLowerCase());
+  for (const f of backupNames()) {
+    if (backupsBefore.has(f) || !f.endsWith(".json")) continue;
+    let record;
+    try { record = JSON.parse(fs.readFileSync(path.join(BACKUPS, f), "utf8")); } catch { continue; }
+    if (!mine(record.path) && !mine(record.to)) continue;
+    const id = f.slice(0, -".json".length);
+    fs.rmSync(path.join(BACKUPS, f), { force: true });
+    fs.rmSync(path.join(BACKUPS, `${id}.bak`), { force: true });
+  }
+}
+
 // Ctrl+C skips `finally`, so put the user's config back here as well.
 process.on("SIGINT", () => {
   if (configBefore) fs.writeFileSync(CONFIG, configBefore);
   else fs.rmSync(CONFIG, { force: true });
+  cleanBackups();
   process.exit(130);
 });
 const cfgBase = configBefore ? JSON.parse(configBefore) : {};
@@ -446,6 +466,7 @@ try {
   }
   await js(`(location.href = location.origin + "/"), true`).catch(() => {});
   cdp.close();
+  cleanBackups();
   fs.rmSync(root, { recursive: true, force: true });
 }
 

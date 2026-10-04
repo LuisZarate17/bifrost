@@ -42,6 +42,14 @@ pub const MAX_EDIT_BYTES: usize = 1024 * 1024;
 /// Lines of unchanged context either side of a change, in the diff you approve.
 const CONTEXT: usize = 3;
 
+/// The biggest file a delete will take. Its bytes are copied to `%APPDATA%` first
+/// so undo can put it back, and a runaway request should not fill the disk.
+pub const MAX_DELETE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// How many folders one create or move may make. Eight is deeper than any module
+/// tree this app is pointed at, and a longer chain is a mistake in the path.
+pub const MAX_NEW_FOLDERS: usize = 8;
+
 // ── the folder ──────────────────────────────────────────────────────────────
 
 /// The one folder the model may change files in.
@@ -62,6 +70,15 @@ pub enum Located {
     Outside(PathBuf),
     /// Nothing is there, and the place it would be is in the project.
     MissingInside,
+}
+
+/// Where something that does not exist yet will go: the canonical path, and the
+/// folders under the deepest existing one that have to be made first
+/// (shallowest first — the order they are made in).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target {
+    pub path: PathBuf,
+    pub new_dirs: Vec<PathBuf>,
 }
 
 impl Workspace {
@@ -161,33 +178,137 @@ impl Workspace {
         if real.starts_with(&self.root) { Located::MissingInside } else { Located::Outside(real) }
     }
 
-    /// Resolve a path for a file that **must not exist yet**.
+    /// Resolve a path for a file that **must not exist yet** — a create, or the
+    /// destination of a move — along with the folders it needs made.
     ///
-    /// The folder it goes in must already exist: creating directories on the
-    /// model's say-so is one more thing to approve and one more way to litter.
-    pub fn resolve_new(&self, requested: &str) -> Result<PathBuf, String> {
+    /// Folders that are missing are part of the plan, not an error: the card lists
+    /// them and undo removes them again. (Until H9 this refused, because making
+    /// directories on the model's say-so was one more thing to approve. It is not
+    /// one more thing now — it is the same approval, and a module split into a
+    /// sub-module cannot be done without it.)
+    ///
+    /// The walk goes up to the **deepest ancestor that exists**, judged with
+    /// `symlink_metadata` so a dangling link counts as existing — and is then
+    /// refused rather than created through. That ancestor is canonicalised and must
+    /// be a folder inside the root, which is what a junction out fails. The missing
+    /// tail below it is checked by name: no `..`, at most [`MAX_NEW_FOLDERS`] levels,
+    /// and nothing Windows would mangle (see [`unsafe_name`]) — the `\\?\` root this
+    /// workspace is held under turns the usual normalisation off, so `con` or `a.`
+    /// would be created literally. Then [`contain`](Self::contain) runs on the whole
+    /// final path, so `.git`, `.cargo`, streams and app data are refused for every
+    /// new folder too.
+    ///
+    /// `exists` is appended to "already exists" when something is already there.
+    pub fn resolve_target(&self, requested: &str, exists: &str) -> Result<Target, String> {
         let joined = self.join(requested)?;
-        if joined.exists() {
+        let shown = clean(requested);
+        if let Ok(meta) = std::fs::symlink_metadata(&joined) {
+            return Err(if meta.is_dir() {
+                format!("{shown} is an existing folder{exists}")
+            } else {
+                format!("{shown} already exists{exists}")
+            });
+        }
+        // A `..` is fine after a folder that exists — Windows folds it away before
+        // it touches the disk — and refused after one that does not: `nope/../x`
+        // would otherwise mean different things to the check and to the write.
+        let mut walked = PathBuf::new();
+        for c in joined.components() {
+            match c {
+                Component::ParentDir => {
+                    if std::fs::symlink_metadata(&walked).is_err() {
+                        return Err(format!("{shown} has `..` in the part of the path that does not exist yet"));
+                    }
+                    walked.pop();
+                }
+                Component::CurDir => {}
+                other => walked.push(other.as_os_str()),
+            }
+        }
+        let joined = lexical(&joined);
+        joined.file_name().ok_or_else(|| format!("{shown} is not a file name"))?;
+
+        // Up to the deepest ancestor that exists, collecting the names passed.
+        let mut tail: Vec<std::ffi::OsString> = Vec::new();
+        let mut base = joined.as_path();
+        let real_base = loop {
+            let Some(name) = base.file_name() else {
+                return Err(format!("{shown} has `..` in the part of the path that does not exist yet"));
+            };
+            tail.push(name.to_owned());
+            let Some(parent) = base.parent() else {
+                return Err(format!("{shown} has no folder"));
+            };
+            base = parent;
+            if std::fs::symlink_metadata(base).is_ok() {
+                break std::fs::canonicalize(base).map_err(|_| {
+                    format!("{shown} is in a folder that is a link that leads nowhere")
+                })?;
+            }
+        };
+        if !real_base.starts_with(&self.root) {
             return Err(format!(
-                "{} already exists — change it with edit_file rather than creating it",
-                clean(requested)
+                "{shown} is outside the project folder ({}). Only files inside it can be changed.",
+                self.root_display()
             ));
         }
-        let name = joined
-            .file_name()
-            .ok_or_else(|| format!("{} is not a file name", clean(requested)))?
-            .to_owned();
-        let parent = joined
-            .parent()
-            .ok_or_else(|| format!("{} has no folder", clean(requested)))?;
-        let parent = std::fs::canonicalize(parent).map_err(|_| {
-            format!(
-                "the folder for {} does not exist — only files in existing folders can be created",
-                clean(requested)
-            )
-        })?;
-        let real = parent.join(name);
+        if !real_base.is_dir() {
+            return Err(format!("{shown} is inside {}, which is a file, not a folder", self.relative(&real_base)));
+        }
+        tail.reverse();
+        if tail.len() - 1 > MAX_NEW_FOLDERS {
+            return Err(format!(
+                "{shown} would make {} new folders; at most {MAX_NEW_FOLDERS} are made at once",
+                tail.len() - 1
+            ));
+        }
+        for part in &tail {
+            if let Some(why) = unsafe_name(&part.to_string_lossy()) {
+                return Err(format!("{shown}: {why}"));
+            }
+        }
+        let mut new_dirs = Vec::new();
+        let mut real = real_base;
+        for (i, part) in tail.iter().enumerate() {
+            real.push(part);
+            if i + 1 < tail.len() {
+                new_dirs.push(real.clone());
+            }
+        }
         self.contain(&real, requested)?;
+        Ok(Target { path: real, new_dirs })
+    }
+
+    /// Resolve a path for a file that **must exist and may be deleted or moved**:
+    /// a real file, reached by its own name.
+    ///
+    /// [`resolve_existing`](Self::resolve_existing) follows links to where they
+    /// point, which is right for reading and editing and wrong here: `link/a.rs`
+    /// would name a file that lives somewhere else. So the canonical path must be the
+    /// requested one with `..` folded in, compared case-insensitively — a link
+    /// anywhere along the way, or the link itself, makes them differ and is refused.
+    /// (A short `PROGRA~1` name differs too, which is refused the same way, and is
+    /// the safe side.) Read-only files are refused, since removing one is a decision
+    /// the user did not make by asking.
+    ///
+    /// `done` is how the refusal reads: "deleted" or "moved".
+    pub fn resolve_source(&self, requested: &str, done: &str) -> Result<PathBuf, String> {
+        let joined = self.join(requested)?;
+        let shown = clean(requested);
+        if std::fs::symlink_metadata(&joined).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(format!("{shown} is a link, so it is never {done}"));
+        }
+        let real = self.resolve_existing(requested)?;
+        if plain(&real).to_lowercase() != plain(&lexical(&joined)).to_lowercase() {
+            return Err(format!(
+                "{shown} is reached through a link, so it is never {done}. Use the file's own path: {}",
+                self.relative(&real)
+            ));
+        }
+        let meta = std::fs::symlink_metadata(&real).map_err(|e| format!("cannot look at {shown}: {e}"))?;
+        if meta.permissions().readonly() {
+            return Err(format!("{shown} is read-only, so it is never {done}"));
+        }
         Ok(real)
     }
 
@@ -412,6 +533,43 @@ pub fn plain(p: &Path) -> String {
     s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or_else(|| s.into_owned())
 }
 
+/// `p` with `.` and `..` folded in by text alone, touching no filesystem.
+fn lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Why Windows would not keep `name` as written, if it would not.
+///
+/// The workspace root is the `\\?\` form, which switches Win32's name clean-up
+/// off: `notes.` and `notes ` are created literally (and then cannot be opened or
+/// deleted by most tools), `con` and `nul` name devices, and `<>"|?*` are not
+/// allowed. None of them is a file a project is made of.
+fn unsafe_name(name: &str) -> Option<String> {
+    if name.ends_with('.') || name.ends_with(' ') {
+        return Some(format!("\"{name}\" ends with a dot or a space, which Windows cannot handle"));
+    }
+    if name.chars().any(|c| matches!(c, '<' | '>' | '"' | '|' | '?' | '*') || (c as u32) < 32) {
+        return Some(format!("\"{name}\" has a character Windows does not allow in names"));
+    }
+    let stem = name.split('.').next().unwrap_or(name).trim_end().to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit()
+            && stem.as_bytes()[3] != b'0');
+    device.then(|| format!("\"{name}\" is the name of a Windows device, not a file"))
+}
+
 // ── text ────────────────────────────────────────────────────────────────────
 
 /// FNV-1a, 64-bit. Stable across builds and runs — unlike std's `DefaultHasher`
@@ -424,6 +582,25 @@ pub fn fingerprint(bytes: &[u8]) -> u64 {
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
     h
+}
+
+/// [`fingerprint`] of a file's contents, read in chunks — what a move compares,
+/// since moving a file needs its hash but not its bytes, and has no size limit.
+pub fn fingerprint_file(path: &Path) -> std::io::Result<u64> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            return Ok(h);
+        }
+        for b in &buf[..n] {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
 }
 
 const BOM: &[u8] = b"\xEF\xBB\xBF";
@@ -554,24 +731,70 @@ fn diff(old: &str, new: &str) -> (Vec<Hunk>, usize, usize) {
 
 // ── planning ────────────────────────────────────────────────────────────────
 
+/// What a change does to the project. Written into every undo record, so it must
+/// keep its spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Op {
+    Edit,
+    Create,
+    Delete,
+    Move,
+}
+
 /// An edit worked out in full, before anyone is asked about it.
 ///
 /// Holds the exact bytes that will be written. Nothing downstream re-derives
 /// them — [`apply`] writes `after` or nothing — so the diff you approve and the
 /// file you get cannot disagree.
+///
+/// Since H9 a plan can also be a delete or a move. A delete has no `after`; a
+/// move has no bytes at all, only the hash of the file it carries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Plan {
+    /// The file changed, created or deleted — and the *source* of a move.
     pub path: PathBuf,
     /// Relative to the workspace, with forward slashes. What the card shows.
     pub display: String,
     /// True when this creates a file rather than changing one.
     pub create: bool,
+    pub op: Op,
     /// Hash of the file as it was when planned; `None` for a new file.
     pub before: Option<u64>,
     pub after: Vec<u8>,
     pub hunks: Vec<Hunk>,
     pub added: usize,
     pub removed: usize,
+    /// Where a move puts the file, and how to show it. `None` for everything else.
+    pub to: Option<PathBuf>,
+    pub to_display: Option<String>,
+    /// Folders to make first, shallowest first, and how to show them.
+    pub make_dirs: Vec<PathBuf>,
+    pub folders: Vec<String>,
+    /// The size of the file a delete or a move carries; 0 otherwise.
+    pub size: u64,
+}
+
+impl Plan {
+    /// A plan for `path` that changes nothing yet; the planners fill in the rest.
+    fn new(op: Op, path: PathBuf, display: String) -> Self {
+        Self {
+            path,
+            display,
+            create: op == Op::Create,
+            op,
+            before: None,
+            after: Vec::new(),
+            hunks: Vec::new(),
+            added: 0,
+            removed: 0,
+            to: None,
+            to_display: None,
+            make_dirs: Vec::new(),
+            folders: Vec::new(),
+            size: 0,
+        }
+    }
 }
 
 /// Replace one exact piece of text with another.
@@ -665,14 +888,12 @@ pub fn plan_replace(ws: &Workspace, path: &str, old: &str, new: &str) -> Result<
     };
     let (hunks, added, removed) = diff(&text.body, &body);
     Ok(Plan {
-        display: ws.relative(&real),
-        path: real,
-        create: false,
         before: Some(fingerprint(&bytes)),
         after: text.render(&body),
         hunks,
         added,
         removed,
+        ..Plan::new(Op::Edit, real.clone(), ws.relative(&real))
     })
 }
 
@@ -752,23 +973,93 @@ fn new_file_style() -> Text {
     Text { body: String::new(), crlf: cfg!(windows), bom: false }
 }
 
-/// Create a file that does not exist yet.
+/// Create a file that does not exist yet, in a folder that may not either.
 pub fn plan_create(ws: &Workspace, path: &str, content: &str) -> Result<Plan, String> {
-    let real = ws.resolve_new(path)?;
+    let target = ws.resolve_target(path, " — change it with edit_file rather than creating it")?;
     let body = from_model(content);
     if body.len() > MAX_EDIT_BYTES {
         return Err(format!("that content is over the {MAX_EDIT_BYTES} byte limit"));
     }
     let (hunks, added, removed) = diff("", &body);
     Ok(Plan {
-        display: ws.relative(&real),
-        path: real,
-        create: true,
-        before: None,
         after: new_file_style().render(&body),
         hunks,
         added,
         removed,
+        folders: folders_of(ws, &target),
+        make_dirs: target.new_dirs,
+        ..Plan::new(Op::Create, target.path.clone(), ws.relative(&target.path))
+    })
+}
+
+/// The new folders of a target as the card lists them: relative, with a trailing slash.
+fn folders_of(ws: &Workspace, target: &Target) -> Vec<String> {
+    target.new_dirs.iter().map(|d| format!("{}/", ws.relative(d))).collect()
+}
+
+/// Delete a file — **only a file, only a real one, and only after its bytes are
+/// kept**.
+///
+/// What is refused, and why:
+/// - a folder: no recursive delete exists anywhere in this module, and a model that
+///   means a folder can name its files;
+/// - a link, or a file reached through one ([`Workspace::resolve_source`]);
+/// - a read-only file;
+/// - anything over [`MAX_DELETE_BYTES`], since the backup is a copy in `%APPDATA%`.
+///
+/// Whatever the delete refuses is refused here, at planning, before anyone is asked.
+pub fn plan_delete(ws: &Workspace, path: &str) -> Result<Plan, String> {
+    let real = ws.resolve_source(path, "deleted")?;
+    let shown = clean(path);
+    let size = std::fs::metadata(&real).map_err(|e| format!("cannot read {shown}: {e}"))?.len();
+    if size > MAX_DELETE_BYTES {
+        return Err(format!(
+            "{shown} is {size} bytes, over the {MAX_DELETE_BYTES} byte limit for a delete, which has to keep a copy"
+        ));
+    }
+    let bytes = std::fs::read(&real).map_err(|e| format!("cannot read {shown}: {e}"))?;
+    Ok(Plan {
+        before: Some(fingerprint(&bytes)),
+        size,
+        ..Plan::new(Op::Delete, real.clone(), ws.relative(&real))
+    })
+}
+
+/// Move a file to a path that does not exist yet, making its folders.
+///
+/// The destination is a **file path**: a destination that is an existing folder is
+/// refused, with the whole path suggested, because "put it in that folder" and
+/// "replace it with that folder" look the same to a model. A destination that
+/// differs from the source only in case is refused as the same file — Windows would
+/// either rename it or fail, and neither is what was asked. Nothing is ever
+/// overwritten: [`apply`] moves with [`move_new`].
+pub fn plan_move(ws: &Workspace, from: &str, to: &str) -> Result<Plan, String> {
+    let real = ws.resolve_source(from, "moved")?;
+    let (shown_from, shown_to) = (clean(from), clean(to));
+    let dest = ws.join(to)?;
+    if plain(&real).to_lowercase() == plain(&lexical(&dest)).to_lowercase() {
+        return Err(format!(
+            "{shown_to} is the same file as {shown_from} on Windows, which ignores case — give a different name"
+        ));
+    }
+    if std::fs::symlink_metadata(&dest).is_ok_and(|m| m.is_dir()) {
+        let name = real.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        return Err(format!(
+            "{shown_to} is an existing folder. To move the file into it, give the whole path: {}/{name}",
+            shown_to.trim_end_matches(['/', '\\'])
+        ));
+    }
+    let target = ws.resolve_target(to, " — nothing is overwritten, so choose another name")?;
+    let size = std::fs::metadata(&real).map_err(|e| format!("cannot read {shown_from}: {e}"))?.len();
+    let before = fingerprint_file(&real).map_err(|e| format!("cannot read {shown_from}: {e}"))?;
+    Ok(Plan {
+        before: Some(before),
+        size,
+        to: Some(target.path.clone()),
+        to_display: Some(ws.relative(&target.path)),
+        folders: folders_of(ws, &target),
+        make_dirs: target.new_dirs,
+        ..Plan::new(Op::Move, real.clone(), ws.relative(&real))
     })
 }
 
@@ -781,14 +1072,12 @@ pub fn plan_rewrite(ws: &Workspace, path: &str, content: &str) -> Result<Plan, S
     let body = from_model(content);
     let (hunks, added, removed) = diff(&text.body, &body);
     Ok(Plan {
-        display: ws.relative(&real),
-        path: real,
-        create: false,
         before: Some(fingerprint(&bytes)),
         after: text.render(&body),
         hunks,
         added,
         removed,
+        ..Plan::new(Op::Edit, real.clone(), ws.relative(&real))
     })
 }
 
@@ -802,22 +1091,63 @@ pub struct Applied {
     pub added: usize,
     pub removed: usize,
     pub create: bool,
+    pub op: Op,
+    /// Where a move put the file, relative to the project folder.
+    pub to: Option<String>,
+    /// The folders this made, as the card listed them.
+    pub folders: Vec<String>,
 }
 
 /// Kept beside each backup so [`undo`] knows what it is restoring and can tell
 /// whether the file has moved on since.
+///
+/// **Written so an older build refuses these records rather than misreading
+/// them.** `create` stays, and `path` is still the file the change was about — the
+/// source of a move, the file a delete removed — so an older [`undo`] looks for a
+/// file that is no longer there and stops. A delete writes `create: false` and the
+/// deleted file's hash as `after`; a move writes `create: false` and the moved
+/// file's. With `create: true` an older build that found an identical file back at
+/// `path` would delete it, which is the one mistake this layout avoids.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Record {
     path: PathBuf,
     display: String,
     create: bool,
-    /// Hash of what the edit wrote. Undo only proceeds if the file still is this.
+    /// Hash of what the change left at `path` (at `to` for a move, which carries the
+    /// file's own hash; the deleted file's for a delete). Undo only proceeds if the
+    /// file still is this.
     after: u64,
     /// Hash of the file before the edit, so [`undo_turn`] can check a `.bak`
     /// directly — the oldest edit of a chain has no earlier record to compare it
     /// with. `None` for a create, and for records written before this existed.
     #[serde(default)]
     before: Option<u64>,
+    /// What the change was. `None` in records written before H9: an edit, or a
+    /// create where `create` says so.
+    #[serde(default)]
+    kind: Option<Op>,
+    /// Where a move put the file, and how it was shown.
+    #[serde(default)]
+    to: Option<PathBuf>,
+    #[serde(default)]
+    to_display: Option<String>,
+    /// The folders this change made, **deepest first** — the order they are removed
+    /// in, and only if each is empty.
+    #[serde(default)]
+    made_dirs: Vec<PathBuf>,
+}
+
+impl Record {
+    fn op(&self) -> Op {
+        self.kind.unwrap_or(if self.create { Op::Create } else { Op::Edit })
+    }
+
+    fn to_shown(&self) -> String {
+        self.to_display
+            .clone()
+            .or_else(|| self.to.as_deref().map(plain))
+            .unwrap_or_default()
+    }
 }
 
 /// `%APPDATA%\odin\backups\`, beside the conversations.
@@ -828,6 +1158,9 @@ pub fn backups_dir() -> Option<PathBuf> {
 
 /// Write `bytes` to `path` via a temporary file in the same folder and a
 /// rename, so a crash leaves either the old file or the new one — never half.
+///
+/// **Replaces what is there**, which is what an edit means — and why a create, a
+/// restore and a move never use it: see [`write_new`] and [`move_new`].
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let tmp = path.with_file_name(format!(".{name}.odin-tmp"));
@@ -835,6 +1168,72 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("replacing {}: {e}", plain(path))
+    })
+}
+
+/// Rename `from` to `to`, **failing if `to` exists**.
+///
+/// `std::fs::rename` on Windows is `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING`:
+/// it silently replaces the destination, so a plan that checked "nothing is there"
+/// and an apply that renames are one racing process away from destroying a file
+/// nobody planned to touch. This is the same call without that flag — and without
+/// `MOVEFILE_COPY_ALLOWED`, so a move to another drive (a folder mounted from one)
+/// fails with "cannot move across drives" instead of quietly becoming copy plus
+/// delete, which can half-finish. Used for the move, for moving back on undo, and by
+/// [`write_new`].
+pub fn move_new(from: &Path, to: &Path) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
+        use windows::core::PCWSTR;
+
+        let wide = |p: &Path| -> Vec<u16> { p.as_os_str().encode_wide().chain(Some(0)).collect() };
+        let (a, b) = (wide(from), wide(to));
+        // SAFETY: both buffers are NUL-terminated and live until the call returns.
+        let moved = unsafe { MoveFileExW(PCWSTR(a.as_ptr()), PCWSTR(b.as_ptr()), MOVE_FILE_FLAGS(0)) };
+        moved.map_err(|e| {
+            // ERROR_FILE_EXISTS, ERROR_ALREADY_EXISTS, ERROR_NOT_SAME_DEVICE.
+            match (e.code().0 as u32) & 0xFFFF {
+                80 | 183 => format!("{} already exists, so nothing was overwritten", plain(to)),
+                17 => format!(
+                    "cannot move {} to {}: they are on different drives, and a move never falls back to copy and delete",
+                    plain(from),
+                    plain(to)
+                ),
+                _ => format!("moving {} to {}: {e}", plain(from), plain(to)),
+            }
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        // A hard link fails if `to` exists, and the old name is removed after.
+        std::fs::hard_link(from, to).map_err(|e| format!("moving {} to {}: {e}", plain(from), plain(to)))?;
+        std::fs::remove_file(from).map_err(|e| format!("removing {}: {e}", plain(from)))
+    }
+}
+
+/// Write `bytes` to a path **where nothing exists**: a temporary file beside it,
+/// then [`move_new`]. For creating a file and for putting a deleted one back —
+/// both cases where something appearing at the path meanwhile is somebody's work.
+fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.odin-new"));
+    // `create_new`: a leftover from a crash is never written over either.
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .map_err(|e| format!("writing {}: {e}", plain(path)))?;
+    if let Err(e) = f.write_all(bytes).and_then(|()| f.flush()) {
+        drop(f);
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("writing {}: {e}", plain(path)));
+    }
+    drop(f);
+    move_new(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
     })
 }
 
@@ -846,45 +1245,183 @@ fn new_id() -> String {
     format!("{nanos:x}")
 }
 
-/// Apply a plan — **only if the file is still exactly what the plan was made
-/// from.** Backs the original up first.
-pub fn apply(plan: &Plan, backups: &Path) -> Result<Applied, String> {
-    let current = std::fs::read(&plan.path).ok();
-    match (plan.before, &current) {
+/// Whether what a plan was made from is still true, and if not, how to say so.
+fn stale(plan: &Plan, current: Option<&[u8]>) -> Option<String> {
+    let (what, did) = match plan.op {
+        Op::Delete => ("delete", "deleted"),
+        Op::Move => ("move", "moved"),
+        _ => ("edit", "written"),
+    };
+    let d = &plan.display;
+    match (plan.before, current) {
         (None, Some(_)) => {
+            Some(format!("{d} was created by something else after this {what} was shown — nothing was {did}"))
+        }
+        (Some(_), None) => {
+            Some(format!("{d} was deleted after this {what} was shown — nothing was {did}"))
+        }
+        (Some(want), Some(bytes)) if fingerprint(bytes) != want => Some(format!(
+            "{d} changed after this {what} was shown, so what you approved no longer describes it — \
+             nothing was {did}"
+        )),
+        _ => None,
+    }
+}
+
+/// Apply a plan — **only if what it was made from is still exactly as it was.**
+/// Backs the original up first.
+///
+/// **Never overwrites a file it did not plan to.** Edits replace the file they
+/// read ([`write_atomic`]); every other way a path gets bytes goes through
+/// [`move_new`], which refuses an existing destination.
+///
+/// Order, so a failure at any step leaves the project as it was:
+/// 1. make the planned folders one level at a time with `create_dir`, noting each
+///    one it made. A planned folder that already exists must canonicalise to the
+///    planned path, which catches a junction put there since planning;
+/// 2. require that the folder the file goes in is still the one planned;
+/// 3. write the `.bak` (an edit's or a delete's bytes) and the `.json`;
+/// 4. do it.
+///
+/// If any step fails, the record and the folders this call made are removed again.
+pub fn apply(plan: &Plan, backups: &Path) -> Result<Applied, String> {
+    let current = match plan.op {
+        Op::Move => None,
+        _ => std::fs::read(&plan.path).ok(),
+    };
+    if plan.op == Op::Move {
+        let to = plan.to.as_deref().ok_or("a move with no destination")?;
+        match fingerprint_file(&plan.path) {
+            Ok(h) if Some(h) == plan.before => {}
+            Ok(_) => {
+                return Err(format!(
+                    "{} changed after this move was shown, so what you approved no longer describes \
+                     it — nothing was moved",
+                    plan.display
+                ));
+            }
+            Err(_) => {
+                return Err(format!(
+                    "{} was deleted after this move was shown — nothing was moved",
+                    plan.display
+                ));
+            }
+        }
+        if std::fs::symlink_metadata(to).is_ok() {
+            return Err(format!(
+                "{} was created by something else after this move was shown — nothing was moved",
+                plan.to_display.as_deref().unwrap_or(&plan.display)
+            ));
+        }
+    } else {
+        // A folder or a link at a create's path reads as "nothing there", and is
+        // not.
+        if plan.op == Op::Create && std::fs::symlink_metadata(&plan.path).is_ok() {
             return Err(format!(
                 "{} was created by something else after this edit was shown — nothing was written",
                 plan.display
             ));
         }
-        (Some(_), None) => {
-            return Err(format!(
-                "{} was deleted after this edit was shown — nothing was written",
-                plan.display
-            ));
+        if let Some(why) = stale(plan, current.as_deref()) {
+            return Err(why);
         }
-        (Some(want), Some(bytes)) if fingerprint(bytes) != want => {
-            return Err(format!(
-                "{} changed after this edit was shown, so the diff you approved no longer \
-                 describes it — nothing was written",
-                plan.display
-            ));
-        }
-        _ => {}
     }
 
     std::fs::create_dir_all(backups).map_err(|e| format!("creating {}: {e}", plain(backups)))?;
     let id = new_id();
-    if let Some(original) = &current {
+    let mut made: Vec<PathBuf> = Vec::new();
+    match apply_steps(plan, backups, &id, current.as_deref(), &mut made) {
+        Ok(()) => Ok(Applied {
+            id,
+            display: plan.display.clone(),
+            added: plan.added,
+            removed: plan.removed,
+            create: plan.create,
+            op: plan.op,
+            to: plan.to_display.clone(),
+            folders: if made.is_empty() { Vec::new() } else { plan.folders.clone() },
+        }),
+        Err(e) => {
+            let _ = std::fs::remove_file(backups.join(format!("{id}.json")));
+            let _ = std::fs::remove_file(backups.join(format!("{id}.bak")));
+            for dir in made.iter().rev() {
+                let _ = std::fs::remove_dir(dir);
+            }
+            Err(e)
+        }
+    }
+}
+
+fn apply_steps(
+    plan: &Plan,
+    backups: &Path,
+    id: &str,
+    current: Option<&[u8]>,
+    made: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    // Every folder this touches must still be where it was planned, checked
+    // before anything is made or moved: the folder the first new one goes in,
+    // and — for a delete or a move — the folder the source sits in. A junction
+    // swapped in since planning would otherwise point the action elsewhere.
+    let still_there = |folder: &Path| -> Result<(), String> {
+        if std::fs::canonicalize(folder).ok().as_deref() == Some(folder) {
+            Ok(())
+        } else {
+            Err(format!("the folder {} is not where it was planned — nothing was changed", plain(folder)))
+        }
+    };
+    if let Some(first) = plan.make_dirs.first()
+        && let Some(base) = first.parent()
+    {
+        still_there(base)?;
+    }
+    if matches!(plan.op, Op::Delete | Op::Move)
+        && let Some(source_folder) = plan.path.parent()
+    {
+        still_there(source_folder)?;
+    }
+    for dir in &plan.make_dirs {
+        if std::fs::symlink_metadata(dir).is_ok() {
+            if !dir.is_dir() || std::fs::canonicalize(dir).ok().as_deref() != Some(dir.as_path()) {
+                return Err(format!(
+                    "{} is not the folder that was planned (a link, or a file, is there now) — \
+                     nothing was changed",
+                    plain(dir)
+                ));
+            }
+        } else {
+            std::fs::create_dir(dir).map_err(|e| format!("making the folder {}: {e}", plain(dir)))?;
+            made.push(dir.clone());
+        }
+    }
+    if plan.op != Op::Edit {
+        let dest = plan.to.as_deref().unwrap_or(&plan.path);
+        let parent = dest.parent().ok_or_else(|| format!("{} has no folder", plan.display))?;
+        if std::fs::canonicalize(parent).ok().as_deref() != Some(parent) {
+            return Err(format!(
+                "the folder {} is not where it was planned — nothing was changed",
+                plain(parent)
+            ));
+        }
+    }
+
+    if let (Op::Edit | Op::Delete, Some(original)) = (plan.op, current) {
         std::fs::write(backups.join(format!("{id}.bak")), original)
             .map_err(|e| format!("backing up {}: {e}", plan.display))?;
     }
     let record = Record {
         path: plan.path.clone(),
         display: plan.display.clone(),
-        create: plan.create,
-        after: fingerprint(&plan.after),
+        create: plan.op == Op::Create,
+        after: match plan.op {
+            Op::Edit | Op::Create => fingerprint(&plan.after),
+            Op::Delete | Op::Move => plan.before.unwrap_or_default(),
+        },
         before: plan.before,
+        kind: Some(plan.op),
+        to: plan.to.clone(),
+        to_display: plan.to_display.clone(),
+        made_dirs: made.iter().rev().cloned().collect(),
     };
     std::fs::write(
         backups.join(format!("{id}.json")),
@@ -892,20 +1429,159 @@ pub fn apply(plan: &Plan, backups: &Path) -> Result<Applied, String> {
     )
     .map_err(|e| format!("recording the backup: {e}"))?;
 
-    write_atomic(&plan.path, &plan.after)?;
-    Ok(Applied {
-        id,
-        display: plan.display.clone(),
-        added: plan.added,
-        removed: plan.removed,
-        create: plan.create,
-    })
+    // A delete or a move acts on the file that was approved, checked once more
+    // right before acting: an editor saving it since the check above would
+    // otherwise have its newest bytes deleted, with only the older ones backed up.
+    if matches!(plan.op, Op::Delete | Op::Move) {
+        let now = std::fs::read(&plan.path).map_err(|e| format!("reading {}: {e}", plan.display))?;
+        if Some(fingerprint(&now)) != plan.before {
+            return Err(format!("{} changed just now — nothing was changed", plan.display));
+        }
+    }
+    match plan.op {
+        Op::Edit => write_atomic(&plan.path, &plan.after),
+        Op::Create => write_new(&plan.path, &plan.after),
+        Op::Delete => std::fs::remove_file(&plan.path)
+            .map_err(|e| format!("deleting {}: {e}", plan.display)),
+        Op::Move => move_new(&plan.path, plan.to.as_deref().ok_or("a move with no destination")?),
+    }
 }
 
-/// Put a file back the way it was before an edit.
+/// What is at a path, as undo cares about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum State {
+    Absent,
+    /// A regular file, and the hash of what it holds.
+    File(u64),
+    /// A folder, a link, or something that could not be read.
+    Other,
+}
+
+fn look(path: &Path) -> State {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::Absent,
+        Ok(m) if m.file_type().is_file() => fingerprint_file(path).map(State::File).unwrap_or(State::Other),
+        _ => State::Other,
+    }
+}
+
+/// Why a record cannot be undone against the state of the files.
+#[derive(Debug)]
+enum Why {
+    /// The file is there but is not what the change left.
+    Changed,
+    /// The file the change left is not there.
+    Gone,
+    /// The path a delete or a move came from is occupied again.
+    Occupied,
+    /// The folder a file would go back into is gone.
+    NoFolder,
+}
+
+#[derive(Debug)]
+struct Refusal {
+    path: PathBuf,
+    display: String,
+    why: Why,
+}
+
+impl Refusal {
+    /// As [`undo`] says it, about one change.
+    fn single(&self) -> String {
+        let d = &self.display;
+        match self.why {
+            Why::Changed => {
+                format!("{d} has changed since the edit, so undoing it would lose those changes — left as is")
+            }
+            Why::Gone => format!("{d} no longer exists, so there is nothing to undo"),
+            Why::Occupied => {
+                format!("{d} exists again, so undoing would overwrite it — left as is")
+            }
+            Why::NoFolder => format!("the folder for {d} is gone, so it cannot be put back"),
+        }
+    }
+
+    /// As [`undo_turn`] says it, about the first change in the turn to find the
+    /// file as somebody else left it.
+    fn in_turn(&self) -> String {
+        let d = &self.display;
+        match self.why {
+            Why::Changed => format!(
+                "{d} has changed since this turn's edit, so putting it back would lose those changes"
+            ),
+            Why::Gone => format!("{d} no longer exists, so there is nothing to put back"),
+            Why::Occupied => format!("{d} exists again, so putting the turn back would overwrite it"),
+            Why::NoFolder => format!("the folder for {d} is gone, so it cannot be put back"),
+        }
+    }
+}
+
+/// **The one rule for whether a record can be undone**, against whatever `look`
+/// says is at each path — the real files for [`undo`], a simulation for
+/// [`undo_turn`], so they cannot disagree.
 ///
-/// **Refuses if the file has changed since the edit** — undo restores the
-/// original by overwriting, and doing that over later work would lose it.
+/// - Edit, create: the file is what the change left.
+/// - Delete: nothing is at the path, and its folder is there to put it back in.
+/// - Move: the file at `to` is what the move left, and nothing is at the source
+///   (whose folder must still exist).
+fn check_undo(record: &Record, look: &dyn Fn(&Path) -> State) -> Result<(), Refusal> {
+    let refuse = |path: &Path, display: &str, why| {
+        Err(Refusal { path: path.to_path_buf(), display: display.to_string(), why })
+    };
+    let holds = |path: &Path, display: &str| match look(path) {
+        State::File(h) if h == record.after => Ok(()),
+        State::Absent => refuse(path, display, Why::Gone),
+        _ => refuse(path, display, Why::Changed),
+    };
+    let free = |path: &Path, display: &str| {
+        if look(path) != State::Absent {
+            return refuse(path, display, Why::Occupied);
+        }
+        // Its folder must still be the folder it was — canonical as recorded,
+        // not a junction swapped in since that would send the restore outside.
+        if !path
+            .parent()
+            .is_some_and(|p| p.is_dir() && std::fs::canonicalize(p).ok().as_deref() == Some(p))
+        {
+            return refuse(path, display, Why::NoFolder);
+        }
+        Ok(())
+    };
+    match record.op() {
+        Op::Edit | Op::Create => holds(&record.path, &record.display),
+        Op::Delete => free(&record.path, &record.display),
+        Op::Move => {
+            let to = record.to.as_deref().unwrap_or(&record.path);
+            holds(to, &record.to_shown())?;
+            free(&record.path, &record.display)
+        }
+    }
+}
+
+/// Take away the folders a change made — each only if it is empty, deepest
+/// first, stopping quietly at the first that is not. Never recursive.
+fn remove_made(record: &Record) {
+    for dir in &record.made_dirs {
+        if std::fs::remove_dir(dir).is_err() {
+            break;
+        }
+    }
+}
+
+/// Put a file back the way it was before a change.
+///
+/// **Refuses if the file has changed since** — undo restores by overwriting (an
+/// edit) or by taking a file away (a create, a move), and doing that over later work
+/// would lose it. What undo does depends on what was done:
+/// - **edit:** the original bytes go back over the file;
+/// - **create:** the file is removed, then each folder the create made, if it is
+///   empty. Two creates that shared a new folder: it belongs to the first, so
+///   undoing the second alone leaves it, and undoing them newest first (as
+///   [`undo_turn`] does) removes it;
+/// - **delete:** the bytes come back from the backup, to a path where nothing is —
+///   never over something that appeared there;
+/// - **move:** the file goes back by [`move_new`], and the folders the move made
+///   are removed if empty.
 pub fn undo(id: &str, backups: &Path) -> Result<String, String> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(format!("not an edit id: {id}"));
@@ -916,46 +1592,53 @@ pub fn undo(id: &str, backups: &Path) -> Result<String, String> {
     )
     .map_err(|e| format!("reading the backup record: {e}"))?;
 
-    let current = std::fs::read(&record.path).ok();
-    match &current {
-        Some(bytes) if fingerprint(bytes) == record.after => {}
-        Some(_) => {
-            return Err(format!(
-                "{} has changed since the edit, so undoing it would lose those changes — left as is",
-                record.display
-            ));
-        }
-        None => {
-            return Err(format!("{} no longer exists, so there is nothing to undo", record.display));
-        }
-    }
+    check_undo(&record, &look).map_err(|r| r.single())?;
 
-    if record.create {
-        std::fs::remove_file(&record.path).map_err(|e| format!("removing {}: {e}", record.display))?;
-    } else {
-        let original = std::fs::read(backups.join(format!("{id}.bak")))
-            .map_err(|e| format!("reading the backup: {e}"))?;
-        write_atomic(&record.path, &original)?;
+    let bak = backups.join(format!("{id}.bak"));
+    match record.op() {
+        Op::Edit => {
+            let original = std::fs::read(&bak).map_err(|e| format!("reading the backup: {e}"))?;
+            write_atomic(&record.path, &original)?;
+        }
+        Op::Create => {
+            std::fs::remove_file(&record.path).map_err(|e| format!("removing {}: {e}", record.display))?;
+            remove_made(&record);
+        }
+        Op::Delete => {
+            let original = std::fs::read(&bak).map_err(|e| format!("reading the backup: {e}"))?;
+            if fingerprint(&original) != record.after {
+                return Err(format!(
+                    "the backup of {} is not what was deleted, so it is not put back",
+                    record.display
+                ));
+            }
+            write_new(&record.path, &original)?;
+        }
+        Op::Move => {
+            let to = record.to.as_deref().ok_or("that move has no destination on record")?;
+            move_new(to, &record.path)?;
+            remove_made(&record);
+        }
     }
     let _ = std::fs::remove_file(&meta);
-    let _ = std::fs::remove_file(backups.join(format!("{id}.bak")));
+    let _ = std::fs::remove_file(&bak);
     Ok(record.display)
 }
 
 /// What [`undo_turn`] did. `Err` from `undo_turn` means it refused and wrote
-/// nothing; `Ok` with no `failed` means every edit is back; `Ok` with `failed`
+/// nothing; `Ok` with no `failed` means every change is back; `Ok` with `failed`
 /// means it stopped partway and the rest are still applied.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnUndo {
-    /// Edits put back, newest first.
+    /// Changes put back, newest first.
     pub restored: Vec<String>,
-    /// Edits with no record left — undone one at a time already, or never made.
+    /// Changes with no record left — undone one at a time already, or never made.
     pub already: Vec<String>,
     pub failed: Option<TurnFailure>,
 }
 
-/// The edit a turn's undo stopped at, and why.
+/// The change a turn's undo stopped at, and why.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TurnFailure {
@@ -964,18 +1647,113 @@ pub struct TurnFailure {
     pub error: String,
 }
 
-/// Put back every edit of one turn — or, if any of them cannot be put back
+/// A path as a key for a turn's simulated state, case-insensitively — NTFS treats
+/// `Src\A.rs` and `src\a.rs` as one file, so two spellings must be one entry.
+fn key(p: &Path) -> String {
+    plain(p).to_lowercase()
+}
+
+/// Walk a turn's records **newest first against the real files, rolling each back
+/// in a copy of their state**, and say what would stop it.
+///
+/// This is what [`undo`] would meet if it ran the whole turn — without running it.
+/// A record's check is the same [`check_undo`], against the simulated state; then its
+/// effect is undone in the simulation so the next record down sees the state it
+/// would see for real. That handles every mix of edits, creates, deletes and moves
+/// the way a chain of edits on one file used to be handled by hand.
+///
+/// **One problem per path.** The first record to fail on a path poisons it and every
+/// record after that touches it is skipped, so one hand edit is one line, not one
+/// per change underneath it. A failure on the path's real state reads "has changed";
+/// after an earlier rollback in the walk it reads "do not line up", because by then
+/// the disagreement is between two changes, not with the user.
+fn simulate(found: &[(u128, String, Record)], backups: &Path) -> Vec<String> {
+    use std::collections::{HashMap, HashSet};
+
+    let paths = |r: &Record| -> Vec<(PathBuf, String)> {
+        let mut v = vec![(r.path.clone(), r.display.clone())];
+        if let Some(to) = &r.to {
+            v.push((to.clone(), r.to_shown()));
+        }
+        v
+    };
+    let mut state: HashMap<String, State> = HashMap::new();
+    for (_, _, r) in found {
+        for (p, _) in paths(r) {
+            state.entry(key(&p)).or_insert_with(|| look(&p));
+        }
+    }
+    let mut rolled: HashSet<String> = HashSet::new();
+    let mut poisoned: HashSet<String> = HashSet::new();
+    let mut problems: Vec<String> = Vec::new();
+
+    for (_, id, r) in found {
+        let mine = paths(r);
+        let lines_up = |display: &str| {
+            format!("{display}'s edits in this turn do not line up, so they cannot be put back safely")
+        };
+        let problem: Option<String> = 'record: {
+            if mine.iter().any(|(p, _)| poisoned.contains(&key(p))) {
+                break 'record None;
+            }
+            let seen = |p: &Path| state.get(&key(p)).copied().unwrap_or(State::Absent);
+            if let Err(refusal) = check_undo(r, &seen) {
+                break 'record Some(if rolled.contains(&key(&refusal.path)) {
+                    lines_up(&refusal.display)
+                } else {
+                    refusal.in_turn()
+                });
+            }
+            let bak = || std::fs::read(backups.join(format!("{id}.bak")));
+            let missing = || format!("the backup of {} is missing", r.display);
+            match r.op() {
+                Op::Edit => {
+                    let Ok(bytes) = bak() else { break 'record Some(missing()) };
+                    let hash = fingerprint(&bytes);
+                    if r.before.is_some_and(|b| b != hash) {
+                        break 'record Some(lines_up(&r.display));
+                    }
+                    state.insert(key(&r.path), State::File(hash));
+                }
+                Op::Create => {
+                    state.insert(key(&r.path), State::Absent);
+                }
+                Op::Delete => {
+                    let Ok(bytes) = bak() else { break 'record Some(missing()) };
+                    if fingerprint(&bytes) != r.after {
+                        break 'record Some(lines_up(&r.display));
+                    }
+                    state.insert(key(&r.path), State::File(r.after));
+                }
+                Op::Move => {
+                    if let Some(to) = &r.to {
+                        state.insert(key(to), State::Absent);
+                    }
+                    state.insert(key(&r.path), State::File(r.after));
+                }
+            }
+            rolled.extend(mine.iter().map(|(p, _)| key(p)));
+            None
+        };
+        if let Some(p) = problem {
+            problems.push(p);
+            poisoned.extend(mine.iter().map(|(p, _)| key(p)));
+        }
+    }
+    problems
+}
+
+/// Put back every change of one turn — or, if any of them cannot be put back
 /// safely, none.
 ///
-/// Undoing newest first with [`undo`] already unwinds a chain of edits on one
-/// file, because each edit's backup is exactly the file the previous edit
-/// wrote. What a loop of `undo` cannot do is refuse *before* writing: edit three
-/// of four failing would leave the turn half undone. So this checks every chain
-/// first — the file still is what the newest edit wrote, every backup is
-/// readable and is the hash its record expects, and each backup is the output of
-/// the edit before it — collecting every problem file before refusing. Then it
-/// restores newest first across all files, each through [`undo`], whose own
-/// check guards against a change after the pre-check.
+/// Undoing newest first with [`undo`] already unwinds a chain of changes, because
+/// each one's before-state is the next one's after-state. What a loop of `undo`
+/// cannot do is refuse *before* writing: change three of four failing would leave
+/// the turn half undone. So this first [`simulate`]s the whole turn — every record's
+/// own precondition, newest first, against the real files with each rolled back in
+/// turn — collecting every problem before refusing. Then it restores newest first
+/// across all files, each through [`undo`], whose own check guards against a change
+/// after the pre-check.
 ///
 /// **Not atomic across files.** If a write fails partway, what is left is a
 /// state that really existed during the turn, the records of what remains are
@@ -1014,55 +1792,13 @@ pub fn undo_turn(ids: &[String], backups: &Path) -> Result<TurnUndo, String> {
         return Ok(TurnUndo { restored: Vec::new(), already, failed: None });
     }
 
-    // One chain per file, oldest edit first.
-    let mut chains: std::collections::BTreeMap<PathBuf, Vec<&(u128, String, Record)>> = Default::default();
-    for f in &found {
-        chains.entry(f.2.path.clone()).or_default().push(f);
-    }
-    let mut problems: Vec<String> = Vec::new();
-    for chain in chains.values_mut() {
-        chain.sort_by_key(|f| f.0);
-        let display = &chain[chain.len() - 1].2.display;
-        let newest = chain[chain.len() - 1];
-        let mismatch =
-            || format!("{display}'s edits in this turn do not line up, so they cannot be put back safely");
-        let problem: Option<String> = 'chain: {
-            match std::fs::read(&newest.2.path) {
-                Ok(bytes) if fingerprint(&bytes) == newest.2.after => {}
-                Ok(_) => {
-                    break 'chain Some(format!(
-                        "{display} has changed since this turn's edit, so putting it back would lose those changes"
-                    ));
-                }
-                Err(_) => {
-                    break 'chain Some(format!("{display} no longer exists, so there is nothing to put back"));
-                }
-            }
-            for (i, (_, id, r)) in chain.iter().enumerate() {
-                if r.create {
-                    if i != 0 {
-                        break 'chain Some(mismatch());
-                    }
-                    continue;
-                }
-                let Ok(bak) = std::fs::read(backups.join(format!("{id}.bak"))) else {
-                    break 'chain Some(format!("the backup of {display} is missing"));
-                };
-                let hash = fingerprint(&bak);
-                if r.before.is_some_and(|b| b != hash) || (i > 0 && hash != chain[i - 1].2.after) {
-                    break 'chain Some(mismatch());
-                }
-            }
-            None
-        };
-        problems.extend(problem);
-    }
+    // Newest first across every file.
+    found.sort_by_key(|f| std::cmp::Reverse(f.0));
+    let problems = simulate(&found, backups);
     if !problems.is_empty() {
         return Err(format!("Nothing was undone: {}.", problems.join("; ")));
     }
 
-    // Newest first across every file.
-    found.sort_by_key(|f| std::cmp::Reverse(f.0));
     let mut restored = Vec::new();
     for (_, id, record) in &found {
         match undo(id, backups) {
@@ -1193,7 +1929,7 @@ mod tests {
         }
         let err = ws.resolve_existing("link/secret.txt").unwrap_err();
         assert!(err.contains("outside"), "{err}");
-        let err = ws.resolve_new("link/new.txt").unwrap_err();
+        let err = ws.resolve_target("link/new.txt", "").unwrap_err();
         assert!(err.contains("outside"), "{err}");
     }
 
@@ -1290,8 +2026,8 @@ mod tests {
         }
         // Creating one is refused too — including `.cargo/config` without the
         // extension, which cargo also reads.
-        assert!(ws.resolve_new(".cargo/config").is_err());
-        assert!(ws.resolve_new("RUST-TOOLCHAIN").is_err());
+        assert!(ws.resolve_target(".cargo/config", "").is_err());
+        assert!(ws.resolve_target("RUST-TOOLCHAIN", "").is_err());
         // The files a project is made of are not caught by it.
         s.write("Cargo.toml", b"[package]\n");
         s.write("src/cargo_helpers.rs", b"\n");
@@ -1304,9 +2040,9 @@ mod tests {
         let s = Sandbox::new("stream");
         let ws = s.ws();
         s.write("notes.txt", b"x");
-        let err = ws.resolve_new(".npmrc::$DATA").unwrap_err();
+        let err = ws.resolve_target(".npmrc::$DATA", "").unwrap_err();
         assert!(err.contains("file stream"), "{err}");
-        let err = ws.resolve_new("notes.txt:hidden").unwrap_err();
+        let err = ws.resolve_target("notes.txt:hidden", "").unwrap_err();
         assert!(err.contains("file stream"), "{err}");
     }
 
@@ -1339,7 +2075,7 @@ mod tests {
         s.write("sub/.GIT/HEAD", b"ref\n");
         assert!(ws.resolve_existing(".git/config").unwrap_err().contains(".git"));
         assert!(ws.resolve_existing("sub/.GIT/HEAD").unwrap_err().contains(".git"));
-        assert!(ws.resolve_new(".git/new").unwrap_err().contains(".git"));
+        assert!(ws.resolve_target(".git/new", "").unwrap_err().contains(".git"));
     }
 
     #[test]
@@ -1369,14 +2105,24 @@ mod tests {
     }
 
     #[test]
-    fn new_files_need_an_existing_folder_inside() {
+    fn new_files_get_the_folders_they_need_inside() {
         let s = Sandbox::new("new");
         let ws = s.ws();
-        assert!(ws.resolve_new("fresh.txt").is_ok());
-        assert!(ws.resolve_new("no/such/dir/f.txt").unwrap_err().contains("does not exist"));
+        assert!(ws.resolve_target("fresh.txt", "").unwrap().new_dirs.is_empty());
+        let t = ws.resolve_target("no/such/dir/f.txt", "").unwrap();
+        let shown: Vec<String> = t.new_dirs.iter().map(|d| ws.relative(d)).collect();
+        assert_eq!(shown, ["no", "no/such", "no/such/dir"], "shallowest first");
+        assert_eq!(ws.relative(&t.path), "no/such/dir/f.txt");
+        // Only the missing part is new: an existing folder is not made again.
+        s.write("src/a.rs", b"x");
+        let t = ws.resolve_target("src/deeper/f.rs", "").unwrap();
+        assert_eq!(t.new_dirs.len(), 1);
         s.write("taken.txt", b"x");
-        assert!(ws.resolve_new("taken.txt").unwrap_err().contains("already exists"));
-        assert!(ws.resolve_new("../escape.txt").unwrap_err().contains("outside"));
+        assert!(ws.resolve_target("taken.txt", "").unwrap_err().contains("already exists"));
+        assert!(ws.resolve_target("../escape.txt", "").unwrap_err().contains("outside"));
+        // A file in the way is not a folder to make a path under.
+        let err = ws.resolve_target("taken.txt/inside/f.txt", "").unwrap_err();
+        assert!(err.contains("a file, not a folder"), "{err}");
     }
 
     // ── replace ─────────────────────────────────────────────────────────────
@@ -2091,6 +2837,615 @@ mod tests {
         match ws.locate(given) {
             Located::Outside(p) => assert_eq!(p, PathBuf::from(given)),
             other => panic!("{other:?}"),
+        }
+    }
+
+    // ── H9: resolving a path that does not exist yet ────────────────────────
+
+    /// A junction `link` → `target`, or false where junctions cannot be made.
+    fn junction(link: &Path, target: &Path) -> bool {
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(plain(link))
+            .arg(plain(target))
+            .output();
+        let ok = matches!(made, Ok(ref o) if o.status.success());
+        if !ok {
+            eprintln!("could not create a junction here; skipping");
+        }
+        ok
+    }
+
+    #[test]
+    fn dot_dot_in_the_part_that_does_not_exist_is_refused() {
+        let s = Sandbox::new("tgt-dotdot");
+        let ws = s.ws();
+        // Absolute and non-verbatim, so the `..` survives to be seen.
+        let given = format!("{}\\nope\\..\\x.txt", ws.root_display());
+        let err = ws.resolve_target(&given, "").unwrap_err();
+        assert!(err.contains(".."), "{err}");
+    }
+
+    #[test]
+    fn a_new_path_through_a_junction_out_is_refused() {
+        let s = Sandbox::new("tgt-junction");
+        let ws = s.ws();
+        let Some(_) = junction_out(&s, &ws) else { return };
+        let err = ws.resolve_target("linked/new/deeper/x.rs", "").unwrap_err();
+        assert!(err.contains("outside"), "{err}");
+    }
+
+    #[test]
+    fn a_new_path_through_a_link_that_leads_nowhere_is_refused() {
+        let s = Sandbox::new("tgt-dangling");
+        let ws = s.ws();
+        let target = s.dir.join("gone");
+        std::fs::create_dir_all(&target).unwrap();
+        if !junction(&ws.root().join("dangling"), &target) {
+            return;
+        }
+        std::fs::remove_dir(&target).unwrap();
+        let err = ws.resolve_target("dangling/x.rs", "").unwrap_err();
+        assert!(err.contains("leads nowhere"), "{err}");
+    }
+
+    #[test]
+    fn a_missing_project_folder_is_not_made_up() {
+        let s = Sandbox::new("tgt-noroot");
+        let ws = s.ws();
+        std::fs::remove_dir_all(ws.root()).unwrap();
+        let err = ws.resolve_target("src/new.rs", "").unwrap_err();
+        assert!(err.contains("outside"), "{err}");
+    }
+
+    #[test]
+    fn at_most_eight_new_folders_are_made_at_once() {
+        let s = Sandbox::new("tgt-cap");
+        let ws = s.ws();
+        let eight = "a/b/c/d/e/f/g/h/x.rs";
+        assert_eq!(ws.resolve_target(eight, "").unwrap().new_dirs.len(), 8);
+        let err = ws.resolve_target("a/b/c/d/e/f/g/h/i/x.rs", "").unwrap_err();
+        assert!(err.contains("at most 8"), "{err}");
+    }
+
+    #[test]
+    fn names_windows_cannot_handle_are_refused_in_files_and_folders() {
+        let s = Sandbox::new("tgt-names");
+        let ws = s.ws();
+        for p in ["notes.", "src /x.rs", "src/con.rs", "NUL", "src/aux/x.rs", "a/COM1.txt", "lpt9", "what?.rs", "src./x.rs"] {
+            let err = ws.resolve_target(p, "").unwrap_err();
+            assert!(err.contains("Windows"), "{p}: {err}");
+        }
+        // Lookalikes are ordinary names.
+        for p in ["console.rs", "src/auxiliary/x.rs", "com10.txt", "com0.txt", ".gitignore", "a.b.c"] {
+            assert!(ws.resolve_target(p, "").is_ok(), "{p}");
+        }
+    }
+
+    #[test]
+    fn dot_git_and_dot_cargo_are_refused_as_new_folders() {
+        let s = Sandbox::new("tgt-git");
+        let ws = s.ws();
+        assert!(ws.resolve_target(".git/hooks/pre-commit", "").unwrap_err().contains(".git"));
+        assert!(ws.resolve_target("sub/.GIT/x", "").unwrap_err().contains(".git"));
+        assert!(ws.resolve_target(".cargo/deeper/x.toml", "").is_err());
+    }
+
+    // ── H9: creating in new folders ─────────────────────────────────────────
+
+    fn create(s: &Sandbox, ws: &Workspace, rel: &str, content: &str) -> String {
+        apply(&plan_create(ws, rel, content).unwrap(), &s.backups()).unwrap().id
+    }
+
+    fn delete(s: &Sandbox, ws: &Workspace, rel: &str) -> String {
+        apply(&plan_delete(ws, rel).unwrap(), &s.backups()).unwrap().id
+    }
+
+    fn mv(s: &Sandbox, ws: &Workspace, from: &str, to: &str) -> String {
+        apply(&plan_move(ws, from, to).unwrap(), &s.backups()).unwrap().id
+    }
+
+    #[test]
+    fn a_file_in_new_folders_is_made_and_undo_takes_the_folders_away() {
+        let s = Sandbox::new("mk-undo");
+        let ws = s.ws();
+        s.write("src/main.rs", b"fn main() {}\n");
+        let plan = plan_create(&ws, "src/net/http/client.rs", "pub fn get() {}\n").unwrap();
+        assert_eq!(plan.folders, ["src/net/", "src/net/http/"]);
+        let done = apply(&plan, &s.backups()).unwrap();
+        assert_eq!(done.folders, ["src/net/", "src/net/http/"]);
+        assert!(ws.root().join("src/net/http/client.rs").exists());
+        assert_eq!(undo(&done.id, &s.backups()).unwrap(), "src/net/http/client.rs");
+        assert!(!ws.root().join("src/net").exists());
+        assert!(ws.root().join("src").exists(), "the folder that was there already stays");
+        assert!(backup_files(&s).is_empty());
+    }
+
+    #[test]
+    fn a_neighbour_in_a_made_folder_keeps_the_folder_and_undo_still_works() {
+        let s = Sandbox::new("mk-neighbour");
+        let ws = s.ws();
+        let id = create(&s, &ws, "a/b/x.rs", "x\n");
+        s.write("a/b/mine.txt", b"mine\n");
+        undo(&id, &s.backups()).unwrap();
+        assert!(!ws.root().join("a/b/x.rs").exists());
+        assert_eq!(s.read("a/b/mine.txt"), b"mine\n");
+    }
+
+    #[test]
+    fn two_creates_sharing_a_new_folder_leave_it_to_the_first() {
+        let s = Sandbox::new("mk-shared");
+        let ws = s.ws();
+        // In order: undo all newest first, and the folder goes with the first.
+        let first = create(&s, &ws, "pkg/one.rs", "1\n");
+        let second = create(&s, &ws, "pkg/two.rs", "2\n");
+        undo_turn(&[first, second], &s.backups()).unwrap();
+        assert!(!ws.root().join("pkg").exists());
+
+        // Out of order: undoing the first alone leaves the folder, and so does
+        // undoing the second afterwards, which never made it. Documented, pinned.
+        let first = create(&s, &ws, "pkg/one.rs", "1\n");
+        let second = create(&s, &ws, "pkg/two.rs", "2\n");
+        undo(&first, &s.backups()).unwrap();
+        assert!(ws.root().join("pkg/two.rs").exists());
+        undo(&second, &s.backups()).unwrap();
+        assert!(ws.root().join("pkg").exists(), "an empty folder is left behind, never removed by the wrong undo");
+    }
+
+    #[test]
+    fn a_junction_swapped_in_for_a_planned_folder_is_not_written_through() {
+        let s = Sandbox::new("mk-swap");
+        let ws = s.ws();
+        let target = s.dir.join("elsewhere");
+        std::fs::create_dir_all(&target).unwrap();
+        let plan = plan_create(&ws, "sub/x.rs", "x\n").unwrap();
+        if !junction(&ws.root().join("sub"), &target) {
+            return;
+        }
+        let err = apply(&plan, &s.backups()).unwrap_err();
+        assert!(err.contains("not the folder that was planned"), "{err}");
+        assert_eq!(std::fs::read_dir(&target).unwrap().count(), 0, "nothing was written through it");
+        assert!(backup_files(&s).is_empty());
+    }
+
+    #[test]
+    fn a_failed_apply_leaves_no_record_and_no_folder() {
+        let s = Sandbox::new("mk-fail");
+        let ws = s.ws();
+        let mut plan = plan_create(&ws, "a/b/x.rs", "x\n").unwrap();
+        // Plan only the first of its two folders, so the second is missing when the
+        // file's folder is checked — a failure after a folder has been made.
+        plan.make_dirs.truncate(1);
+        assert!(apply(&plan, &s.backups()).is_err());
+        assert!(!ws.root().join("a").exists(), "the folder this apply made is taken away again");
+        assert!(backup_files(&s).is_empty());
+    }
+
+    #[test]
+    fn a_create_never_writes_over_a_folder_that_appeared() {
+        let s = Sandbox::new("mk-folder");
+        let ws = s.ws();
+        let plan = plan_create(&ws, "x.rs", "x\n").unwrap();
+        std::fs::create_dir(ws.root().join("x.rs")).unwrap();
+        assert!(apply(&plan, &s.backups()).unwrap_err().contains("created by something else"));
+        assert!(ws.root().join("x.rs").is_dir());
+    }
+
+    #[test]
+    fn move_new_and_write_new_never_replace() {
+        let s = Sandbox::new("no-replace");
+        let a = s.write("a.txt", b"a\n");
+        let b = s.write("b.txt", b"b\n");
+        let err = move_new(&a, &b).unwrap_err();
+        assert!(err.contains("already exists"), "{err}");
+        assert_eq!((s.read("a.txt"), s.read("b.txt")), (b"a\n".to_vec(), b"b\n".to_vec()));
+        assert!(write_new(&b, b"c\n").is_err());
+        assert_eq!(s.read("b.txt"), b"b\n");
+        let names: Vec<String> = std::fs::read_dir(s.dir.join("project"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 2, "no temporary file is left behind: {names:?}");
+    }
+
+    // ── H9: deleting ────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_deleted_file_comes_back_byte_for_byte() {
+        let s = Sandbox::new("del-bytes");
+        let ws = s.ws();
+        let crlf: &[u8] = b"line one\r\nline two\r\n";
+        let bom: &[u8] = b"\xEF\xBB\xBFhello\r\n";
+        let bin: &[u8] = b"\x00\x01\xff\xfe binary \x00";
+        for (i, bytes) in [crlf, bom, bin].into_iter().enumerate() {
+            let rel = format!("f{i}.dat");
+            s.write(&rel, bytes);
+            let plan = plan_delete(&ws, &rel).unwrap();
+            assert_eq!((plan.op, plan.size, plan.after.len()), (Op::Delete, bytes.len() as u64, 0));
+            let done = apply(&plan, &s.backups()).unwrap();
+            assert!(!ws.root().join(&rel).exists());
+            assert_eq!(undo(&done.id, &s.backups()).unwrap(), rel);
+            assert_eq!(s.read(&rel), bytes);
+        }
+        assert!(backup_files(&s).is_empty());
+    }
+
+    #[test]
+    fn a_delete_refuses_a_read_only_file_a_folder_a_link_and_a_big_file() {
+        let s = Sandbox::new("del-refuse");
+        let ws = s.ws();
+        let p = s.write("locked.txt", b"x");
+        let mut perm = std::fs::metadata(&p).unwrap().permissions();
+        perm.set_readonly(true);
+        std::fs::set_permissions(&p, perm.clone()).unwrap();
+        let err = plan_delete(&ws, "locked.txt").unwrap_err();
+        assert!(err.contains("read-only"), "{err}");
+        #[allow(clippy::permissions_set_readonly_false)]
+        perm.set_readonly(false);
+        std::fs::set_permissions(&p, perm).unwrap();
+
+        std::fs::create_dir_all(ws.root().join("src")).unwrap();
+        assert!(plan_delete(&ws, "src").unwrap_err().contains("folder"));
+
+        s.write("big.bin", &vec![0u8; MAX_DELETE_BYTES as usize + 1]);
+        assert!(plan_delete(&ws, "big.bin").unwrap_err().contains("byte limit"));
+
+        assert!(plan_delete(&ws, "nope.txt").unwrap_err().contains("does not exist"));
+        assert!(plan_delete(&ws, ".git/config").is_err());
+        assert!(plan_delete(&ws, "../outside.txt").is_err());
+    }
+
+    #[test]
+    fn a_file_reached_through_a_link_is_never_deleted_or_moved() {
+        let s = Sandbox::new("del-link");
+        let ws = s.ws();
+        let target = ws.root().join("real");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("a.txt"), b"x").unwrap();
+        if !junction(&ws.root().join("alias"), &target) {
+            return;
+        }
+        let err = plan_delete(&ws, "alias/a.txt").unwrap_err();
+        assert!(err.contains("reached through a link") && err.contains("real/a.txt"), "{err}");
+        assert!(plan_move(&ws, "alias/a.txt", "b.txt").unwrap_err().contains("link"));
+        assert!(plan_delete(&ws, "real/a.txt").is_ok());
+        assert!(plan_delete(&ws, "alias").is_err(), "the link itself is a folder");
+    }
+
+    #[test]
+    fn undoing_a_delete_never_overwrites_what_is_there_now() {
+        let s = Sandbox::new("del-occupied");
+        let ws = s.ws();
+        s.write("a.txt", b"original\n");
+        let id = delete(&s, &ws, "a.txt");
+        s.write("a.txt", b"someone wrote this\n");
+        let err = undo(&id, &s.backups()).unwrap_err();
+        assert!(err.contains("exists again"), "{err}");
+        assert_eq!(s.read("a.txt"), b"someone wrote this\n");
+        assert!(s.backups().join(format!("{id}.bak")).exists(), "the backup is kept for a later try");
+    }
+
+    #[test]
+    fn undoing_a_delete_needs_its_folder() {
+        let s = Sandbox::new("del-nofolder");
+        let ws = s.ws();
+        s.write("old/a.txt", b"x\n");
+        let id = delete(&s, &ws, "old/a.txt");
+        std::fs::remove_dir(ws.root().join("old")).unwrap();
+        let err = undo(&id, &s.backups()).unwrap_err();
+        assert!(err.contains("folder") && err.contains("gone"), "{err}");
+        assert!(!ws.root().join("old").exists(), "no folder is made up for it");
+    }
+
+    #[test]
+    fn a_delete_of_a_file_that_changed_since_it_was_shown_is_not_done() {
+        let s = Sandbox::new("del-stale");
+        let ws = s.ws();
+        s.write("a.txt", b"one\n");
+        let plan = plan_delete(&ws, "a.txt").unwrap();
+        s.write("a.txt", b"one\nand more\n");
+        let err = apply(&plan, &s.backups()).unwrap_err();
+        assert!(err.contains("changed after this delete was shown"), "{err}");
+        assert_eq!(s.read("a.txt"), b"one\nand more\n");
+        assert!(backup_files(&s).is_empty());
+    }
+
+    // ── H9: moving ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn a_move_goes_to_new_folders_and_undo_brings_it_back_and_tidies() {
+        let s = Sandbox::new("mv-undo");
+        let ws = s.ws();
+        let bytes: &[u8] = b"\xEF\xBB\xBFpub fn f() {}\r\n";
+        s.write("src/util.rs", bytes);
+        let plan = plan_move(&ws, "src/util.rs", "src/helpers/util.rs").unwrap();
+        assert_eq!((plan.display.as_str(), plan.to_display.as_deref()), ("src/util.rs", Some("src/helpers/util.rs")));
+        assert_eq!(plan.folders, ["src/helpers/"]);
+        let done = apply(&plan, &s.backups()).unwrap();
+        assert_eq!((done.op, done.to.as_deref()), (Op::Move, Some("src/helpers/util.rs")));
+        assert!(!ws.root().join("src/util.rs").exists());
+        assert_eq!(s.read("src/helpers/util.rs"), bytes);
+        undo(&done.id, &s.backups()).unwrap();
+        assert_eq!(s.read("src/util.rs"), bytes);
+        assert!(!ws.root().join("src/helpers").exists());
+        assert!(backup_files(&s).is_empty());
+    }
+
+    #[test]
+    fn a_move_onto_an_existing_file_or_folder_is_refused_with_advice() {
+        let s = Sandbox::new("mv-exists");
+        let ws = s.ws();
+        s.write("a.rs", b"a\n");
+        s.write("b.rs", b"b\n");
+        s.write("lib/x.rs", b"x\n");
+        let err = plan_move(&ws, "a.rs", "b.rs").unwrap_err();
+        assert!(err.contains("already exists") && err.contains("nothing is overwritten"), "{err}");
+        let err = plan_move(&ws, "a.rs", "lib").unwrap_err();
+        assert!(err.contains("existing folder") && err.contains("lib/a.rs"), "{err}");
+        let err = plan_move(&ws, "a.rs", "lib/").unwrap_err();
+        assert!(err.contains("lib/a.rs"), "{err}");
+        assert_eq!((s.read("a.rs"), s.read("b.rs")), (b"a\n".to_vec(), b"b\n".to_vec()));
+    }
+
+    #[test]
+    fn a_destination_that_appears_after_planning_is_never_overwritten() {
+        let s = Sandbox::new("mv-race");
+        let ws = s.ws();
+        s.write("a.rs", b"a\n");
+        let plan = plan_move(&ws, "a.rs", "sub/b.rs").unwrap();
+        s.write("sub/b.rs", b"theirs\n");
+        let err = apply(&plan, &s.backups()).unwrap_err();
+        assert!(err.contains("created by something else"), "{err}");
+        assert_eq!((s.read("a.rs"), s.read("sub/b.rs")), (b"a\n".to_vec(), b"theirs\n".to_vec()));
+        assert!(backup_files(&s).is_empty());
+    }
+
+    #[test]
+    fn the_rename_itself_refuses_a_destination_that_appears_in_the_last_moment() {
+        // The check in `apply` and the rename are two steps; the second must hold on
+        // its own. A plan is edited to skip the first, as a race would.
+        let s = Sandbox::new("mv-raw");
+        let ws = s.ws();
+        s.write("a.rs", b"a\n");
+        let plan = plan_move(&ws, "a.rs", "b.rs").unwrap();
+        s.write("b.rs", b"theirs\n");
+        assert!(move_new(&plan.path, plan.to.as_deref().unwrap()).is_err());
+        assert_eq!((s.read("a.rs"), s.read("b.rs")), (b"a\n".to_vec(), b"theirs\n".to_vec()));
+    }
+
+    #[test]
+    fn a_case_only_rename_is_refused_as_the_same_file() {
+        let s = Sandbox::new("mv-case");
+        let ws = s.ws();
+        s.write("util.rs", b"x\n");
+        let err = plan_move(&ws, "util.rs", "Util.rs").unwrap_err();
+        assert!(err.contains("same file"), "{err}");
+        assert!(plan_move(&ws, "util.rs", "./util.rs").unwrap_err().contains("same file"));
+    }
+
+    #[test]
+    fn undoing_a_move_refuses_if_either_end_has_changed() {
+        let s = Sandbox::new("mv-changed");
+        let ws = s.ws();
+        s.write("a.txt", b"one\n");
+        let id = mv(&s, &ws, "a.txt", "b.txt");
+        s.write("b.txt", b"one\nedited since\n");
+        let err = undo(&id, &s.backups()).unwrap_err();
+        assert!(err.contains("b.txt has changed"), "{err}");
+        assert_eq!(s.read("b.txt"), b"one\nedited since\n");
+
+        s.write("b.txt", b"one\n");
+        s.write("a.txt", b"a new a\n");
+        let err = undo(&id, &s.backups()).unwrap_err();
+        assert!(err.contains("a.txt exists again"), "{err}");
+        assert_eq!((s.read("a.txt"), s.read("b.txt")), (b"a new a\n".to_vec(), b"one\n".to_vec()));
+        std::fs::remove_file(ws.root().join("a.txt")).unwrap();
+        undo(&id, &s.backups()).unwrap();
+        assert_eq!(s.read("a.txt"), b"one\n");
+    }
+
+    #[test]
+    fn a_move_refuses_a_folder_a_missing_file_and_the_wrong_places() {
+        let s = Sandbox::new("mv-refuse");
+        let ws = s.ws();
+        s.write("src/a.rs", b"x\n");
+        assert!(plan_move(&ws, "src", "elsewhere").unwrap_err().contains("folder"));
+        assert!(plan_move(&ws, "nope.rs", "x.rs").unwrap_err().contains("does not exist"));
+        assert!(plan_move(&ws, "src/a.rs", "../out.rs").unwrap_err().contains("outside"));
+        assert!(plan_move(&ws, "src/a.rs", ".git/a.rs").unwrap_err().contains(".git"));
+        assert!(plan_move(&ws, "src/a.rs", "con.rs").unwrap_err().contains("Windows"));
+        assert!(plan_move(&ws, ".git/config", "x").is_err());
+        assert!(plan_move(&ws, "src/a.rs", "src/a.rs/inside.rs").unwrap_err().contains("not a folder"));
+    }
+
+    // ── H9: a turn of deletes and moves ─────────────────────────────────────
+
+    #[test]
+    fn a_create_then_a_delete_of_it_is_undone_as_nothing_having_happened() {
+        let s = Sandbox::new("t-create-delete");
+        let ws = s.ws();
+        let made = create(&s, &ws, "x/new.txt", "hi\n");
+        let gone = delete(&s, &ws, "x/new.txt");
+        let out = undo_turn(&[made, gone], &s.backups()).unwrap();
+        assert_eq!(out.restored.len(), 2);
+        assert!(!ws.root().join("x").exists());
+        assert!(backup_files(&s).is_empty());
+    }
+
+    #[test]
+    fn a_delete_then_a_create_of_the_same_path_puts_the_original_back() {
+        let s = Sandbox::new("t-delete-create");
+        let ws = s.ws();
+        s.write("a.txt", b"original\r\n");
+        let gone = delete(&s, &ws, "a.txt");
+        let made = create(&s, &ws, "a.txt", "replacement\n");
+        undo_turn(&[gone, made], &s.backups()).unwrap();
+        assert_eq!(s.read("a.txt"), b"original\r\n");
+    }
+
+    #[test]
+    fn a_move_then_an_edit_of_the_moved_file_is_put_back() {
+        let s = Sandbox::new("t-move-edit");
+        let ws = s.ws();
+        s.write("a.txt", b"one two\n");
+        let moved = mv(&s, &ws, "a.txt", "sub/b.txt");
+        let edited = replace(&s, &ws, "sub/b.txt", "two", "2");
+        undo_turn(&[moved, edited], &s.backups()).unwrap();
+        assert_eq!(s.read("a.txt"), b"one two\n");
+        assert!(!ws.root().join("sub").exists());
+    }
+
+    #[test]
+    fn an_edit_then_a_move_is_put_back() {
+        let s = Sandbox::new("t-edit-move");
+        let ws = s.ws();
+        s.write("a.txt", b"one two\n");
+        let edited = replace(&s, &ws, "a.txt", "one", "1");
+        let moved = mv(&s, &ws, "a.txt", "b.txt");
+        undo_turn(&[edited, moved], &s.backups()).unwrap();
+        assert_eq!(s.read("a.txt"), b"one two\n");
+        assert!(!ws.root().join("b.txt").exists());
+    }
+
+    #[test]
+    fn a_move_of_a_move_is_walked_back() {
+        let s = Sandbox::new("t-move-move");
+        let ws = s.ws();
+        s.write("a.txt", b"x\n");
+        let one = mv(&s, &ws, "a.txt", "b.txt");
+        let two = mv(&s, &ws, "b.txt", "deep/er/c.txt");
+        undo_turn(&[two, one], &s.backups()).unwrap();
+        assert_eq!(s.read("a.txt"), b"x\n");
+        assert!(!ws.root().join("b.txt").exists() && !ws.root().join("deep").exists());
+    }
+
+    #[test]
+    fn a_delete_and_then_a_move_onto_that_path_is_put_back() {
+        let s = Sandbox::new("t-delete-move");
+        let ws = s.ws();
+        s.write("old.rs", b"the old one\n");
+        s.write("new.rs", b"the new one\n");
+        let gone = delete(&s, &ws, "old.rs");
+        let moved = mv(&s, &ws, "new.rs", "old.rs");
+        undo_turn(&[gone, moved], &s.backups()).unwrap();
+        assert_eq!((s.read("old.rs"), s.read("new.rs")), (b"the old one\n".to_vec(), b"the new one\n".to_vec()));
+    }
+
+    #[test]
+    fn something_put_on_the_moves_source_since_refuses_the_whole_turn() {
+        let s = Sandbox::new("t-on-top");
+        let ws = s.ws();
+        s.write("a.txt", b"one\n");
+        s.write("c.txt", b"c\n");
+        let edited = replace(&s, &ws, "c.txt", "c", "C");
+        let moved = mv(&s, &ws, "a.txt", "b.txt");
+        s.write("a.txt", b"somebody else's\n");
+        let err = undo_turn(&[edited, moved], &s.backups()).unwrap_err();
+        assert!(err.starts_with("Nothing was undone:") && err.contains("a.txt exists again"), "{err}");
+        assert_eq!((s.read("c.txt"), s.read("a.txt"), s.read("b.txt")), (b"C\n".to_vec(), b"somebody else's\n".to_vec(), b"one\n".to_vec()));
+    }
+
+    #[test]
+    fn two_spellings_of_one_path_are_one_file_in_the_simulation() {
+        // Delete `a.txt`, then create `A.txt`: NTFS has one file, the records have
+        // two spellings, and the walk must see one.
+        let s = Sandbox::new("t-case");
+        let ws = s.ws();
+        s.write("a.txt", b"original\n");
+        let gone = delete(&s, &ws, "a.txt");
+        let made = create(&s, &ws, "A.txt", "replacement\n");
+        undo_turn(&[gone, made], &s.backups()).unwrap();
+        assert_eq!(s.read("a.txt"), b"original\n");
+        assert!(backup_files(&s).is_empty());
+    }
+
+    #[test]
+    fn one_hand_change_is_one_problem_however_many_changes_sit_on_it() {
+        let s = Sandbox::new("t-one-problem");
+        let ws = s.ws();
+        s.write("a.txt", b"one two three\n");
+        let first = replace(&s, &ws, "a.txt", "one", "1");
+        let second = replace(&s, &ws, "a.txt", "two", "2");
+        let third = mv(&s, &ws, "a.txt", "b.txt");
+        s.write("b.txt", b"mine\n");
+        let err = undo_turn(&[first, second, third], &s.backups()).unwrap_err();
+        assert_eq!(err.matches("b.txt").count(), 1, "{err}");
+        assert!(!err.contains("a.txt"), "{err}");
+    }
+
+    #[test]
+    fn a_backup_gone_missing_stops_a_turn_with_a_delete() {
+        let s = Sandbox::new("t-delete-nobak");
+        let ws = s.ws();
+        s.write("a.txt", b"x\n");
+        let gone = delete(&s, &ws, "a.txt");
+        std::fs::remove_file(s.backups().join(format!("{gone}.bak"))).unwrap();
+        let err = undo_turn(&[gone], &s.backups()).unwrap_err();
+        assert!(err.contains("backup of a.txt is missing"), "{err}");
+    }
+
+    #[test]
+    fn a_turn_that_fails_the_simulation_touches_nothing_even_with_a_move_in_it() {
+        let s = Sandbox::new("t-untouched");
+        let ws = s.ws();
+        s.write("a.txt", b"a\n");
+        s.write("b.txt", b"b\n");
+        let moved = mv(&s, &ws, "a.txt", "sub/a.txt");
+        let edited = replace(&s, &ws, "b.txt", "b", "B");
+        s.write("b.txt", b"mine\n");
+        let before = backup_files(&s);
+        assert!(undo_turn(&[moved, edited], &s.backups()).is_err());
+        assert!(ws.root().join("sub/a.txt").exists() && !ws.root().join("a.txt").exists());
+        let mut after = backup_files(&s);
+        let mut before = before;
+        before.sort();
+        after.sort();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn records_written_before_h9_still_load_and_undo() {
+        let s = Sandbox::new("t-old-records");
+        let ws = s.ws();
+        let p = s.write("new.txt", b"hi\n");
+        let id = new_id();
+        std::fs::create_dir_all(s.backups()).unwrap();
+        let old = serde_json::json!({
+            "path": p, "display": "new.txt", "create": true, "after": fingerprint(b"hi\n")
+        });
+        std::fs::write(s.backups().join(format!("{id}.json")), old.to_string()).unwrap();
+        let r: Record = serde_json::from_slice(&std::fs::read(s.backups().join(format!("{id}.json"))).unwrap()).unwrap();
+        assert_eq!((r.op(), r.to, r.made_dirs.len()), (Op::Create, None, 0));
+        undo(&id, &s.backups()).unwrap();
+        assert!(!ws.root().join("new.txt").exists());
+
+        let id = new_id();
+        s.write("a.txt", b"changed\n");
+        std::fs::write(s.backups().join(format!("{id}.bak")), b"original\n").unwrap();
+        let old = serde_json::json!({
+            "path": ws.root().join("a.txt"), "display": "a.txt", "create": false, "after": fingerprint(b"changed\n")
+        });
+        std::fs::write(s.backups().join(format!("{id}.json")), old.to_string()).unwrap();
+        undo_turn(std::slice::from_ref(&id), &s.backups()).unwrap();
+        assert_eq!(s.read("a.txt"), b"original\n");
+    }
+
+    #[test]
+    fn an_old_build_cannot_misread_a_delete_or_a_move_record() {
+        // What H8's undo does with these records: it reads `path`, `create` and
+        // `after` only. Neither has `create: true`, and `path` is not where the
+        // file now is, so it stops at "no longer exists".
+        let s = Sandbox::new("t-forward");
+        let ws = s.ws();
+        s.write("a.txt", b"x\n");
+        s.write("m.txt", b"y\n");
+        let gone = delete(&s, &ws, "a.txt");
+        let moved = mv(&s, &ws, "m.txt", "n.txt");
+        for id in [gone, moved] {
+            let v: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(s.backups().join(format!("{id}.json"))).unwrap()).unwrap();
+            assert_eq!(v["create"], false);
+            assert!(!Path::new(v["path"].as_str().unwrap()).exists());
         }
     }
 }

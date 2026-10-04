@@ -216,7 +216,42 @@ need a file past 64 KB, which `practice` does not have, so choose **odin itself*
 
 ---
 
-*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. H9 onward add
+## 8 — Moving, deleting, new folders (H9)
+
+Unit tests in `odin_core::edit` cover every combination (a move then an edit, a create then a
+delete, a delete then a move onto the same path, case-variant paths, a junction swapped in), and
+`node tools/e2e/mimir-ops.mjs` drives a create, a delete, a move, the refusals and Undo all against
+a throwaway project. What they cannot judge is how the cards read and whether a delete looks like
+what it is. Use `practice` (`node tools/practice.mjs`) as the folder, and **Deny** anything not named
+below unless the step says to apply it.
+
+- [ ] **A create in new folders.** Ask `Create src/net/http.rs with a function status_line(code:
+      u16) -> String`. **Expect:** a card headed **Create file** that says *Makes the folders:
+      src/net/, …* above the diff. Apply it, then **Undo**. **Expect:** the file and the folders it
+      made are gone, and the card says *Undone — the file is removed.*
+- [ ] **A delete.** Ask `Delete the file notes.txt` (any small file). **Expect:** a card headed
+      **Delete file** with a trash icon and the file's size, a button that says **Delete file**,
+      and the line *Nothing has been deleted yet*. Apply it, then **Undo**. **Expect:** the file is
+      back exactly as it was (open it), and the card says *Undone — the file is back.*
+- [ ] **A move.** Ask `Move notes.txt to archive/notes.txt`. **Expect:** a card headed **Move
+      file** showing *notes.txt → archive/notes.txt*, the folders it will make, and a note that
+      references are not updated. Apply it, then **Undo**. **Expect:** it is back, and `archive` is
+      gone.
+- [ ] **Not a rewrite.** Ask `Rewrite notes.txt so it says hello`. **Expect:** an **Edit file**
+      card with a diff — not a delete followed by a create.
+- [ ] **A refused place.** Ask `Delete .git/config`, then `Move notes.txt to ../elsewhere.txt`.
+      **Expect:** no card at all — a quiet line that says the model was told, with the reason in
+      its details.
+- [ ] **Undo all over a mixed turn.** Ask for an edit and a move in one message. **Expect:** *2
+      changes in this turn* and **Undo all**; the first click asks *Undo 2 changes?*, the second
+      puts everything back. Then repeat it, change one of the files by hand first, and **Expect:** a
+      refusal that names it and nothing undone.
+- [ ] **Reopen the conversation.** **Expect:** the delete and move cards still read *Deleted* and
+      *Moved* (or *Undone*), and a move still shows *from → to*.
+
+---
+
+*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. H10 onward add
 sections here as they are built.*
 
 ## After this

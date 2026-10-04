@@ -8,6 +8,7 @@
 //   ?preview          a finished exchange, ending on a tool call awaiting approval
 //   ?preview=stream   the same thread, with an answer still being waited on
 //   ?preview=edit     the file-editing flow: an undoable edit, a rejection, a diff to review
+//   ?preview=ops      moving, deleting and new folders: a create in new folders, a delete and a move to review, a refused delete, and an Undo-all line over a turn of them
 //   ?preview=undo     taking turns back: three edits ending in an answer, a stopped turn with two, one already half undone, one still running
 //   ?preview=check    the check flow: a failed build, the fix, and a check awaiting approval
 //   ?preview=find     finding code: a listing, a search and a read that ran without asking, and a read outside the folder awaiting approval
@@ -356,6 +357,39 @@ export function previewThread(mode: string): Preview {
       stats: "",
       convoId: "p4",
       spent: 3_214,
+    };
+  }
+
+  // ?preview=ops — H9: a create that made folders, a delete and a move that ran
+  // (each undoable), a delete refused before any card, an undone move, and a
+  // delete and a move awaiting review.
+  if (mode === "ops") {
+    const made = (path: string, folders: string[], undo: string): Entry => ({
+      kind: "tool", name: "create_file", path, state: "ran", folders, undo,
+      diff: { create: true, added: 3, removed: 0, hunks: [{ lines: [
+        { tag: "+", text: "pub fn status_line(code: u16) -> String {", old: null, new: 1 },
+        { tag: "+", text: "    format!(\"HTTP/1.1 {code}\")", old: null, new: 2 },
+        { tag: "+", text: "}", old: null, new: 3 },
+      ] }] },
+      result: `Created ${path} (3 lines). Made the folders ${folders.join(", ")}.`,
+    });
+    return {
+      entries: [
+        { kind: "turn", role: "user", content: "Split the http code out of main into src/net/http.rs, rename util.rs to helpers.rs and remove the legacy module." },
+        made("src/net/http.rs", ["src/net/"], "38f3a1"),
+        { kind: "tool", name: "move_file", path: "src/util.rs", to: "src/helpers.rs", size: 412, state: "ran", undo: "38f3a2", result: "Moved src/util.rs to src/helpers.rs." },
+        { kind: "tool", name: "delete_file", path: "src/legacy.rs", size: 96, state: "ran", undo: "38f3a3", result: "Deleted src/legacy.rs." },
+        { kind: "tool", name: "delete_file", path: ".git/config", state: "rejected", error: "error: .git/config is inside .git, which is never edited" },
+        { kind: "tool", name: "move_file", path: "src/config.rs", to: "src/settings/config.rs", size: 233, folders: ["src/settings/"], state: "undone", undo: "38f3a4", result: "Moved src/config.rs to src/settings/config.rs. Made the folder src/settings/." },
+        { kind: "turn", role: "assistant", content: "Done — I made `src/net/http.rs`, renamed `util.rs` to `helpers.rs` and removed `legacy.rs`. I did not move `config.rs`: you undid that.", model: "qwen3-vl:8b-instruct-q4_K_M" },
+        { kind: "turn", role: "user", content: "Now delete the old scripts and move the tests into a new folder." },
+        { kind: "tool", name: "delete_file", path: "scripts/old.sh", size: 2_048, state: "pending" },
+        { kind: "tool", name: "move_file", path: "src/tests.rs", to: "src/tests/mod.rs", size: 5_300, folders: ["src/tests/"], state: "pending" },
+      ],
+      status: "",
+      stats: "",
+      convoId: "p4",
+      spent: 3_900,
     };
   }
 

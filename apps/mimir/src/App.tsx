@@ -100,8 +100,16 @@ export type Entry =
       /** The diff you approve, for an edit. Computed by the same plan that is
        *  written, so it cannot disagree with what lands on disk. */
       diff?: DiffView;
-      /** Handle for Undo, once an edit is written. */
+      /** Handle for Undo, once a change is made: an edit, a create, a delete or a
+       *  move (H9). */
       undo?: string;
+      /** For a move: where the file went, relative to the project folder, as Rust
+       *  resolved it. */
+      to?: string;
+      /** For a create or a move: the folders it made, each with a trailing slash. */
+      folders?: string[];
+      /** For a delete or a move: the file's size in bytes. */
+      size?: number;
       /** Ran without asking: a read, listing or search inside the project folder
        *  (H5). Saved with the thread, so reopening it still says nothing was
        *  approved by hand. Absent on a call you allowed, and on threads saved
@@ -122,12 +130,15 @@ type Folder = { path: string; name: string; check?: string | null };
  *  five rounds, one more than G6's old bound of four allowed. */
 const MAX_ROUNDS = 10;
 
-const isEdit = (name: string) => name === "edit_file" || name === "create_file";
+/** A call that changes the project and can be undone: an edit, a create, a delete
+ *  or a move. (Called isEdit until H9 added the last two.) */
+const isChange = (name: string) =>
+  name === "edit_file" || name === "create_file" || name === "delete_file" || name === "move_file";
 
 /** One turn as the Undo-all line sees it: from your message to just before the
  *  next one. */
 export type TurnGroup = {
-  /** Undo handles of the edits and creates that ran and are still applied, in
+  /** Undo handles of the changes (edits, creates, deletes, moves) that ran and are still applied, in
    *  the order they were made. Denied, rejected, failed, stopped, auto-run and
    *  already-undone cards have none to offer. */
   ids: string[];
@@ -152,7 +163,7 @@ export function turnsOf(all: Entry[]): TurnGroup[] {
     g.end = i;
     if (e.kind !== "tool") return;
     if (e.state === "pending" || e.state === "running") g.busy = true;
-    else if (isEdit(e.name) && e.state === "ran" && e.undo) g.ids.push(e.undo);
+    else if (isChange(e.name) && e.state === "ran" && e.undo) g.ids.push(e.undo);
   });
   return out;
 }
@@ -170,12 +181,14 @@ type TurnUndo = { restored: string[]; already: string[]; failed: { id: string; d
 
 /** A second click this soon after the first is a habit, not an answer. */
 const ARM_MIN_MS = 400;
-/** The "Undo N edits?" question lapses after this long. */
+/** The "Undo N changes?" question lapses after this long. */
 const ARM_MAX_MS = 4000;
 
 /** What the model is told when you say no, in terms of what it asked for. */
 function refusalFor(name: string, path: string): string {
-  if (isEdit(name)) return `The user declined this change to ${path}. Nothing was written.`;
+  if (name === "delete_file") return `The user declined to delete ${path}. Nothing was deleted.`;
+  if (name === "move_file") return `The user declined to move ${path}. Nothing was moved.`;
+  if (isChange(name)) return `The user declined this change to ${path}. Nothing was written.`;
   if (name === "run_check") return `The user declined to run \`${path}\`. Nothing was run.`;
   if (name === "search" || name === "list_files") return `The user declined to let you ${name === "search" ? "search for" : "list"} ${path}.`;
   return `The user declined to let you read ${path}.`;
@@ -196,7 +209,9 @@ function replayArgs(e: Extract<Entry, { kind: "tool" }>): Record<string, unknown
       ...(e.range?.end != null ? { end_line: e.range.end } : {}),
     };
   }
-  return isEdit(e.name) || !e.args ? { path: e.path } : e.args;
+  // A move is replayed as the paths Rust normalised, not the model's spelling.
+  if (e.name === "move_file") return { path: e.path, ...(e.to ? { to: e.to } : {}) };
+  return isChange(e.name) || !e.args ? { path: e.path } : e.args;
 }
 
 /**
@@ -331,6 +346,9 @@ type ToolReply = (
         diff?: DiffView;
         range?: LineRange;
         changedBuildFiles?: string[];
+        to?: string;
+        folders?: string[];
+        size?: number;
       };
       rawCall: Record<string, unknown>;
     }
@@ -661,12 +679,15 @@ function App() {
                     name: e.name,
                     arguments: {
                       path: e.path,
-                      ...(e.args && !isEdit(e.name) ? { args: e.args } : {}),
+                      ...(e.args && !isChange(e.name) ? { args: e.args } : {}),
                       ...(e.auto ? { auto: true } : {}),
                       ...(e.ok === false ? { ok: false } : {}),
                       ...(e.range ? { range: e.range } : {}),
                       ...(e.diff ? { diff: e.diff } : {}),
                       ...(e.undo ? { undo: e.undo } : {}),
+                      ...(e.to ? { to: e.to } : {}),
+                      ...(e.folders?.length ? { folders: e.folders } : {}),
+                      ...(e.size != null ? { size: e.size } : {}),
                       ...(e.state === "undone" ? { undone: true } : {}),
                     },
                   },
@@ -761,6 +782,9 @@ function App() {
                     undo?: string;
                     undone?: boolean;
                     auto?: boolean;
+                    to?: string;
+                    folders?: string[];
+                    size?: number;
                   };
                 };
               };
@@ -776,6 +800,9 @@ function App() {
                 ...(args.ok === false ? { ok: false } : {}),
                 ...(args.diff ? { diff: args.diff } : {}),
                 ...(args.undo ? { undo: args.undo } : {}),
+                ...(args.to ? { to: args.to } : {}),
+                ...(args.folders?.length ? { folders: args.folders } : {}),
+                ...(args.size != null ? { size: args.size } : {}),
                 ...(args.auto ? { auto: true } : {}),
               };
             }
@@ -942,7 +969,16 @@ function App() {
           });
           // The model is told an edit was undone, or it will reason from a file
           // that is no longer what it thinks.
-          const note = e.state === "undone" ? " The user has since undone this edit, so the file is back as it was." : "";
+          const note =
+            e.state !== "undone"
+              ? ""
+              : e.name === "delete_file"
+                ? " The user has since undone this delete, so the file is back."
+                : e.name === "move_file"
+                  ? " The user has since undone this move, so the file is moved back."
+                  : e.name === "create_file"
+                    ? " The user has since undone this create, so the file is removed."
+                    : " The user has since undone this edit, so the file is back as it was.";
           out.push({ role: "tool", content: (e.result ?? "") + note, tool_name: e.name });
           continue;
         }
@@ -1095,7 +1131,7 @@ function App() {
         // edit, the command for a check — and stop. Nothing is read, written or
         // run until it is approved, and what is approved is what runs: the
         // ticket carries the whole plan.
-        const { name, path, token, diff, range, changedBuildFiles } = out.call;
+        const { name, path, token, diff, range, changedBuildFiles, to, folders, size } = out.call;
         // Always an object: a call with no arguments at all (a check, say) is
         // replayed as `{}`, not rebuilt as `{path}`.
         const args =
@@ -1109,6 +1145,9 @@ function App() {
           ...(diff ? { diff } : {}),
           ...(range ? { range } : {}),
           ...(changedBuildFiles?.length ? { changedBuildFiles } : {}),
+          ...(to ? { to } : {}),
+          ...(folders?.length ? { folders } : {}),
+          ...(size != null ? { size } : {}),
         };
         // The card is updated by its position, not as "the last entry": a
         // result that lands after Stop can find a new request's turns after it.
@@ -1160,7 +1199,7 @@ function App() {
         // An edit refused at the last moment — the file changed after the diff
         // was shown — is failed: nothing was written. A check that finds errors
         // is not: it ran, and `ok` says it did not pass.
-        const failed = isEdit(name) && !ran.ok;
+        const failed = isChange(name) && !ran.ok;
         const patch: Patch = {
           state: ran.stopped ? "stopped" : failed ? "failed" : "ran",
           ok: ran.ok,
@@ -1450,7 +1489,7 @@ function App() {
         return {
           done,
           note:
-            `Undid ${done.length} of ${ids.length} edits, then stopped at ${out.failed.display}: ` +
+            `Undid ${done.length} of ${ids.length} changes, then stopped at ${out.failed.display}: ` +
             `${out.failed.error}. The other ${left} ${left === 1 ? "is" : "are"} still applied — Undo all again ` +
             `once that's fixed, or undo them one at a time, newest first.`,
         };
@@ -1536,20 +1575,20 @@ function App() {
 
   const turns = turnsOf(entries);
   const turnEnds = new Map(turns.map((t) => [t.end, t]));
-  /** The Undo-all line, after a turn's last entry. Two or more edits still
+  /** The Undo-all line, after a turn's last entry. Two or more changes still
    *  applied, nothing waiting on you, and not the turn being streamed now. */
   const turnLine = (i: number) => {
     const t = turnEnds.get(i);
     if (!t || t.busy || t.ids.length < 2) return null;
     if (streaming && t === turns[turns.length - 1]) return null;
     const key = t.ids.join(",");
-    const label = undoing === key ? "Undoing…" : armed === key ? `Undo ${t.ids.length} edits?` : "Undo all";
+    const label = undoing === key ? "Undoing…" : armed === key ? `Undo ${t.ids.length} changes?` : "Undo all";
     // The count is quiet text and the action a button that looks like the
     // cards' own Undo: a borderless line read as a caption, not as something
     // to press. The text never changes, so the button's edge does not move.
     return (
       <div className="turn-undo" aria-live="polite">
-        <span className="turn-undo-count">{t.ids.length} edits in this turn</span>
+        <span className="turn-undo-count">{t.ids.length} changes in this turn</span>
         <button
           className={"btn ghost xs" + (armed === key ? " armed" : "")}
           onClick={() => askUndoTurn(t.ids)}

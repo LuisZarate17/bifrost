@@ -198,7 +198,7 @@ function cleanBackups() {
     if (backupsBefore.has(f) || !f.endsWith(".json")) continue;
     let record;
     try { record = JSON.parse(fs.readFileSync(path.join(BACKUPS, f), "utf8")); } catch { continue; }
-    if (!mine(record.path)) continue;
+    if (!mine(record.path) && !mine(record.to)) continue;
     const id = f.slice(0, -".json".length);
     fs.rmSync(path.join(BACKUPS, f), { force: true });
     fs.rmSync(path.join(BACKUPS, `${id}.bak`), { force: true });
@@ -323,12 +323,12 @@ try {
     const unchanged = () => fs.readFileSync(configPath).equals(edited.config) && fs.readFileSync(mainPath).equals(edited.main);
     const resting = "Undo all";
 
-    check("the turn shows how many edits it made", (await count()) === `${applied} edits in this turn`, await count());
+    check("the turn shows how many changes it made", (await count()) === `${applied} changes in this turn`, await count());
     check("and offers to undo them all", (await line()) === resting, await line());
 
     await click();
     await sleep(150);
-    check("the first click only asks", (await line()) === `Undo ${applied} edits?` && unchanged(), await line());
+    check("the first click only asks", (await line()) === `Undo ${applied} changes?` && unchanged(), await line());
     await sleep(4500);
     check("the question lapses on its own", (await line()) === resting && unchanged(), await line());
 
