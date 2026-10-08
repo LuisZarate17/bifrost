@@ -509,6 +509,120 @@ fn search_in(
     Ok(out)
 }
 
+// ── the map ─────────────────────────────────────────────────────────────────
+
+/// Extensions of the files a map lists: what a person writes by hand, in the
+/// languages this project's folders hold. Prose, data and images say nothing
+/// about where code lives.
+const MAP_EXTENSIONS: [&str; 9] = ["rs", "ts", "tsx", "js", "mjs", "toml", "css", "sh", "py"];
+
+/// How much of a file the map reads. A header comment is on line 1 to 3; 2 KB
+/// is far more than that, and the bound is what keeps a map of 2,000 files
+/// from reading 2,000 whole files.
+const MAP_READ_BYTES: u64 = 2048;
+
+/// A header comment is cut after this many characters, like [`LINE_CAP`] for a
+/// match: it is there to say what the file is for, not to be read whole.
+const MAP_COMMENT_CAP: usize = 120;
+
+/// One line per code file — its path, and the first comment in its first three
+/// lines — as a map the model is given before it asks anything.
+///
+/// **Why.** `list_files` answers "which files" and `search` answers "which
+/// lines", but both need the model to guess a name or a word first. A map
+/// answers "where would this live?" in one read. It is bounded to about
+/// `budget_chars` (the find probe uses 7,000, about 2k tokens of a 32k context)
+/// and, when the files do not fit, ends with `… N more files`.
+///
+/// The walk is [`walk`]'s, so the same rules hold: `.gitignore`, `target/`,
+/// `node_modules/`, links, Mímir's folder and Stop. Files whose names look like
+/// secrets are left out ([`secret_name`]), reads go through
+/// [`edit::open_checked`] and stop at 2 KB, and a file with a NUL in it is
+/// binary and left out. A file with no header comment gets its path alone.
+///
+/// Empty when no code file was found, so a caller can append it only if it
+/// says something.
+pub fn repo_map(ws: &Workspace, budget_chars: usize, cancelled: impl Fn() -> bool) -> String {
+    map_in(ws, budget_chars, edit::app_data().as_deref(), &cancelled)
+}
+
+fn map_in(ws: &Workspace, budget_chars: usize, app_data: Option<&Path>, cancelled: &dyn Fn() -> bool) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    walk(ws, app_data, cancelled, |rel, full| {
+        let code = full
+            .extension()
+            .is_some_and(|e| MAP_EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)));
+        if !code || secret_name(full) {
+            return 0;
+        }
+        // Opened the way `search_in` opens: a path is not a file, and the
+        // handle is what shows a link or a second name.
+        let checked = std::fs::canonicalize(full)
+            .ok()
+            .filter(|real| real.starts_with(ws.root()))
+            .and_then(|real| edit::open_checked(&real));
+        let Some(file) = checked else { return 0 };
+        let mut bytes = Vec::new();
+        if std::io::Read::read_to_end(&mut std::io::Read::take(file, MAP_READ_BYTES), &mut bytes).is_err() {
+            return 0;
+        }
+        if bytes.contains(&0) {
+            return bytes.len() as u64;
+        }
+        let head = String::from_utf8_lossy(&bytes);
+        lines.push(match header_comment(&head) {
+            Some(c) => format!("{rel} — {c}"),
+            None => rel.to_string(),
+        });
+        bytes.len() as u64
+    });
+
+    let mut out = String::new();
+    let mut shown = 0;
+    for l in &lines {
+        if out.len() + l.len() + 1 > budget_chars {
+            break;
+        }
+        out.push_str(l);
+        out.push('\n');
+        shown += 1;
+    }
+    if shown < lines.len() {
+        out.push_str(&format!("… {} more files", lines.len() - shown));
+    } else {
+        out.pop();
+    }
+    out
+}
+
+/// The first header comment within the first three lines, marker stripped and
+/// cut. `#!` is a shebang and `#[` / `#![` a Rust attribute, neither a comment.
+fn header_comment(head: &str) -> Option<String> {
+    head.lines().take(3).find_map(|line| {
+        let t = line.trim();
+        let text = if let Some(r) = t.strip_prefix("//!").or_else(|| t.strip_prefix("///")).or_else(|| t.strip_prefix("//"))
+        {
+            r
+        } else if let Some(r) = t.strip_prefix("/*") {
+            let r = r.strip_prefix('*').unwrap_or(r);
+            r.strip_suffix("*/").unwrap_or(r)
+        } else if t.starts_with('#') && !t.starts_with("#!") && !t.starts_with("#[") {
+            &t[1..]
+        } else {
+            return None;
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        Some(if text.chars().count() > MAP_COMMENT_CAP {
+            format!("{}…", text.chars().take(MAP_COMMENT_CAP).collect::<String>())
+        } else {
+            text.to_string()
+        })
+    })
+}
+
 fn cut_line(line: &str) -> String {
     if line.chars().count() <= LINE_CAP {
         line.to_string()
@@ -946,5 +1060,142 @@ mod tests {
         s.write(".env", "TOKEN=x\n");
         s.write("src/main.rs", "x\n");
         assert_eq!(listed(&s.ws(), None), [".env", "src/main.rs"]);
+    }
+
+    // ── the map ──
+
+    fn mapped(s: &Sandbox, budget: usize) -> Vec<String> {
+        let out = map_in(&s.ws(), budget, None, &never);
+        if out.is_empty() { Vec::new() } else { out.lines().map(str::to_string).collect() }
+    }
+
+    #[test]
+    fn each_kind_of_header_comment_is_found() {
+        let s = Sandbox::new("map-kinds");
+        s.write("a.rs", "//! inner doc
+fn a() {}
+");
+        s.write("b.rs", "/// outer doc
+fn b() {}
+");
+        s.write("c.ts", "// plain
+export {};
+");
+        s.write("d.css", "/* block */
+body {}
+");
+        s.write("e.js", "/** doc block */
+let e;
+");
+        s.write("f.py", "# hash
+x = 1
+");
+        s.write("g.toml", "# a manifest
+[package]
+");
+        s.write("h.sh", "#!/bin/sh
+# runs it
+");
+        assert_eq!(
+            mapped(&s, 10_000),
+            [
+                "a.rs — inner doc",
+                "b.rs — outer doc",
+                "c.ts — plain",
+                "d.css — block",
+                "e.js — doc block",
+                "f.py — hash",
+                "g.toml — a manifest",
+                "h.sh — runs it",
+            ]
+        );
+    }
+
+    #[test]
+    fn shebangs_and_rust_attributes_are_not_headers() {
+        let s = Sandbox::new("map-attrs");
+        s.write("a.rs", "#![allow(dead_code)]
+#[derive(Debug)]
+// the real one
+struct A;
+");
+        s.write("b.rs", "#![allow(dead_code)]
+#[derive(Debug)]
+struct B;
+");
+        assert_eq!(mapped(&s, 10_000), ["a.rs — the real one", "b.rs"]);
+    }
+
+    #[test]
+    fn a_header_after_the_third_line_is_not_taken() {
+        let s = Sandbox::new("map-late");
+        s.write("late.rs", "use a;
+use b;
+use c;
+use d;
+// too late
+");
+        s.write("third.rs", "use a;
+use b;
+// just in time
+");
+        assert_eq!(mapped(&s, 10_000), ["late.rs", "third.rs — just in time"]);
+    }
+
+    #[test]
+    fn a_long_header_is_cut() {
+        let s = Sandbox::new("map-long");
+        s.write("a.rs", &format!("//! {}
+", "x".repeat(500)));
+        let lines = mapped(&s, 10_000);
+        assert_eq!(lines[0].chars().count(), "a.rs — ".chars().count() + MAP_COMMENT_CAP + 1, "{}", lines[0]);
+        assert!(lines[0].ends_with('…'));
+    }
+
+    #[test]
+    fn the_map_leaves_out_what_is_not_code_or_not_allowed() {
+        let s = Sandbox::new("map-skip");
+        s.write("src/main.rs", "// kept
+");
+        s.write("README.md", "# prose
+");
+        s.write("logo.png", "x");
+        s.write(".env", "TOKEN=x
+");
+        s.write("secrets.toml", "# key
+");
+        s.write("keys/server.pem", "x");
+        s.write(".gitignore", "local.rs
+");
+        s.write("local.rs", "// ignored
+");
+        s.write("target/debug/build.rs", "// build
+");
+        s.write("bin.rs", "// a b
+");
+        assert_eq!(mapped(&s, 10_000), ["src/main.rs — kept"]);
+    }
+
+    #[test]
+    fn a_map_with_nothing_to_list_is_empty() {
+        let s = Sandbox::new("map-empty");
+        s.write("notes.txt", "x
+");
+        assert_eq!(map_in(&s.ws(), 1000, None, &never), "");
+    }
+
+    #[test]
+    fn a_map_is_sorted_and_says_how_many_files_the_budget_left_out() {
+        let s = Sandbox::new("map-budget");
+        for name in ["c", "a", "d", "b"] {
+            s.write(&format!("src/{name}.rs"), &format!("//! file {name}
+"));
+        }
+        // Each line is 21 characters with its newline: room for two.
+        let line = "src/a.rs — file a
+".len();
+        assert_eq!(mapped(&s, line * 2), ["src/a.rs — file a", "src/b.rs — file b", "… 2 more files"]);
+        assert_eq!(mapped(&s, line * 4).len(), 4, "everything fits, so no note");
+        assert!(!map_in(&s.ws(), line * 4, None, &never).contains("more files"));
     }
 }

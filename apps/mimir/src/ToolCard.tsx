@@ -59,6 +59,8 @@ function reasonOf(error = ""): string {
   if (error.includes("new folders; at most")) return "that path would make too many folders";
   if (error.includes("a file, not a folder")) return "a file is in the way of that path";
   if (error.includes("without a destination")) return "it gave no place to move the file to";
+  if (error.includes("updated the plan")) return "it updated its task list too many times this turn";
+  if (error.includes("without any steps")) return "its task list had no steps";
   if (error.includes("could not be read") || error.includes("valid JSON")) return "the request was malformed";
   if (error.includes("does not exist")) return "that file doesn't exist";
   if (error.includes("is a folder")) return "that is a folder, not a file";
@@ -81,6 +83,7 @@ const VERB: Record<string, string> = {
   run_check: "Couldn't run the check",
   search: "Couldn't search",
   list_files: "Couldn't list files",
+  update_plan: "Couldn't update the task list",
 };
 
 /** Marks a call that ran without asking: said once, quietly, where the state is. */
@@ -238,6 +241,44 @@ function CheckCard({ entry, onAllow, onDeny }: { entry: ToolEntry; onAllow: () =
   );
 }
 
+/**
+ * The model's task list for a multi-step request (H10), as a checklist.
+ *
+ * It touches nothing, so it never asks and has no buttons: it is there so you can
+ * see what the model means to do and how far it has got. Each update replaces the
+ * last one — the thread draws only the latest card of a turn — so this is one card
+ * that fills in, not a card per update. The steps are what Rust parsed from the
+ * model's own lines, never its raw text.
+ */
+function PlanCard({ entry }: { entry: ToolEntry }) {
+  const steps = entry.plan ?? [];
+  const done = steps.filter((p) => p.status === "done").length;
+  return (
+    <div className={"tool plan " + entry.state}>
+      <div className="tool-head">
+        <span className="tool-icon">
+          <I.Checklist />
+        </span>
+        <span className="tool-name plan-title">
+          Plan · {done} of {steps.length} done
+        </span>
+      </div>
+      <ul className="plan-steps">
+        {steps.map((p, i) => (
+          <li
+            key={i}
+            className={"plan-step " + p.status}
+            aria-label={p.status === "pending" ? p.text : `${p.text} (${p.status === "done" ? "done" : "in progress"})`}
+          >
+            <span className="plan-mark" aria-hidden="true" />
+            <span className="plan-text">{p.text}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /** A size a person reads. */
 function sizeOf(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -338,6 +379,7 @@ export function ToolCard({
     );
   }
 
+  if (name === "update_plan") return <PlanCard entry={entry} />;
   if (name === "run_check") return <CheckCard entry={entry} onAllow={onAllow} onDeny={onDeny} />;
   if (name === "search" || name === "list_files") return <FindCard entry={entry} onAllow={onAllow} onDeny={onDeny} />;
 

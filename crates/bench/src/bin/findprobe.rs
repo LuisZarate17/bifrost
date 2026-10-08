@@ -34,7 +34,7 @@ use std::time::Instant;
 
 use odin_core::chat::{Message, Options, Tool};
 use odin_core::edit::Workspace;
-use odin_core::{config, ollama, tools};
+use odin_core::{config, ollama, search, tools};
 
 use probe::{Setup, Transport};
 
@@ -246,10 +246,17 @@ fn judge(q: &Question, answer: &str, calls: &[String]) -> Result<(), String> {
 
 // ── running ─────────────────────────────────────────────────────────────────
 
+/// What the map may take of the system prompt, in characters: about 2k tokens
+/// of the 32k context.
+const MAP_BUDGET: usize = 7000;
+
 #[derive(Clone, Copy, PartialEq)]
 enum Variant {
     Search,
     ReadOnly,
+    /// Search, plus a map of the code files with their first comment line in
+    /// the system prompt. Only runs when asked for with `--variant map`.
+    Map,
 }
 
 impl Variant {
@@ -257,6 +264,7 @@ impl Variant {
         match self {
             Variant::Search => "with search",
             Variant::ReadOnly => "read only",
+            Variant::Map => "with map",
         }
     }
 
@@ -273,6 +281,13 @@ impl Variant {
         assert!(s.contains(FIND_SENTENCE), "the finding sentence changed; update FIND_SENTENCE");
         match self {
             Variant::Search => s,
+            Variant::Map => format!(
+                "{s}
+
+A map of the project's code files, each with its first comment line:
+{}",
+                search::repo_map(ws, MAP_BUDGET, || false)
+            ),
             Variant::ReadOnly => s.replace(FIND_SENTENCE, ""),
         }
     }
@@ -381,6 +396,7 @@ fn main() {
     let variants: Vec<Variant> = match arg(&args, "--variant").as_deref() {
         Some("search") => vec![Variant::Search],
         Some("read") => vec![Variant::ReadOnly],
+        Some("map") => vec![Variant::Map],
         _ => vec![Variant::Search, Variant::ReadOnly],
     };
     let questions: Vec<Question> =
@@ -402,7 +418,12 @@ fn main() {
     println!("ctx:       {}", cfg.num_ctx);
     println!("codebase:  odin at {PIN}, {} questions", questions.len());
     println!("runs:      {runs} at the app's own settings, plus 1 at temperature 0");
-    println!("bound:     {PROBE_ROUNDS} rounds (the app stops at {})\n", tools::MAX_ROUNDS);
+    println!("bound:     {PROBE_ROUNDS} rounds (the app stops at {})", tools::MAX_ROUNDS);
+    if variants.contains(&Variant::Map) {
+        let map = search::repo_map(&ws, MAP_BUDGET, || false);
+        println!("map:       {} chars, {} lines", map.chars().count(), map.lines().count());
+    }
+    println!();
 
     match ollama::load(&model, cfg.num_ctx) {
         Ok(d) => println!("warmed in {:.1}s\n", d.as_secs_f64()),

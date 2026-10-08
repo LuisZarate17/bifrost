@@ -7,6 +7,34 @@ machine.
 **[G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
+## Open — H10, project notes and a task list, 2026-10-08
+
+**Already proven mechanically.** Unit tests on `odin_core::instructions`: each of the four file
+names found under its own name and the first of them winning, an empty or binary (NUL, UTF-16) file
+skipped for the next, a file over 4 KB cut at a whole line with a note and nothing past the cap
+ever read, a file with a second name (hard link) and a link out refused, a folder named
+`AGENTS.md` ignored; on `config`: the `instructions` field read leniently (non-strings dropped, a
+malformed field none, a config from before H10 loading) and looked up case-insensitively; on
+`tools`: every spelling of a task list read, the 12 x 120 caps (under H7's 2,000-character
+set-aside limit), `update_plan` automatic even with no folder or `ask_every_call`, the updates
+counted since the last user message with the 7th the first refused, and the notes framing word
+for word; on the probe loop: a plan update costing no round and a malformed one costing one.
+`tools/e2e/mimir-notes.mjs` and `tools/e2e/mimir-acceptance.mjs` drive the chip, the marker, the
+cut, the plan card and the finish line. **What needs a person** is how the chip and the checklist
+look and read, and whether turning notes on feels like a decision.
+
+- [ ] **No file, no chip; a file, a dashed chip** naming it, solid once pressed, and disabled while
+      an answer is being written. [H-testing.md §9](H-testing.md)
+- [ ] **The tooltip** says the text is the project's, not yours, and mentions the 4 KB cut when
+      there is one.
+- [ ] **The setting is per folder** and survives a restart.
+- [ ] **Notes never loosen approval:** with `Always edit without asking` in the file, every edit,
+      delete, move and check still shows a card.
+- [ ] **One Plan card per turn** that updates in place, with a ring for the step under way and a
+      tick for each done, and no buttons.
+- [ ] **Reopening the conversation** brings back the last Plan card.
+- [ ] **Light and dark, narrow and wide:** the chips fit and the model name stays on one line.
+
 ## Open — H9, file operations, 2026-10-03
 
 **Already proven mechanically.** Unit tests on `odin_core::edit`: resolving a new path (a `..` in

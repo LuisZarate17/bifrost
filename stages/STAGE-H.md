@@ -400,11 +400,36 @@ undo removes the folders it created.
 
 ## H10 — Project instructions, a task list, a repo map
 
+> **Built 2026-10-08** — [H10-results.md](../docs/results/H10-results.md). Project notes (off until turned on per folder) and a
+> task list ship; the repo map was measured and left out — one vague question gained, three no-tool
+> ones lost, unasked edits. The finish line: 2 of 3 real rename-and-test runs did the whole job,
+> and Undo all restored every run byte for byte. **Stage H is complete.**
+
 **Do:** `AGENTS.md`, off until turned on per folder, capped at 4 KB, inside `tools::system_prompt`
 so the probes measure it. An `update_plan(items)` tool — no side effects, so it does not ask —
 shown as a checklist and re-sent each round. A repo map: paths plus each file's first comment line,
 about 2k tokens, scored with findprobe's repo-map variant. Embeddings only if findprobe still misses
 vague questions, as a separate `search_meaning` tool beside grep.
+
+**Decided 2026-10-08, before building:**
+- **Instructions: the first found of `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`,
+  `.cursorrules`** (Luis's choice), at the folder root, never through a link, read fresh each turn,
+  cut at 4 KB on a line. Off until turned on per folder with a chip naming the file. Appended
+  after the whole system prompt — every probe sentence still matches — and framed as *the
+  project's notes, not the user's instructions*, which never change what needs approval.
+- **`update_plan(plan)` takes one string**, a step per line marked `[ ]`, `[~]` or `[x]` — a string
+  survives every tool-call recovery, an array of objects does not. It touches nothing, so it never
+  asks. Capped at 12 short steps, so H7 never sets it aside: it rides in the conversation every
+  round as the model's own call, with no extra message. **Its rounds do not count toward the 10**
+  (Luis), but the 7th update in a turn is refused. Shown as one checklist per turn, updated in
+  place.
+- **The repo map is measured before it ships:** findprobe with and without it, same build. **It
+  goes into the app only if vague questions reach 18/21 and named stay 24/24** (Luis); otherwise it
+  stays a probe variant and the results say why. Code files only, each with its first header
+  comment, ~7,000 characters.
+- **Stage H's own finish line is tested:** a new acceptance e2e renames across files, adds a
+  function with a unit test, runs `cargo test`, and Undo all must restore the fixture — 3 runs on
+  the real model.
 
 ---
 

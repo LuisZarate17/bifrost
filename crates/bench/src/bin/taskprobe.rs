@@ -98,6 +98,14 @@ fn without_ops(mut offered: Vec<Tool>) -> Vec<Tool> {
     offered
 }
 
+/// The tools without H10's `update_plan`. `--plan off`, to measure the task list on
+/// and off in one build — and what `--ops off` implies, since H8's tool list had
+/// no task list either. Left, the list is H9's exactly.
+fn without_plan(mut offered: Vec<Tool>) -> Vec<Tool> {
+    offered.retain(|t| t.function.name != "update_plan");
+    offered
+}
+
 /// The pinned commit every removal task starts from.
 const PIN: &str = "6653c27";
 
@@ -891,6 +899,8 @@ struct Outcome {
     deletes: usize,
     moves: usize,
     recreated: usize,
+    /// H10: `update_plan` calls the loop accepted.
+    plans: usize,
 }
 
 fn run(
@@ -903,7 +913,8 @@ fn run(
     // `--compact` and `--read`: whether results are set aside (H7) and whether
     // the read offers ranges (H8).
     // `--ops`: whether delete_file and move_file are offered (H9).
-    (compact, parts, ops): (bool, bool, bool),
+    // `--plan`: whether update_plan is (H10).
+    (compact, parts, ops, plan): (bool, bool, bool, bool),
 ) -> Outcome {
     let started = Instant::now();
     let start = match task.kind {
@@ -938,6 +949,7 @@ fn run(
                 deletes: 0,
                 moves: 0,
                 recreated: 0,
+                plans: 0,
             };
         }
     };
@@ -964,6 +976,7 @@ fn run(
                 deletes: 0,
                 moves: 0,
                 recreated: 0,
+                plans: 0,
             };
         }
     };
@@ -993,6 +1006,7 @@ fn run(
                 deletes: 0,
                 moves: 0,
                 recreated: 0,
+                plans: 0,
             };
         }
     };
@@ -1016,6 +1030,8 @@ fn run(
     let offered = tools::available(true, Some(&check::label(&cargo.argv)));
     let offered = if parts { offered } else { whole_reads(offered) };
     let offered = if ops { offered } else { without_ops(offered) };
+    // `--ops off` is H8's list, which had no task list.
+    let offered = if plan && ops { offered } else { without_plan(offered) };
     let mut messages =
         vec![Message::system(tools::system_prompt(&ws, true)), Message::user(task.prompt)];
     // Reads stay in the worktree. It sits on the same disk as the repo it came
@@ -1062,6 +1078,7 @@ fn run(
         deletes: r.delete_calls,
         moves: r.move_calls,
         recreated: r.delete_then_create,
+        plans: r.plan_updates,
     };
 
     if r.runaway {
@@ -1136,6 +1153,16 @@ fn main() {
         }
     };
 
+    // On, like the app. `--plan off` offers H9's tools exactly (see `without_plan`).
+    let plan = match arg(&args, "--plan").as_deref() {
+        None | Some("on") => true,
+        Some("off") => false,
+        Some(other) => {
+            eprintln!("--plan takes on or off, not {other}");
+            std::process::exit(2);
+        }
+    };
+
     // On, like the app. `--ops off` offers H8's tools exactly (see `without_ops`).
     let ops = match arg(&args, "--ops").as_deref() {
         None | Some("on") => true,
@@ -1165,6 +1192,10 @@ fn main() {
     println!("model:  {model}");
     println!("ctx:    {}", cfg.num_ctx);
     println!("compact: {}", if compact { "on" } else { "off" });
+    println!(
+        "plan:   {}",
+        if plan && ops { "on (update_plan offered)" } else { "off (no task list)" }
+    );
     println!("ops:    {}", if ops { "on (delete_file and move_file offered)" } else { "off (the tools as at H8)" });
     println!("read:   {}", if parts { "parts (start_line and end_line offered)" } else { "whole (the read before H8)" });
     println!(
@@ -1209,12 +1240,13 @@ fn main() {
         let (mut max_prompt, mut set_aside, mut cut_runs) = (0u32, 0usize, 0usize);
         let mut ranged_reads = 0usize;
         let (mut deletes, mut moves, mut recreated) = (0usize, 0usize, 0usize);
+        let mut plans = 0usize;
         println!("── {label} ──");
         for task in &tasks {
             let mut line = String::new();
             for i in 0..*n {
                 let scratch = scratch_root.join(format!("{}-{}-{i}", label.replace('=', ""), task.id));
-                let o = run(&model, task, *opts, &scratch, &target_dir, keep, (compact, parts, ops));
+                let o = run(&model, task, *opts, &scratch, &target_dir, keep, (compact, parts, ops, plan));
                 if !keep {
                     let _ = std::fs::remove_dir_all(&scratch);
                 }
@@ -1243,6 +1275,7 @@ fn main() {
                 deletes += o.deletes;
                 moves += o.moves;
                 recreated += o.recreated;
+                plans += o.plans;
                 cut_runs += (o.truncated > 0) as usize;
                 let shown = if o.verdict == Verdict::Pass && o.late { "LATE" } else { o.verdict.label() };
                 line.push_str(&format!("{shown:<5} "));
@@ -1258,7 +1291,7 @@ fn main() {
                     "checks": o.checks, "asks": o.asks, "asksEveryCall": o.asks_every_call, "calls": o.calls, "filesChanged": o.files, "log": o.log,
                     "promptTokens": o.prompt_tokens, "maxPrompt": o.max_prompt, "setAside": o.set_aside,
                     "truncated": o.truncated, "rangedReads": o.ranged_reads,
-                    "deletes": o.deletes, "moves": o.moves, "deleteThenCreate": o.recreated,
+                    "deletes": o.deletes, "moves": o.moves, "deleteThenCreate": o.recreated, "planUpdates": o.plans,
                     "secs": (o.secs * 10.0).round() / 10.0,
                 }));
             }
@@ -1267,7 +1300,7 @@ fn main() {
         let total = pass + late + fail + error;
         println!(
             "  → {pass}/{total} pass within the app's {} rounds ({:.0}%) · {late} only later · {fail} fail · \
-             {error} error · real commits {}/{} · removals {}/{} · {:.1} rounds/run · {:.1} checks/run · \
+             {error} error · real commits {}/{} · removals {}/{} · {:.1} rounds/run · {:.1} plans/run · {:.1} checks/run · \
              {:.1} asks/run ({:.1} asking every call) · max prompt {max_prompt} · {:.1} set aside/run · \
              {cut_runs} cut runs · {ranged_reads} ranged reads · {deletes} deletes · {moves} moves · \
              {recreated} delete-then-create · {:.1}s avg\n",
@@ -1278,6 +1311,7 @@ fn main() {
             kind_b.0,
             kind_b.1,
             rounds as f64 / total.max(1) as f64,
+            plans as f64 / total.max(1) as f64,
             checks as f64 / total.max(1) as f64,
             asks as f64 / total.max(1) as f64,
             asks_every_call as f64 / total.max(1) as f64,
@@ -1285,9 +1319,10 @@ fn main() {
             secs / total.max(1) as f64,
         );
         rows.push(format!(
-            "| {label} | {pass}/{total} ({:.0}%) | {late} | {fail} | {error} | {:.1} | {:.1} | {:.1} | {:.1}s | {max_prompt} | {cut_runs} | {ranged_reads} | {deletes} | {moves} | {recreated} |",
+            "| {label} | {pass}/{total} ({:.0}%) | {late} | {fail} | {error} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1}s | {max_prompt} | {cut_runs} | {ranged_reads} | {deletes} | {moves} | {recreated} |",
             100.0 * pass as f64 / total.max(1) as f64,
             rounds as f64 / total.max(1) as f64,
+            plans as f64 / total.max(1) as f64,
             checks as f64 / total.max(1) as f64,
             asks as f64 / total.max(1) as f64,
             secs / total.max(1) as f64,
@@ -1295,8 +1330,8 @@ fn main() {
     }
 
     println!("─── {model} ───");
-    println!("| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | checks/run | asks/run | time/run | max prompt | cut runs | ranged reads | deletes | moves | delete→create |", tools::MAX_ROUNDS);
-    println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+    println!("| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | plans/run | checks/run | asks/run | time/run | max prompt | cut runs | ranged reads | deletes | moves | delete→create |", tools::MAX_ROUNDS);
+    println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
     for r in &rows {
         println!("{r}");
     }
@@ -1349,7 +1384,7 @@ mod tests {
         let on = tools::available(true, Some("cargo check"));
         let names = |v: &[Tool]| v.iter().map(|t| t.function.name.clone()).collect::<Vec<_>>();
         assert!(names(&on).contains(&"delete_file".to_string()) && names(&on).contains(&"move_file".to_string()));
-        let off = without_ops(on);
+        let off = without_ops(without_plan(on));
         assert_eq!(names(&off), ["read_file", "list_files", "search", "edit_file", "create_file", "run_check"]);
         let create = off.iter().find(|t| t.function.name == "create_file").unwrap();
         assert_eq!(
@@ -1368,6 +1403,23 @@ mod tests {
                 "required": ["path", "content"]
             })
         );
+    }
+
+    /// **`--plan off` is H9's tool list**, word for word: the same tools in the same
+    /// order, with only `update_plan` gone and `run_check` still last.
+    #[test]
+    fn plan_off_is_the_tool_list_as_it_was_at_h9() {
+        let on = tools::available(true, Some("cargo check"));
+        let names = |v: &[Tool]| v.iter().map(|t| t.function.name.clone()).collect::<Vec<_>>();
+        assert!(names(&on).contains(&"update_plan".to_string()));
+        let off = without_plan(on.clone());
+        assert_eq!(
+            names(&off),
+            ["read_file", "list_files", "search", "edit_file", "create_file", "delete_file", "move_file", "run_check"]
+        );
+        // Nothing else was touched: the other tools are the same, byte for byte.
+        let kept: Vec<_> = on.iter().filter(|t| t.function.name != "update_plan").collect();
+        assert_eq!(serde_json::to_value(&kept).unwrap(), serde_json::to_value(&off).unwrap());
     }
 
     /// **The model cannot read its way to the answer.** A worktree's `.git`

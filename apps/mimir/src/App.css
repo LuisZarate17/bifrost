@@ -1088,6 +1088,57 @@ kbd {
 
 /* ── checks ─────────────────────────────────────────────────────────────── */
 
+/* The model's task list (H10). Nothing to decide, so no state badge and no
+   buttons: a checklist that fills in. Done is struck through and quiet, the step
+   under way carries the one accent mark, and what is left reads as ordinary text. */
+.tool.plan .tool-head {
+  padding-bottom: 6px;
+}
+.plan-steps {
+  margin: 0;
+  padding: 0 12px 11px 12px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.plan-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--text);
+  line-height: 1.4;
+}
+.plan-mark {
+  flex: none;
+  box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  border: 1.4px solid var(--border-3);
+  border-radius: 50%;
+}
+.plan-step.doing .plan-mark {
+  border-color: var(--accent-text);
+  background: radial-gradient(circle, var(--accent-text) 0 3px, transparent 3.5px);
+}
+.plan-step.doing .plan-text {
+  font-weight: 600;
+}
+.plan-step.done {
+  color: var(--text-3);
+}
+.plan-step.done .plan-mark {
+  border-color: var(--ok);
+  background: var(--ok-soft)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Cpath d='m3.6 7.2 2.2 2.2 4.6-4.8' fill='none' stroke='%236fcf97' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    center / 100% no-repeat;
+}
+.plan-step.done .plan-text {
+  text-decoration: line-through;
+  text-decoration-color: var(--border-3);
+}
+
 /* A check that ran and found errors is not the tool failing — it is the
    news. Red says "the build is broken", not "something went wrong here". */
 .tool.check.ran.fail .tool-state {
@@ -1369,6 +1420,51 @@ kbd {
   cursor: default;
 }
 
+/* The project's own notes file (H10), sent with every question once turned on
+   for the folder. Same shape as the check chip: dashed and quiet while off —
+   an offer, not a default — and solid with full-strength text while on. */
+.notes-chip {
+  /* Shown whole: "AGENTS.md" cut to "AGENTS…" says nothing. Only a name longer than
+     the cap (copilot-instructions.md) is cut, at max-width. */
+  flex: 0 0 auto;
+  min-width: 78px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  max-width: 190px;
+  padding: 0 12px;
+  border: 1px dashed var(--border-2);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.notes-chip.on {
+  border-style: solid;
+  color: var(--text);
+}
+.notes-chip:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.notes-chip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.notes-chip:disabled {
+  cursor: default;
+}
+.notes-chip .notes-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── dock: error, composer ──────────────────────────────────────────────── */
 
 .dock {
@@ -1558,6 +1654,8 @@ kbd {
 }
 
 .model-pill {
+  flex: none;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 7px;

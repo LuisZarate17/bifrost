@@ -20,6 +20,8 @@
 //!   stoppable and with its output capped. Added at H1
 //! - [`search`] — which files the project folder has, and which lines hold
 //!   some text: inside the folder only, build output skipped, capped. Added at H2
+//! - [`instructions`] — a project's own notes file (`AGENTS.md` and its kin), read only once
+//!   the user has turned it on for that folder. Added at H10
 //! - [`compact`] — the prompt's budget inside one tool turn: which old results to
 //!   set aside before Ollama silently cuts the middle of the conversation. Added at H7
 //!
@@ -30,6 +32,7 @@ pub mod check;
 pub mod compact;
 pub mod config;
 pub mod edit;
+pub mod instructions;
 pub mod ollama;
 pub mod search;
 pub mod store;

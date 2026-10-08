@@ -22,7 +22,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 
 use odin_core::chat::{self, Message, Options, StreamChunk};
-use odin_core::{check, compact, config, edit, ollama, search, store, tools, vram};
+use odin_core::{check, compact, config, edit, instructions, ollama, search, store, tools, vram};
 
 /// One message pushed up to the UI.
 ///
@@ -809,8 +809,25 @@ async fn ask_with_tools(
 
     // The folder and the read-before-edit habit, stated once. Added here rather
     // than stored in the thread, so it always names the folder chosen *now*.
+    //
+    // **The project's notes ride in that same message** (H10), after the prompt, so
+    // there is still exactly one system message and `lead` below is unchanged. Only
+    // when the user turned them on for this folder, and read fresh every turn: an
+    // edited file applies to the next question.
     if let Some(ws) = &ws {
-        messages.insert(0, Message::system(tools::system_prompt(ws, check.is_some())));
+        let mut prompt = tools::system_prompt(ws, check.is_some());
+        if cfg.instructions_for(&ws.root_display()) {
+            let notes = tauri::async_runtime::spawn_blocking({
+                let ws = ws.clone();
+                move || instructions::find(&ws)
+            })
+            .await
+            .unwrap_or(None);
+            if let Some(notes) = notes {
+                prompt = tools::with_notes(prompt, &notes);
+            }
+        }
+        messages.insert(0, Message::system(prompt));
     }
 
     // Kept for counting repeats: the history the model has already seen.
@@ -897,6 +914,12 @@ async fn ask_with_tools(
             }
         }
 
+        // The task list: at most 6 updates a turn, by the rule the probes share. The
+        // 7th goes back to the model and costs a round like any rejected call.
+        if matches!(request, tools::Request::Plan { .. }) && tools::plan_updates(&history) >= tools::MAX_PLAN_UPDATES {
+            return Ok(reject("update_plan", "", tools::PLAN_LIMIT_NOTE.to_string()));
+        }
+
         // What may run without a card. Decided here, once, by the one rule the probe
         // shares — and on a blocking thread, because it walks the folder.
         let decided = {
@@ -908,6 +931,22 @@ async fn ask_with_tools(
         match decided {
             tools::Approval::Reject(why) => {
                 return Ok(reject(request.name(), request.path(), format!("error: {why}")));
+            }
+            // Touches nothing, so there is nothing to run: the card is the list itself.
+            // It is not a round (the webview does not count it), and works with no
+            // folder or with `ask_every_call`, as `approval` says.
+            tools::Approval::Auto(tools::Auto::Plan { steps }) => {
+                return Ok(serde_json::json!({
+                    "kind": "auto",
+                    "name": "update_plan",
+                    "path": "",
+                    "range": null,
+                    "result": tools::plan_message(&steps),
+                    "ok": true,
+                    "stopped": false,
+                    "plan": steps,
+                    "rawCall": call,
+                }));
             }
             tools::Approval::Auto(auto) => {
                 let ws = ws.clone().expect("a call is only automatic inside a project folder");
@@ -978,6 +1017,9 @@ async fn ask_with_tools(
                     ));
                 }
             },
+            tools::Request::Plan { .. } => {
+                return Ok(reject("update_plan", "", "error: the task list could not be read".into()));
+            }
             tools::Request::Rewrite { path, .. } => {
                 return Ok(reject("write_file", &path, "no such tool: write_file — use edit_file".into()));
             }
@@ -1175,6 +1217,8 @@ fn run_auto(
             let shown = search::describe_search(&text, pattern.as_deref());
             Some(("search", shown, None, run_find(&ws.root_display(), &Find::Search { text, pattern }, stop)))
         }
+        // Answered by the caller before it gets here: it needs no folder.
+        tools::Auto::Plan { steps } => Some(("update_plan", String::new(), None, Ran::text(tools::plan_message(&steps)))),
     }
 }
 
@@ -1298,6 +1342,18 @@ struct Folder {
     name: String,
     /// The check command chosen for this folder, as a person reads it.
     check: Option<String>,
+    /// The folder's own notes file, if it has one that can be read (H10): which
+    /// file, whether the user has turned it on for this folder, and whether it is
+    /// longer than what is sent. **Only the name and two flags** — the text is never
+    /// sent to the webview, only into the system message.
+    notes: Option<NotesView>,
+}
+
+#[derive(Serialize)]
+struct NotesView {
+    name: String,
+    on: bool,
+    cut: bool,
 }
 
 fn folder(ws: &edit::Workspace, cfg: &config::Config) -> Folder {
@@ -1307,7 +1363,8 @@ fn folder(ws: &edit::Workspace, cfg: &config::Config) -> Folder {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.clone());
     let check = cfg.check_for(&path).map(|argv| check::label(argv));
-    Folder { path, name, check }
+    let notes = instructions::find(ws).map(|n| NotesView { on: cfg.instructions_for(&path), name: n.name, cut: n.cut });
+    Folder { path, name, check, notes }
 }
 
 /// The folder edits are confined to, or `None` when editing is off.
@@ -1461,6 +1518,24 @@ async fn clear_check() -> Result<Folder, String> {
     })
     .await
     .map_err(|e| format!("clearing the check failed: {e}"))?
+}
+
+/// Send the folder's notes file with every question, or stop.
+///
+/// **Takes only the switch.** The folder is the one in the config and the file is
+/// found by `instructions::find`, so nothing reaching the IPC boundary can name a
+/// path to be read into the prompt. Off by default for every folder.
+#[tauri::command]
+async fn set_notes(on: bool) -> Result<Folder, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut cfg = config::load();
+        let ws = workspace(&cfg).ok_or("no project folder is chosen")?;
+        cfg.set_instructions(&ws.root_display(), on);
+        config::save(&cfg)?;
+        Ok(folder(&ws, &cfg))
+    })
+    .await
+    .map_err(|e| format!("changing the notes failed: {e}"))?
 }
 
 /// Turn editing off. Reads keep working, one approved file at a time.
@@ -1630,6 +1705,7 @@ pub fn run() {
             check_options,
             set_check,
             clear_check,
+            set_notes,
             stop
         ])
         .run(tauri::generate_context!())

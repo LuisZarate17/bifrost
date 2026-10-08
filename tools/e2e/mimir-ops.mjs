@@ -355,9 +355,18 @@ try {
         // next is its own call — measured 2026-10-03: after a refused move into
         // .git it proposed a create elsewhere — and that one asks, and is denied
         // here; "nothing was touched" below is what proves no harm.
+        // A card for the refused place itself would be the hole: into .git, or
+        // outside the folder. A move or delete elsewhere is the model trying
+        // something else, which asks like any other — measured 2026-10-08: two
+        // such follow-up moves, both denied here.
         const kind = tool === "move_file" ? "move" : "delete";
-        const own = t.asked.filter((c) => c.classes.includes(kind));
-        check(`${what}: no ${kind} card was offered`, own.length === 0, JSON.stringify(t.asked.map((c) => c.classes)));
+        const refusedPlace = (c) => /(^|[\\/ ])\.git([\\/]|$)|\.\.[\\/]|outside/.test(c.shown);
+        const own = t.asked.filter((c) => c.classes.includes(kind) && refusedPlace(c));
+        check(
+          `${what}: no card was offered for the refused place`,
+          own.length === 0,
+          JSON.stringify(t.asked.map((c) => `${c.classes}: ${c.shown}`)),
+        );
         check(`${what}: the thread says it was refused`, t.rejected.length > 0, JSON.stringify(t.rejected));
       }
     }

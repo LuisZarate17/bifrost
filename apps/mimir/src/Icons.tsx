@@ -171,3 +171,10 @@ export const Windows = (p: P) => (
     <rect x="8.75" y="8.75" width="4.75" height="4.75" rx=".75" />
   </svg>
 );
+
+/** A checklist, for the model's task list. */
+export const Checklist = (p: P) => (
+  <svg {...base(p)}>
+    <path d="m2.25 4.25 1.25 1.25 2-2.5M2.25 10.25l1.25 1.25 2-2.5M8.5 4.5h5M8.5 10.5h5" />
+  </svg>
+);

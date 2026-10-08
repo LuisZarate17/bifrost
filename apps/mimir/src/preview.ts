@@ -11,6 +11,7 @@
 //   ?preview=ops      moving, deleting and new folders: a create in new folders, a delete and a move to review, a refused delete, and an Undo-all line over a turn of them
 //   ?preview=undo     taking turns back: three edits ending in an answer, a stopped turn with two, one already half undone, one still running
 //   ?preview=check    the check flow: a failed build, the fix, and a check awaiting approval
+//   ?preview=plan    the model's task list mid-turn: one checklist card that has been updated twice (only the latest is drawn), an edit awaiting approval, and the project-notes chip on
 //   ?preview=find     finding code: a listing, a search and a read that ran without asking, and a read outside the folder awaiting approval
 //   ?preview=empty    a new chat, with the sidebar and models filled in
 //   ?preview=appearance  the thread, with the Appearance dialog open over it
@@ -142,6 +143,8 @@ export function installPreviewIpc() {
         return { ...RECENT[0], check: String(args.label) };
       case "clear_check":
         return { ...RECENT[0], check: null };
+      case "set_notes":
+        return { ...RECENT[0], notes: { name: "AGENTS.md", on: Boolean(args.on), cut: false } };
       case "choose_project_folder":
         return RECENT[0];
       case "recent_folders":
@@ -457,6 +460,38 @@ export function previewThread(mode: string): Preview {
       stats: "",
       convoId: "p5",
       spent: 4_102,
+    };
+  }
+
+  // ?preview=plan — a multi-step request (H10): the task list the model keeps, shown
+  // as one card that has been updated twice — the first, older one is in the thread
+  // too (saved and replayed) but only the latest is drawn — then an edit waiting
+  // on you. The notes chip is on in App.tsx's seed for this mode.
+  if (mode === "plan") {
+    const first = [
+      { text: "Rename greet to welcome in src/greet.rs", status: "doing" },
+      { text: "Update the callers in src/main.rs and src/lib.rs", status: "pending" },
+      { text: "Add shout(name) with a unit test", status: "pending" },
+      { text: "Run cargo check", status: "pending" },
+    ] as const;
+    const latest = [
+      { text: first[0].text, status: "done" },
+      { text: first[1].text, status: "doing" },
+      { text: first[2].text, status: "pending" },
+      { text: first[3].text, status: "pending" },
+    ] as const;
+    return {
+      entries: [
+        { kind: "turn", role: "user", content: "Rename greet to welcome everywhere, and add `pub fn shout(name: &str) -> String` that returns the name in capitals, with a unit test. Make sure it builds." },
+        { kind: "tool", name: "update_plan", path: "", auto: true, state: "ran", ok: true, plan: [...first], result: "Plan updated: 0 of 4 done." },
+        { kind: "tool", name: "edit_file", path: "src/greet.rs", state: "ran", diff: RENAME_DIFF, undo: "38f3a1", result: "Edited src/greet.rs: 1 line removed, 1 added." },
+        { kind: "tool", name: "update_plan", path: "", auto: true, state: "ran", ok: true, plan: [...latest], result: "Plan updated: 1 of 4 done." },
+        { kind: "tool", name: "edit_file", path: "src/main.rs", state: "pending", diff: RENAME_DIFF },
+      ],
+      status: "",
+      stats: "",
+      convoId: "p6",
+      spent: 5_240,
     };
   }
 

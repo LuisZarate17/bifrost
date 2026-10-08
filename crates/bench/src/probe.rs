@@ -182,6 +182,8 @@ pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
         // offered, it would show a card the way an edit does. No probe that prints
         // asks offers it.
         Request::Rewrite { path, content } => edit_result(edit::plan_rewrite(s.ws, &path, &content)),
+        // The task list touches nothing and shows no card; the result is the app's line.
+        Request::Plan { steps } => text(tools::plan_message(&steps), false),
         Request::Check => {
             let Some(c) = s.check else {
                 return text("error: run_check is not available — no check command is set for this folder".into(), true);
@@ -228,7 +230,11 @@ pub struct Run {
     /// Reads that named a line range. In taskprobe every file is under 64 KB, so
     /// one means the model chose to page a file it could have read whole.
     pub ranged_reads: usize,
+    /// Rounds that count against the bound: **an accepted `update_plan` round does
+    /// not**, as in the app (H10).
     pub rounds: usize,
+    /// `update_plan` calls the loop accepted — the model's task list updates.
+    pub plan_updates: usize,
     /// Still calling tools when the bound ran out.
     pub hit_bound: bool,
     /// Ended by the app's loop-breaking: the same call failed three times.
@@ -275,12 +281,24 @@ fn short(s: &str, n: usize) -> String {
     if one.chars().count() > n { format!("{}…", one.chars().take(n).collect::<String>()) } else { one }
 }
 
+/// Whether a round that ran this call is free of the round bound: an `update_plan`
+/// the loop accepted. A malformed one, or the 7th, costs a round like any call, so
+/// a model that cannot get the list right is still bounded.
+pub fn free_round(name: &str, failed: bool) -> bool {
+    name == "update_plan" && !failed
+}
+
 /// Drive the conversation until the model answers, the bound runs out, the
 /// loop-breaking stops it, or Ollama fails.
 ///
 /// `bound` is the probe's own. The app stops at `tools::MAX_ROUNDS`; a probe can
 /// run past it to record how many rounds a task really takes (H7 sets the app's
 /// bound from that).
+///
+/// **A plan update is free** (H10): an accepted `update_plan` round is not counted
+/// against `bound` or in `Run::rounds`, and `tools::plan_updates` — the app's own
+/// rule — rejects the 7th in a turn, which does count. So the loop runs at most
+/// `bound + MAX_PLAN_UPDATES` requests.
 pub fn run_loop(
     model: &str,
     messages: &mut Vec<Message>,
@@ -296,7 +314,9 @@ pub fn run_loop(
     let mut calibration: Option<(u64, u32)> = None;
     let mut deleted: Vec<String> = Vec::new();
 
-    for _ in 0..bound {
+    let mut requests = 0;
+    while run.rounds < bound && requests < bound + tools::MAX_PLAN_UPDATES {
+        requests += 1;
         run.rounds += 1;
         let mut aside_now = 0;
         if s.compact {
@@ -351,6 +371,8 @@ pub fn run_loop(
         }
         // The app's loop-breaking, measured rather than assumed: the third
         // identical failure ends the turn instead of burning every round.
+        let over_plan = call.function.name == "update_plan"
+            && tools::plan_updates(messages) >= tools::MAX_PLAN_UPDATES;
         let prior = tools::prior_failures(messages, &call);
         if prior + 1 >= tools::MAX_IDENTICAL_FAILURES {
             run.log.push(format!("stopped: {} sent identically after failing {prior} times", call.function.name));
@@ -367,7 +389,22 @@ pub fn run_loop(
             tool_calls: Some(vec![call.clone()]),
             tool_name: None,
         });
-        let ran = execute(&call, s);
+        let ran = if over_plan {
+            Ran {
+                text: tools::PLAN_LIMIT_NOTE.to_string(),
+                failed: true,
+                check: None,
+                asked: false,
+                asked_every_call: false,
+                undo: None,
+            }
+        } else {
+            execute(&call, s)
+        };
+        if free_round(&call.function.name, ran.failed) {
+            run.plan_updates += 1;
+            run.rounds -= 1;
+        }
         run.undo_ids.extend(ran.undo.clone());
         // Paths as the model wrote them, tidied — one file is one entry however it
         // was spelled.
@@ -412,7 +449,7 @@ pub fn run_loop(
             short(&call.function.arguments.to_string(), 140),
             short(&result, 140)
         ));
-        if ran.failed && call.function.name != "read_file" {
+        if ran.failed && !matches!(call.function.name.as_str(), "read_file" | "update_plan") {
             run.edit_errors += 1;
         }
         messages.push(Message::tool_result(call.function.name.clone(), result));
@@ -426,6 +463,41 @@ mod tests {
 
     fn call(name: &str, args: serde_json::Value) -> ToolCall {
         ToolCall { id: None, function: chat::FunctionCall { name: name.into(), arguments: args } }
+    }
+
+    /// **A task list is free, and shows no card.** The result is the app's line, it
+    /// is never an ask, and only an accepted update is free of the round bound.
+    #[test]
+    fn a_plan_update_runs_unasked_and_costs_no_round_but_a_bad_one_does() {
+        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("odin-probe-plan-{}-{n}", std::process::id()));
+        let tree = base.join("tree");
+        std::fs::create_dir_all(&tree).unwrap();
+        let ws = Workspace::open(&tree).unwrap();
+        let backups = base.join("backups");
+        let setup = Setup { ws: &ws, backups: &backups, check: None, confine_reads: true, compact: true };
+
+        let ran = execute(&call("update_plan", serde_json::json!({ "plan": "[x] a\n[ ] b" })), &setup);
+        assert_eq!((ran.text.as_str(), ran.failed, ran.asked, ran.asked_every_call), ("Plan updated: 1 of 2 done.", false, false, false));
+        assert!(free_round("update_plan", ran.failed));
+        let bad = execute(&call("update_plan", serde_json::json!({})), &setup);
+        assert!(bad.failed && !free_round("update_plan", bad.failed));
+        assert!(!free_round("read_file", false));
+        // The cap is the app's: the 7th in a turn is the first the shared count rejects.
+        let plan = call("update_plan", serde_json::json!({ "plan": "[ ] a" }));
+        let mut history = vec![Message::user("go")];
+        for _ in 0..tools::MAX_PLAN_UPDATES {
+            assert!(tools::plan_updates(&history) < tools::MAX_PLAN_UPDATES);
+            history.push(Message {
+                role: "assistant".into(),
+                content: String::new(),
+                images: None,
+                tool_calls: Some(vec![plan.clone()]),
+                tool_name: None,
+            });
+        }
+        assert!(tools::plan_updates(&history) >= tools::MAX_PLAN_UPDATES);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// A failed read is told to change the range, not to copy text — and is not

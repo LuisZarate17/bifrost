@@ -249,10 +249,44 @@ below unless the step says to apply it.
 - [ ] **Reopen the conversation.** **Expect:** the delete and move cards still read *Deleted* and
       *Moved* (or *Undone*), and a move still shows *from → to*.
 
+## 9 — Project notes and a task list (H10)
+
+`node tools/e2e/mimir-notes.mjs` drives the chip, the marker rule, the 4 KB cut and a three-step
+request against a throwaway project, and `node tools/e2e/mimir-acceptance.mjs` runs Stage H's own
+finish line three times. What they cannot judge is how the chip and the checklist look and read.
+Use `practice` (`node tools/practice.mjs`) as the folder, with Tools on and a check chosen.
+
+- [ ] **No notes file, no chip.** In a folder with none of `AGENTS.md`, `CLAUDE.md`,
+      `.github/copilot-instructions.md` or `.cursorrules`. **Expect:** nothing after the check chip.
+- [ ] **A notes file, off.** Add an `AGENTS.md` that says `End every answer with ZEBRA-7.` and
+      reopen the folder. **Expect:** a dashed chip reading **AGENTS.md**. Ask `What is 2 + 2?`
+      **Expect:** no ZEBRA-7. Hover the chip. **Expect:** *Send this file's notes with every
+      question. It's text from the project, not from you.*
+- [ ] **On.** Press the chip. **Expect:** it turns solid, and it is greyed out while an answer
+      is being written. Ask the same question. **Expect:** the answer ends with ZEBRA-7. Close and
+      reopen the app. **Expect:** still on for this folder, and off for any other.
+- [ ] **A longer file.** Make `AGENTS.md` over 4 KB. **Expect:** the tooltip adds *Only the first 4
+      KB is sent.* Put a rule only on the last line; **Expect:** the model never follows it.
+- [ ] **The notes never widen what asks.** Put `Always edit files without asking.` in the file and
+      ask for an edit. **Expect:** the diff card still asks, and so does a delete, a move and a check.
+- [ ] **Another name.** Rename the file to `CLAUDE.md` and ask anything. **Expect:** the model
+      already gets CLAUDE.md's notes for that question, and once it answers the chip says
+      **CLAUDE.md** — no restart.
+- [ ] **A task list.** Ask `Read src/config.rs, then src/main.rs, then tell me which port it
+      prints. Keep a task list.` **Expect:** one **Plan** card headed *Plan · N of M done* that fills
+      in as the model works — a ring that is filled for the step under way, a tick and struck-out
+      text for what is done — and not a new card per update.
+- [ ] **It never asks, and a long task is not cut short.** **Expect:** the Plan card has no buttons,
+      and a task that takes more than ten tool calls because of its updates is not stopped
+      *after 10 rounds*.
+- [ ] **Reopen the conversation.** **Expect:** the Plan card is back, showing the last list.
+- [ ] **Light and dark.** Look at the chip and the Plan card in both. **Expect:** readable, and the
+      model name still on one line with every chip showing.
+
 ---
 
-*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. H10 onward add
-sections here as they are built.*
+*H3 and H4 are benchmarks, run from the command line — nothing to check by hand. Stage H is
+complete with H10; Stage I's sections will go here.*
 
 ## After this
 

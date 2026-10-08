@@ -15,7 +15,7 @@
 //! Blocking, like the rest of this crate. Tauri callers go through
 //! `spawn_blocking`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -140,6 +140,16 @@ pub struct Config {
     /// `"false"` and `0` mean off; a missing field is off; anything else is on.
     #[serde(deserialize_with = "lenient_ask")]
     pub ask_every_call: bool,
+    /// The folders where Mímir sends the project's own notes file (`AGENTS.md` and
+    /// its kin, see `instructions`) with every question — **off for a folder until
+    /// the user turns it on**, because the file is the project's text, and a cloned
+    /// repository's author wrote it. Written only by the notes chip. Look a folder up
+    /// with [`Config::instructions_for`], which ignores case like [`Config::check_for`].
+    ///
+    /// **Read leniently**, like `checks`: an entry that is not a string is dropped, and
+    /// a field that is not a list means none — never a reset of the whole file.
+    #[serde(deserialize_with = "lenient_instructions")]
+    pub instructions: BTreeSet<String>,
 }
 
 /// `ask_every_call`: only an explicit no is a no.
@@ -178,6 +188,18 @@ where
         .collect())
 }
 
+/// `instructions`, keeping only the strings.
+fn lenient_instructions<'de, D>(d: D) -> Result<BTreeSet<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value
+        .as_array()
+        .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+        .unwrap_or_default())
+}
+
 impl Config {
     /// The check command set for this folder, if any.
     pub fn check_for(&self, root: &str) -> Option<&Vec<String>> {
@@ -195,6 +217,20 @@ impl Config {
             self.checks.insert(root.to_string(), argv);
         }
     }
+
+    /// Whether the project's notes are sent for this folder.
+    pub fn instructions_for(&self, root: &str) -> bool {
+        self.instructions.iter().any(|k| k.eq_ignore_ascii_case(root))
+    }
+
+    /// Turn the notes on or off for this folder, replacing any entry that differs
+    /// only in case.
+    pub fn set_instructions(&mut self, root: &str, on: bool) {
+        self.instructions.retain(|k| !k.eq_ignore_ascii_case(root));
+        if on {
+            self.instructions.insert(root.to_string());
+        }
+    }
 }
 
 impl Default for Config {
@@ -209,6 +245,7 @@ impl Default for Config {
             coding_model: DEFAULT_CODING_MODEL.to_string(),
             model_before_coding: None,
             ask_every_call: false,
+            instructions: BTreeSet::new(),
         }
     }
 }
@@ -288,6 +325,7 @@ mod tests {
             coding_model: "qwen3-coder:30b".into(),
             model_before_coding: Some("qwen3-vl:8b-instruct-q4_K_M".into()),
             ask_every_call: true,
+            instructions: BTreeSet::from([r"C:\work\demo".into()]),
         };
         let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(c, back);
@@ -386,6 +424,38 @@ mod tests {
             assert!(c.ask_every_call, "{bad}");
             assert_eq!(c.model, "llama3.1:8b");
             assert_eq!(c.workspace.as_deref(), Some(r"C:\w"));
+        }
+    }
+
+    /// Windows paths ignore case, and the folder can reach the config spelled
+    /// either way.
+    #[test]
+    fn notes_are_found_whatever_the_case_of_their_folder_and_set_replaces_one() {
+        let mut c = Config::default();
+        assert!(!c.instructions_for(r"C:\Work\Demo"), "off by default");
+        c.set_instructions(r"C:\Work\Demo", true);
+        assert!(c.instructions_for(r"c:\work\demo"));
+        assert!(!c.instructions_for(r"C:\work\other"));
+        c.set_instructions(r"c:\work\demo", true);
+        assert_eq!(c.instructions.len(), 1);
+        c.set_instructions(r"C:\WORK\DEMO", false);
+        assert!(c.instructions.is_empty());
+    }
+
+    /// A config from before H10 has no `instructions`; a typo in one costs that entry.
+    #[test]
+    fn a_malformed_instructions_field_is_dropped_and_everything_else_survives() {
+        let c: Config = serde_json::from_str(r#"{"model":"x"}"#).unwrap();
+        assert!(c.instructions.is_empty());
+        let c: Config =
+            serde_json::from_str(r#"{"model":"x","instructions":["C:\\a",1,null,{"b":2},"C:\\c"]}"#).unwrap();
+        assert_eq!(c.model, "x");
+        assert_eq!(c.instructions.len(), 2);
+        assert!(c.instructions_for(r"C:\a") && c.instructions_for(r"C:\c"));
+        for bad in [r#""C:\\a""#, "true", "{}", "null", "7"] {
+            let c: Config =
+                serde_json::from_str(&format!(r#"{{"model":"x","instructions":{bad}}}"#)).unwrap();
+            assert_eq!((c.model.as_str(), c.instructions.len()), ("x", 0), "{bad}");
         }
     }
 }

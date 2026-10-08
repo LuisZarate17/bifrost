@@ -115,8 +115,14 @@ export type Entry =
        *  approved by hand. Absent on a call you allowed, and on threads saved
        *  before H5 — which load as plain ran cards. */
       auto?: boolean;
+      /** For `update_plan` (H10): the task list as Rust parsed it. Saved with the
+       *  thread and replayed to the model in later turns. */
+      plan?: PlanItem[];
       error?: string;
     };
+
+/** One step of the model's task list; `odin_core::tools::PlanStep`. */
+export type PlanItem = { text: string; status: "pending" | "doing" | "done" };
 
 /** `odin_core::tools::Lines`: 1-based and inclusive; `end` null is "to the end". */
 export type LineRange = { start: number; end: number | null };
@@ -124,11 +130,31 @@ export type LineRange = { start: number; end: number | null };
 export type DiffLine = { tag: " " | "-" | "+"; text: string; old: number | null; new: number | null };
 export type DiffView = { hunks: { lines: DiffLine[] }[]; added: number; removed: number; create: boolean };
 /** `check` is the command chosen for the folder, if any, as a person reads it. */
-type Folder = { path: string; name: string; check?: string | null };
+type Folder = {
+  path: string;
+  name: string;
+  check?: string | null;
+  /** The folder's own notes file (H10), if it has one that can be read: which, whether
+   *  you turned it on for this folder, and whether it is longer than what is sent. */
+  notes?: { name: string; on: boolean; cut: boolean } | null;
+};
 
 /** Matches odin_core::tools::MAX_ROUNDS. G7 measured a two-file change taking
  *  five rounds, one more than G6's old bound of four allowed. */
 const MAX_ROUNDS = 10;
+
+/** Matches odin_core::tools::MAX_PLAN_UPDATES. A task-list update is not a round,
+ *  so this is what bounds a model that re-plans instead of working: Rust rejects
+ *  the 7th, and the loop below stops at MAX_ROUNDS + this many requests whatever
+ *  Rust says. */
+const MAX_PLAN_UPDATES = 6;
+
+/** The list as the model wrote it, one step to a line: what a replay sends. */
+export function planText(items: PlanItem[]): string {
+  return items
+    .map((p) => `${p.status === "done" ? "[x]" : p.status === "doing" ? "[~]" : "[ ]"} ${p.text}`)
+    .join("\n");
+}
 
 /** A call that changes the project and can be undone: an edit, a create, a delete
  *  or a move. (Called isEdit until H9 added the last two.) */
@@ -164,6 +190,24 @@ export function turnsOf(all: Entry[]): TurnGroup[] {
     if (e.kind !== "tool") return;
     if (e.state === "pending" || e.state === "running") g.busy = true;
     else if (isChange(e.name) && e.state === "ran" && e.undo) g.ids.push(e.undo);
+  });
+  return out;
+}
+
+/** Which entries are a task list that a later update in the same turn replaced.
+ *  They stay in the thread, saved and replayed, but only the latest is drawn: the
+ *  list updates in place rather than piling up a card per update. */
+export function supersededPlans(all: Entry[]): Set<number> {
+  const out = new Set<number>();
+  let last = -1;
+  all.forEach((e, i) => {
+    if (e.kind === "turn" && e.role === "user") last = -1;
+    // Only a card that carries a plan replaces one: a refused or malformed
+    // update has no checklist, and hiding the last good one for it would leave
+    // the turn with none.
+    if (e.kind !== "tool" || e.name !== "update_plan" || e.state === "rejected" || !e.plan?.length) return;
+    if (last >= 0) out.add(last);
+    last = i;
   });
   return out;
 }
@@ -209,6 +253,9 @@ function replayArgs(e: Extract<Entry, { kind: "tool" }>): Record<string, unknown
       ...(e.range?.end != null ? { end_line: e.range.end } : {}),
     };
   }
+  // A task list is replayed as the lines Rust parsed, in the one spelling the
+  // tool's description asks for.
+  if (e.name === "update_plan") return { plan: e.plan ? planText(e.plan) : String(e.args?.plan ?? "") };
   // A move is replayed as the paths Rust normalised, not the model's spelling.
   if (e.name === "move_file") return { path: e.path, ...(e.to ? { to: e.to } : {}) };
   return isChange(e.name) || !e.args ? { path: e.path } : e.args;
@@ -361,6 +408,8 @@ type ToolReply = (
       result: string;
       ok: boolean;
       stopped: boolean;
+      /** Only for `update_plan`: the list, parsed. */
+      plan?: PlanItem[];
       rawCall: Record<string, unknown>;
     }
   | { kind: "stuck"; error: string }
@@ -607,6 +656,16 @@ function App() {
     [checkOptions],
   );
 
+  // The project's notes file (H10), switched on or off for this folder. Takes only
+  // the switch: Rust finds the file and sends it, so no path crosses from here.
+  const chooseNotes = useCallback(async (on: boolean) => {
+    try {
+      setFolder(await invoke<Folder>("set_notes", { on }));
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   // Dev-only fixture: `?preview` seeds a thread so the UI can be inspected
   // without a model. The dynamic import keeps it out of the production bundle.
   useEffect(() => {
@@ -631,6 +690,15 @@ function App() {
       if (mode === "find") {
         setToolsOn(true);
         setFolder({ path: "C:\\Users\\you\\source\\repos\\demo", name: "demo" });
+      }
+      if (mode === "plan") {
+        setToolsOn(true);
+        setFolder({
+          path: "C:\\Users\\you\\source\\repos\\demo",
+          name: "demo",
+          check: "cargo check",
+          notes: { name: "AGENTS.md", on: true, cut: false },
+        });
       }
       if (mode === "check") {
         setToolsOn(true);
@@ -681,6 +749,7 @@ function App() {
                       path: e.path,
                       ...(e.args && !isChange(e.name) ? { args: e.args } : {}),
                       ...(e.auto ? { auto: true } : {}),
+                      ...(e.plan ? { plan: e.plan } : {}),
                       ...(e.ok === false ? { ok: false } : {}),
                       ...(e.range ? { range: e.range } : {}),
                       ...(e.diff ? { diff: e.diff } : {}),
@@ -782,6 +851,7 @@ function App() {
                     undo?: string;
                     undone?: boolean;
                     auto?: boolean;
+                    plan?: PlanItem[];
                     to?: string;
                     folders?: string[];
                     size?: number;
@@ -804,6 +874,7 @@ function App() {
                 ...(args.folders?.length ? { folders: args.folders } : {}),
                 ...(args.size != null ? { size: args.size } : {}),
                 ...(args.auto ? { auto: true } : {}),
+                ...(args.plan ? { plan: args.plan } : {}),
               };
             }
             return {
@@ -1015,7 +1086,11 @@ function App() {
 
       // A bound, not a timeout. Without one, a model that keeps asking loops
       // forever and the only symptom is the app getting warm.
-      for (let step = 0; step < MAX_ROUNDS; step++) {
+      //
+      // **A task-list update is not a round** (H10): it touches nothing, so the
+      // branch below gives its round back. `requests` still counts it, and stops
+      // the loop at MAX_ROUNDS + MAX_PLAN_UPDATES whatever Rust says.
+      for (let step = 0, requests = 0; step < MAX_ROUNDS && requests < MAX_ROUNDS + MAX_PLAN_UPDATES; step++, requests++) {
         // Stopped: a tool round is not streamed, so it cannot be cut short, but
         // nothing after the stop is shown or acted on.
         if (!live()) return;
@@ -1094,7 +1169,7 @@ function App() {
           // inside the project folder needs no approval. Shown as a ran card
           // marked `auto` so nothing happens unseen, and sent back to the model
           // exactly as an approved call would be.
-          const { name, path, range, result, ok, stopped } = out;
+          const { name, path, range, result, ok, stopped, plan } = out;
           const args =
             (out.rawCall as { function?: { arguments?: Record<string, unknown> } }).function?.arguments ?? {};
           await settle((prev) => [
@@ -1109,6 +1184,7 @@ function App() {
               result,
               auto: true,
               ...(range ? { range } : {}),
+              ...(plan ? { plan } : {}),
             },
           ]);
           // Stopped while the card went up: Stop's own save may have missed it,
@@ -1124,6 +1200,7 @@ function App() {
             { role: "assistant", content: "", tool_calls: [out.rawCall] },
             { role: "tool", content: result, tool_name: name },
           ];
+          if (name === "update_plan") step--;
           continue;
         }
 
@@ -1311,6 +1388,11 @@ function App() {
           setStreaming(false);
           composerRef.current?.focus();
           await persist(await settle((all) => all), convoId);
+          // The turn may have created or removed a notes file (AGENTS.md…): ask
+          // again what the folder holds, so the chip matches before the next question.
+          invoke<Folder | null>("project_folder")
+            .then((f) => f && setFolder(f))
+            .catch(() => {});
         }
       }
       return;
@@ -1574,6 +1656,7 @@ function App() {
   const short = model ? splitName(model) : null;
 
   const turns = turnsOf(entries);
+  const replacedPlans = supersededPlans(entries);
   const turnEnds = new Map(turns.map((t) => [t.end, t]));
   /** The Undo-all line, after a turn's last entry. Two or more changes still
    *  applied, nothing waiting on you, and not the turn being streamed now. */
@@ -1768,7 +1851,7 @@ function App() {
                 )}
                 {entries.map((entry, i) => (
                   <Fragment key={i}>
-                    {renderEntry(entry, i)}
+                    {!replacedPlans.has(i) && renderEntry(entry, i)}
                     {turnLine(i)}
                   </Fragment>
                 ))}
@@ -1972,6 +2055,26 @@ function App() {
                     </select>
                     <I.Chevron width={14} height={14} />
                   </label>
+                )}
+
+                {/* The project's own notes (AGENTS.md and its kin), sent with every
+                    question once you turn them on for this folder. Off until then:
+                    the file is the project's text, not yours. It names the file, so
+                    what would be sent is never a surprise. */}
+                {toolsOn && folder?.notes && (
+                  <button
+                    className={"notes-chip" + (folder.notes.on ? " on" : "")}
+                    onClick={() => void chooseNotes(!folder.notes?.on)}
+                    disabled={streaming}
+                    aria-pressed={folder.notes.on}
+                    title={
+                      "Send this file's notes with every question. It's text from the project, not from you." +
+                      (folder.notes.cut ? " Only the first 4 KB is sent." : "")
+                    }
+                  >
+                    <I.File width={14} height={14} />
+                    <span className="notes-name">{folder.notes.name}</span>
+                  </button>
                 )}
 
                 <span className="spacer" />
