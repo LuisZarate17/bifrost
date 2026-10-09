@@ -804,9 +804,50 @@ impl Plan {
 /// written, and the message says how to fix the request — it goes back to the
 /// model, which can read the file again and retry.
 pub fn plan_replace(ws: &Workspace, path: &str, old: &str, new: &str) -> Result<Plan, String> {
+    plan_replace_in(ws, path, old, new, false)
+}
+
+/// The one thing a failed edit of a protected file says, whatever the reason:
+/// no text of it, no count, no size, no encoding (review R-01).
+fn protected_miss(ws: &Workspace, real: &Path) -> String {
+    format!(
+        "old_text does not match exactly one place in {}. It is a protected file, so its text is \
+         not shown; ask the user to allow a read of it first.",
+        ws.relative(real)
+    )
+}
+
+/// [`plan_replace`], for a file whose text must not reach the model unasked
+/// (`protected`, decided by [`crate::tools::protected`]).
+///
+/// **Found in review (R-01):** an edit is planned before any card, and a plan
+/// that fails goes straight back to the model. On a miss the error carried the
+/// closest lines of the file (up to 60), and on several matches how many there
+/// were, so `edit_file` on `.env` with a wrong `old_text` read the file with
+/// no card, where a direct read would have asked. A protected file's
+/// errors therefore carry no text of it and no count. A plan that succeeds is
+/// unchanged: its diff card is the approval.
+///
+/// Callers do not choose `protected` themselves; they go through
+/// [`crate::tools::plan_edit`], which is shared by the app and the probes.
+pub fn plan_replace_in(
+    ws: &Workspace,
+    path: &str,
+    old: &str,
+    new: &str,
+    protected: bool,
+) -> Result<Plan, String> {
     let real = ws.resolve_existing(path)?;
+    // Decided here, on the data, not only by the callers that remember to ask:
+    // whatever plans an edit — the app, a probe, a test — a secret-named,
+    // hidden or hard-linked file never answers a miss with its own text. The
+    // caller can only add to this (`ask_every_call`), never take it away.
+    let protected = protected || crate::tools::protected(Some(ws), &real, false);
     let bytes = std::fs::read(&real).map_err(|e| format!("cannot read {}: {e}", clean(path)))?;
-    let text = Text::parse(&bytes)?;
+    // Why a file cannot be edited — its exact size, binary, not UTF-8, mixed
+    // line endings — is itself a fact about its content; a protected file
+    // gives the same one answer as any other miss.
+    let text = Text::parse(&bytes).map_err(|e| if protected { protected_miss(ws, &real) } else { e })?;
 
     let mut old = from_model(old);
     let mut new = from_model(new);
@@ -840,6 +881,14 @@ pub fn plan_replace(ws: &Workspace, path: &str, old: &str, new: &str) -> Result<
             new.truncate(keep_new);
             count = 1;
         }
+    }
+
+    // A protected file (H5, review R-01) says one thing whenever the edit cannot
+    // be planned — never which way it missed: "not found" against "more than one
+    // place" would itself tell the model something about text it was not allowed
+    // to read.
+    if count != 1 && protected {
+        return Err(protected_miss(ws, &real));
     }
 
     if count == 0 {
@@ -1013,8 +1062,10 @@ pub fn plan_delete(ws: &Workspace, path: &str) -> Result<Plan, String> {
     let shown = clean(path);
     let size = std::fs::metadata(&real).map_err(|e| format!("cannot read {shown}: {e}"))?.len();
     if size > MAX_DELETE_BYTES {
+        // Not the exact size: before any card, that would say something about a
+        // file the model may not be allowed to read (review R-01).
         return Err(format!(
-            "{shown} is {size} bytes, over the {MAX_DELETE_BYTES} byte limit for a delete, which has to keep a copy"
+            "{shown} is over the {MAX_DELETE_BYTES} byte limit for a delete, which has to keep a copy"
         ));
     }
     let bytes = std::fs::read(&real).map_err(|e| format!("cannot read {shown}: {e}"))?;

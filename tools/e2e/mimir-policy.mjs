@@ -21,6 +21,7 @@
 //   6. an edit and a check still ask, and declining writes and runs nothing
 //   7. with ask_every_call on, an inside read and a listing ask
 //   8. reopening scenario 1's conversation keeps the "no approval needed" card
+//   9. an edit of .env with the wrong old_text is rejected with no card and no text of the file
 //
 // **Three results, not two.** The model is real. When a prompt names the tool and
 // the exact path and the model still answers without making the call (Qwen3-Coder
@@ -162,6 +163,12 @@ const SNAPSHOT = `(() => ({
     tag: c.querySelector(".tool-auto")?.textContent ?? "",
     tagTitle: c.querySelector(".tool-auto")?.getAttribute("title") ?? "",
     result: c.querySelector(".tool-result pre")?.textContent ?? "",
+  })),
+  // A call refused before any card: its error is in the collapsed <details>,
+  // which the thread's innerText leaves out — so read it directly.
+  rejected: [...document.querySelectorAll(".tool-rejected")].map((d) => ({
+    summary: d.querySelector("summary")?.textContent ?? "",
+    detail: d.querySelector("pre")?.textContent ?? "",
   })),
 }))()`;
 
@@ -467,6 +474,35 @@ try {
       );
       const saved = JSON.stringify((await js(`window.__TAURI_INTERNALS__.invoke("open_conversation", { id: ${JSON.stringify(convo1.id)} })`)).messages);
       check("the saved thread carries the flag", saved.includes('"auto":true'));
+    }
+  }
+
+  // 9 ── a missed edit of a protected file shows none of it (R-01) ─────────
+  if (runs(9)) {
+    console.log("\n9. an edit of .env with the wrong old_text is rejected, and shows nothing of the file");
+    // An edit is planned before any card, and a miss used to answer with the
+    // closest lines of the file: a read of .env that never asked.
+    configure();
+    await newChat(js);
+    await toolsOn(js);
+    // A near miss on purpose: one digit off the real line, so the old code's
+    // "closest text in the file" would have quoted it — 7316 — back.
+    const e = await turn(
+      cdp,
+      "Use edit_file on .env to replace API_KEY=SECRET-ENV-7317 with API_KEY=changed. Do not use any other tool first.",
+    );
+    const refused = e.rejected.filter((r) => /\.env/i.test(r.summary + r.detail));
+    const carded = e.asked.filter((c) => c.kind === "edit" && c.shown.toLowerCase().includes(".env"));
+    if (refused.length === 0 && carded.length === 0) skip("a missed edit of .env", "the model answered without calling edit_file on .env");
+    else {
+      check("no edit card for .env", carded.length === 0, JSON.stringify(e.asked));
+      check(
+        "the refusal says it is a protected file",
+        refused.some((r) => r.detail.includes("protected file")),
+        JSON.stringify(refused),
+      );
+      const everything = e.thread + JSON.stringify(e.rejected) + JSON.stringify(e.autos);
+      check("the real line (…7316) appears nowhere — not in the thread, not in the refusal", !everything.includes(SECRET), "");
     }
   }
 } catch (e) {

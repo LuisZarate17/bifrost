@@ -604,7 +604,7 @@ pub fn approval(ws: Option<&Workspace>, req: &Request, ask_every_call: bool) -> 
                 "{} is a folder; use list_files to see what is in it",
                 edit::clean(path)
             )),
-            Located::Inside(real) if search::visible(ws, &real) && !search::secret_name(&real) => {
+            Located::Inside(real) if !protected(Some(ws), &real, ask_every_call) => {
                 Approval::Auto(Auto::Read { real, range: *range })
             }
             Located::MissingInside => {
@@ -624,6 +624,40 @@ pub fn approval(ws: Option<&Workspace>, req: &Request, ask_every_call: bool) -> 
         | Request::Rewrite { .. } => Approval::Ask,
         Request::Plan { .. } => unreachable!("answered before the folder checks"),
     }
+}
+
+/// **Whether a file's text must not reach the model unasked** — the one test
+/// behind both a direct read ([`approval`]) and an edit's planning
+/// ([`plan_edit`]), so the two cannot drift.
+///
+/// True when there is no project folder, `ask_every_call` is on, the folder is
+/// a [`broad_root`], the file is not one [`search::visible`] shows, its name is
+/// [`search::secret_name`], or it has more than one name (a hard link, which
+/// [`edit::open_checked`] counts on the open handle; where that cannot be
+/// checked, nothing is unprotected). `real` is the canonical path inside the folder.
+pub fn protected(ws: Option<&Workspace>, real: &Path, ask_every_call: bool) -> bool {
+    let Some(ws) = ws else { return true };
+    ask_every_call
+        || broad_root(ws.root(), std::env::var_os("USERPROFILE").map(PathBuf::from).as_deref())
+        || !search::visible(ws, real)
+        || search::secret_name(real)
+        || edit::open_checked(real).is_none()
+}
+
+/// Plan an edit the way the app and the probes both must: a protected file
+/// ([`protected`]) gets errors that carry none of its text and no count.
+///
+/// A path that does not resolve is planned as usual, since its error names the
+/// path and nothing of any file.
+pub fn plan_edit(
+    ws: &Workspace,
+    path: &str,
+    old: &str,
+    new: &str,
+    ask_every_call: bool,
+) -> Result<edit::Plan, String> {
+    let quiet = ws.resolve_existing(path).is_ok_and(|real| protected(Some(ws), &real, ask_every_call));
+    edit::plan_replace_in(ws, path, old, new, quiet)
 }
 
 /// A folder too broad to read from unasked: a drive root, or the user's profile
@@ -1585,6 +1619,90 @@ mod tests {
             let real = std::fs::canonicalize(s.dir.join("project").join(name)).unwrap();
             assert_eq!(read_unasked(&real, None), None, "{name}");
         }
+    }
+
+    /// **Found in review (R-01):** an edit is planned before any card, and a miss
+    /// answered with the closest lines of the file — `.env`'s password line, a
+    /// whole PEM key, a gitignored file's line — so `edit_file` read what
+    /// `read_file` would have asked about. Now both go through [`protected`].
+    #[cfg(windows)]
+    #[test]
+    fn a_missed_edit_of_a_protected_file_shows_none_of_its_text() {
+        let s = Sandbox::new("edit-quiet");
+        s.write(".env", "DB_USER=admin\nDB_PASSWORD=hunter2-SECRETLINE\n");
+        s.write(
+            "keys/server.pem",
+            "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEI-SECRETLINE0123456789\n-----END PRIVATE KEY-----\n",
+        );
+        s.write(".gitignore", "private/\n");
+        s.write("private/notes.txt", "the launch code is 0451-SECRETLINE\n");
+        s.write("src/plain.txt", "the plain line is shown\n");
+        let outside = s.dir.join("outside.txt");
+        std::fs::write(&outside, "the outside line is SECRETLINE\n").unwrap();
+        let linked = std::fs::hard_link(&outside, s.dir.join("project/linked.txt")).is_ok();
+        let ws = s.ws();
+
+        let mut tries = vec![
+            (".env", "DB_USER=admin\nDB_PASSWORD=wrongpass"),
+            ("keys/server.pem", "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEI\n-----END PRIVATE KEY-----"),
+            ("private/notes.txt", "the launch code is 1234-X"),
+        ];
+        if linked {
+            tries.push(("linked.txt", "the outside line is wrong"));
+        }
+        for (path, old) in tries {
+            let err = plan_edit(&ws, path, old, "x", false).unwrap_err();
+            assert!(!err.contains("SECRETLINE") && !err.contains("closest"), "{path}: {err}");
+            assert!(err.contains("protected file"), "{path}: {err}");
+        }
+        assert_eq!(
+            plan_edit(&ws, ".env", "nope", "x", false).unwrap_err(),
+            "old_text does not match exactly one place in .env. It is a protected file, so its \
+             text is not shown; ask the user to allow a read of it first."
+        );
+
+        // With `ask_every_call`, even a plain file is protected.
+        let err = plan_edit(&ws, "src/plain.txt", "the plain line is wrong", "x", true).unwrap_err();
+        assert!(!err.contains("closest") && err.contains("protected file"), "{err}");
+        // Unprotected: the helpful error, exactly as before.
+        let err = plan_edit(&ws, "src/plain.txt", "the plain line is wrong", "x", false).unwrap_err();
+        assert!(err.contains("closest text in the file"), "{err}");
+    }
+
+    /// Why a protected file cannot be edited is a fact about its content too:
+    /// binary, not UTF-8, mixed endings — all answered with the one message.
+    #[cfg(windows)]
+    #[test]
+    fn a_protected_file_that_cannot_be_edited_says_nothing_about_why() {
+        let s = Sandbox::new("edit-parse");
+        s.write(".env", "A=1\r\nB=2\n");
+        s.write("plain.txt", "A=1\r\nB=2\n");
+        let ws = s.ws();
+        let quiet = plan_edit(&ws, ".env", "A=1", "A=9", false).unwrap_err();
+        assert!(!quiet.contains("CRLF") && !quiet.contains("mixes"), "{quiet}");
+        assert_eq!(quiet, plan_edit(&ws, ".env", "nope", "x", false).unwrap_err());
+        // An unprotected file still says what is wrong.
+        assert!(plan_edit(&ws, "plain.txt", "A=1", "A=9", false).unwrap_err().contains("mixes"));
+    }
+
+    /// "appears N times" is an oracle on a protected file's content: no count.
+    #[cfg(windows)]
+    #[test]
+    fn an_ambiguous_edit_of_a_protected_file_gives_no_count() {
+        let s = Sandbox::new("edit-count");
+        s.write(".env", "A=1\nB=1\nC=2\n");
+        s.write("plain.txt", "A=1\nB=1\nC=2\n");
+        let ws = s.ws();
+        let err = plan_edit(&ws, ".env", "=1", "=9", false).unwrap_err();
+        assert!(!err.contains("appears") && !err.chars().any(|c| c.is_ascii_digit()), "{err}");
+        assert!(err.contains("protected file"), "{err}");
+        // A miss and an ambiguous match read the same: which one it was would
+        // itself say something about the file.
+        assert_eq!(err, plan_edit(&ws, ".env", "nope", "=9", false).unwrap_err());
+        let err = plan_edit(&ws, "plain.txt", "=1", "=9", false).unwrap_err();
+        assert!(err.contains("appears 2 times"), "{err}");
+        // A plan that succeeds is a card the user approves: unchanged.
+        assert!(plan_edit(&ws, ".env", "C=2", "C=3", false).is_ok());
     }
 
     #[cfg(windows)]

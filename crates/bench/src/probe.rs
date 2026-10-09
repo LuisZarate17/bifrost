@@ -161,7 +161,7 @@ pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
             read(t, failed)
         }
         Request::Edit { path, old_text, new_text } => {
-            edit_result(edit::plan_replace(s.ws, &path, &old_text, &new_text))
+            edit_result(tools::plan_edit(s.ws, &path, &old_text, &new_text, false))
         }
         Request::Create { path, content } => edit_result(edit::plan_create(s.ws, &path, &content)),
         Request::Delete { path } => edit_result(edit::plan_delete(s.ws, &path)),

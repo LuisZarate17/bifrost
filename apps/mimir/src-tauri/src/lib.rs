@@ -1037,8 +1037,9 @@ async fn ask_with_tools(
             }
             tools::Request::Edit { path, old_text, new_text } => {
                 let ws = ws.clone().expect("checked above");
+                let ask_every_call = cfg.ask_every_call;
                 let planned = tauri::async_runtime::spawn_blocking(move || {
-                    edit::plan_replace(&ws, &path, &old_text, &new_text)
+                    tools::plan_edit(&ws, &path, &old_text, &new_text, ask_every_call)
                 })
                 .await
                 .map_err(|e| format!("planning the edit failed: {e}"))?;
