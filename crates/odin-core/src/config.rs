@@ -1,11 +1,22 @@
 //! The settings all three binaries share, at `%APPDATA%\odin\config.json`.
 //!
 //! **A missing file is a normal state, not an error.** `load()` cannot fail: no
-//! file, unreadable file, or malformed JSON all yield the built-in defaults, and
-//! nothing here prints or panics. That is deliberate and load-bearing — PLAN.md
-//! decision #5 requires Heimdall to keep working on a machine where Mímir was
-//! never installed, so "no config" has to be the ordinary path rather than an
-//! error anyone has to handle.
+//! file yields the built-in defaults, and nothing here prints or panics. That is
+//! deliberate and load-bearing — PLAN.md decision #5 requires Heimdall to keep
+//! working on a machine where Mímir was never installed, so "no config" has to be
+//! the ordinary path rather than an error anyone has to handle.
+//!
+//! **A file that is there but cannot be read is not the same as no file.** One
+//! that is not UTF-8 text, or is not a JSON object (a trailing comma, a
+//! single-backslash path, a `//` comment, a half-finished write), still loads —
+//! `load()` still cannot fail — but as the defaults *with `ask_every_call` on*,
+//! because a typo must not silently mean "never ask". And before anything can
+//! save over it, the file is copied to `config.json.bad` beside it, so a
+//! hand-typed setting is never erased by the next unrelated save. A leading
+//! byte-order mark (PowerShell 5.1's `Set-Content -Encoding UTF8` writes one) is
+//! not a typo and is skipped. Saving goes through `config.json.tmp` and a rename,
+//! so a reader never sees a half-written file, and fields this build does not
+//! know are kept.
 //!
 //! JSON rather than TOML so a frontend can read it directly later without a Rust
 //! round trip, and `%APPDATA%` rather than anywhere repo-local, because a repo
@@ -16,7 +27,7 @@
 //! `spawn_blocking`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -89,21 +100,29 @@ pub const DEFAULT_CODING_MODEL: &str = "qwen3-coder:30b";
 /// field from `Default` rather than failing to parse. So a config written before
 /// a field existed still loads, and a hand-edited file holding only `{"model":
 /// "..."}` is valid. That is what makes adding a field later cheap.
+///
+/// Every field is also read on its own terms: a `null` or a value of the wrong
+/// type gives *that field's* default, never the whole file's.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    #[serde(deserialize_with = "lenient_model")]
     pub model: String,
+    #[serde(deserialize_with = "lenient_prompt")]
     pub prompt: String,
+    #[serde(deserialize_with = "lenient_num_ctx")]
     pub num_ctx: u32,
     /// The one folder Mímir may change files in, or `None` for no editing at
     /// all. Set only through a native folder picker the user operates — there is
     /// no command that takes a path for it, so nothing reaching the app's IPC can
     /// widen it. Heimdall and the CLI ignore it.
+    #[serde(deserialize_with = "lenient")]
     pub workspace: Option<String>,
     /// Folders chosen before, newest first, for Mímir's new-chat screen. Only
     /// the picker adds to it, and the webview can pick an entry only by its
     /// position — so choosing a recent folder never lets a path in from outside,
     /// and `workspace` stays something the user picked with their own hands.
+    #[serde(deserialize_with = "lenient")]
     pub recent_workspaces: Vec<String>,
     /// The check command for each folder, keyed by the folder as `workspace`
     /// stores it — the command the model may run to find out whether its edits
@@ -122,12 +141,14 @@ pub struct Config {
     /// An empty string turns the offer off entirely — there is no separate
     /// on/off flag, because an empty tag can never be installed and so
     /// [`crate::ollama::find`]-style lookups simply never match it.
+    #[serde(deserialize_with = "lenient_coding_model")]
     pub coding_model: String,
     /// The model Mímir switched away from, on the user's say-so, to load
     /// `coding_model`. What "switch back" restores once the folder is
     /// cleared. Cleared by switching back, and by any manual model pick —
     /// a pick made by hand ends the switch-back story outright, rather than
     /// fighting it on the next folder change.
+    #[serde(deserialize_with = "lenient")]
     pub model_before_coding: Option<String>,
     /// Ask before every tool call again, as G6 did, instead of letting reads,
     /// listings and searches inside the project folder run on their own (H5,
@@ -150,6 +171,47 @@ pub struct Config {
     /// a field that is not a list means none — never a reset of the whole file.
     #[serde(deserialize_with = "lenient_instructions")]
     pub instructions: BTreeSet<String>,
+    /// Fields this build does not know — a newer build's, or a person's own notes —
+    /// kept as they were so the next save does not drop them.
+    #[serde(flatten)]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A field read on its own: whatever is there if it fits, else the type's default
+/// (`null`, a number where a list belongs, ...), never an error that would take the
+/// rest of the file with it.
+fn lenient<'de, D, T>(d: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    lenient_or(d, T::default)
+}
+
+/// [`lenient`] for a field whose default is not the type's own — `Config::default()`'s.
+fn lenient_or<'de, D, T>(d: D, default: impl FnOnce() -> T) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(T::deserialize(value).unwrap_or_else(|_| default()))
+}
+
+fn lenient_model<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    lenient_or(d, || DEFAULT_MODEL.to_string())
+}
+
+fn lenient_prompt<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    lenient_or(d, || DEFAULT_PROMPT.to_string())
+}
+
+fn lenient_num_ctx<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    lenient_or(d, || DEFAULT_NUM_CTX)
+}
+
+fn lenient_coding_model<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    lenient_or(d, || DEFAULT_CODING_MODEL.to_string())
 }
 
 /// `ask_every_call`: only an explicit no is a no.
@@ -246,6 +308,7 @@ impl Default for Config {
             model_before_coding: None,
             ask_every_call: false,
             instructions: BTreeSet::new(),
+            extra: serde_json::Map::new(),
         }
     }
 }
@@ -264,16 +327,41 @@ pub fn path() -> Option<PathBuf> {
 /// Deliberately returns `Config` rather than `Result<Config, _>`. There is no
 /// failure a caller could usefully handle: if the file is absent the defaults
 /// *are* the right answer, and if it is corrupt, refusing to summon the popup
-/// would be a worse outcome than ignoring it. Callers that need to know whether
-/// a file exists can use [`path`].
+/// would be a worse outcome than ignoring it. A file that is there but unusable is
+/// kept as `config.json.bad` and answered with `ask_every_call` on — see the
+/// module docs. Callers that need to know whether a file exists can use [`path`].
 pub fn load() -> Config {
-    let Some(p) = path() else {
-        return Config::default();
+    match path() {
+        Some(p) => load_from(&p),
+        None => Config::default(),
+    }
+}
+
+/// [`load`] for a given file, so tests need not touch `%APPDATA%`.
+pub fn load_from(p: &Path) -> Config {
+    let bytes = match std::fs::read(p) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Config::default(),
+        Err(_) => return unreadable(p),
     };
-    let Ok(text) = std::fs::read_to_string(&p) else {
-        return Config::default();
-    };
-    serde_json::from_str(&text).unwrap_or_default()
+    let parsed = String::from_utf8(bytes).ok().and_then(|text| {
+        // A byte-order mark is how some Windows editors say "this is UTF-8".
+        serde_json::from_str::<Config>(text.strip_prefix('\u{feff}').unwrap_or(&text)).ok()
+    });
+    parsed.unwrap_or_else(|| unreadable(p))
+}
+
+/// The answer for a file that is there but cannot be used: keep a copy of it
+/// beside itself, and fail towards asking. The copy is best effort — if even that
+/// fails, `load` must still not.
+fn unreadable(p: &Path) -> Config {
+    let mut bad = p.as_os_str().to_owned();
+    bad.push(".bad");
+    let _ = std::fs::copy(p, PathBuf::from(bad));
+    Config {
+        ask_every_call: true,
+        ..Config::default()
+    }
 }
 
 /// Write the config, creating `%APPDATA%\odin\` if it is not there.
@@ -282,12 +370,23 @@ pub fn load() -> Config {
 /// silently doing nothing would be wrong. G2 writes the model choice through it.
 pub fn save(config: &Config) -> Result<(), String> {
     let p = path().ok_or_else(|| "APPDATA is not set".to_string())?;
+    save_to(&p, config)
+}
+
+/// [`save`] for a given file. **Written to `config.json.tmp` and renamed**, as
+/// `store::save` does, so a reader (Heimdall reads this on every summon) sees the
+/// old file or the new one, never a half-written one.
+pub fn save_to(p: &Path, config: &Config) -> Result<(), String> {
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     }
     let json = serde_json::to_string_pretty(config)
         .map_err(|e| format!("serializing config: {e}"))?;
-    std::fs::write(&p, json).map_err(|e| format!("writing {}: {e}", p.display()))
+    let mut tmp = p.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, json).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
+    std::fs::rename(&tmp, p).map_err(|e| format!("replacing {}: {e}", p.display()))
 }
 
 #[cfg(test)]
@@ -326,6 +425,7 @@ mod tests {
             model_before_coding: Some("qwen3-vl:8b-instruct-q4_K_M".into()),
             ask_every_call: true,
             instructions: BTreeSet::from([r"C:\work\demo".into()]),
+            extra: serde_json::Map::new(),
         };
         let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(c, back);
@@ -457,5 +557,85 @@ mod tests {
                 serde_json::from_str(&format!(r#"{{"model":"x","instructions":{bad}}}"#)).unwrap();
             assert_eq!((c.model.as_str(), c.instructions.len()), ("x", 0), "{bad}");
         }
+    }
+
+    fn temp_file(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("odin-config-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("config.json")
+    }
+
+    /// **A file that does not parse fails towards asking, and is kept.** A typo in
+    /// the file must not silently mean "never ask", and the next save must not be
+    /// the end of what the person typed.
+    #[test]
+    fn a_file_that_does_not_parse_asks_every_call_and_is_copied_to_bad() {
+        let cases: Vec<Vec<u8>> = vec![
+            br#"{"ask_every_call": true, "model": "x",}"#.to_vec(),
+            br#"{"workspace": "C:\Users\me\proj"}"#.to_vec(),
+            b"{\"model\": \"x\"}\n// note\n".to_vec(),
+            br#"{"model": "x", "mo"#.to_vec(),
+            b"[]".to_vec(),
+            vec![0xFF, 0xFE, b'{'],
+        ];
+        for bytes in cases {
+            let p = temp_file("bad");
+            std::fs::write(&p, &bytes).unwrap();
+            let c = load_from(&p);
+            assert!(c.ask_every_call, "{:?}", String::from_utf8_lossy(&bytes));
+            assert_eq!(c.model, DEFAULT_MODEL);
+            let bad = p.with_extension("json.bad");
+            assert_eq!(std::fs::read(&bad).unwrap(), bytes);
+            // A save afterwards replaces the file but leaves the copy alone.
+            save_to(&p, &c).unwrap();
+            assert_eq!(std::fs::read(&bad).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn a_missing_file_is_plain_defaults_and_leaves_no_copy() {
+        let p = temp_file("missing");
+        assert_eq!(load_from(&p), Config::default());
+        assert!(!p.with_extension("json.bad").exists());
+    }
+
+    #[test]
+    fn a_byte_order_mark_is_skipped() {
+        let p = temp_file("bom");
+        let mut text = vec![0xEF, 0xBB, 0xBF];
+        text.extend_from_slice(br#"{"model":"mine","ask_every_call":false}"#);
+        std::fs::write(&p, text).unwrap();
+        let c = load_from(&p);
+        assert_eq!((c.model.as_str(), c.ask_every_call), ("mine", false));
+        assert!(!p.with_extension("json.bad").exists());
+    }
+
+    #[test]
+    fn a_null_or_wrong_type_costs_that_field_only() {
+        let c: Config = serde_json::from_str(
+            r#"{"model":"mine","coding_model":null,"prompt":7,"num_ctx":"big","workspace":3,
+                "recent_workspaces":"x","model_before_coding":[],"checks":{"C:\\a":["cargo"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.model, "mine");
+        assert_eq!(c.coding_model, DEFAULT_CODING_MODEL);
+        assert_eq!(c.prompt, DEFAULT_PROMPT);
+        assert_eq!(c.num_ctx, DEFAULT_NUM_CTX);
+        assert_eq!((c.workspace, c.model_before_coding), (None, None));
+        assert!(c.recent_workspaces.is_empty());
+        assert_eq!(c.checks.len(), 1);
+    }
+
+    #[test]
+    fn unknown_fields_survive_a_load_and_save() {
+        let p = temp_file("extra");
+        std::fs::write(&p, r#"{"model":"mine","future_setting":{"a":1}}"#).unwrap();
+        let c = load_from(&p);
+        save_to(&p, &c).unwrap();
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert!(after.contains("future_setting"), "{after}");
+        assert_eq!(load_from(&p), c);
+        assert!(!p.with_extension("json.tmp").exists(), "the temp file is renamed away");
     }
 }

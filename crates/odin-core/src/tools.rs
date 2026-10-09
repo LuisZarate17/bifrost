@@ -407,12 +407,30 @@ impl Request {
 }
 
 /// An optional argument, where a blank one is the same as none.
+/// A JSON `null` here is "no filter" — the usual way a model leaves an optional
+/// argument out — unlike in [`arg`], where it is the text `null`.
 fn optional(call: &ToolCall, key: &str) -> Option<String> {
+    if call.function.arguments.get(key).is_some_and(serde_json::Value::is_null) {
+        return None;
+    }
     arg(call, key).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+/// A string argument, as the text the model meant. **A JSON `null` is the word
+/// `null`, not an absent argument**: Ollama's own parser turns a string parameter
+/// whose whole value is `null` into JSON null (and the XML recovery path did the
+/// same), so "replace `None` with `null`" would otherwise arrive as a deletion and
+/// "search for `null`" would be refused as having no text. A number or bool is its
+/// JSON text. Only an argument that is really absent is `None` — so a `new_text`
+/// the model left out is still a deletion.
 fn arg(call: &ToolCall, key: &str) -> Option<String> {
-    call.function.arguments.get(key).and_then(|v| v.as_str()).map(str::to_string)
+    match call.function.arguments.get(key)? {
+        serde_json::Value::String(s) => Some(s.clone()),
+        other @ (serde_json::Value::Null | serde_json::Value::Number(_) | serde_json::Value::Bool(_)) => {
+            Some(other.to_string())
+        }
+        _ => None,
+    }
 }
 
 /// The part of a file a read asked for: 1-based, inclusive, and already
@@ -1110,6 +1128,29 @@ mod tests {
         }
     }
 
+    /// **`null` as a whole string argument is the word, not a gap.** Ollama's parser
+    /// turns a parameter whose whole value is `null` into JSON null; reading that as
+    /// absent made "replace `None` with `null`" a deletion.
+    #[test]
+    fn a_null_string_argument_is_the_word_null_and_only_an_absent_one_is_missing() {
+        let r = interpret(&call("edit_file", json!({ "path": "a.py", "old_text": "None", "new_text": null })));
+        assert!(matches!(r, Ok(Request::Edit { ref new_text, .. }) if new_text == "null"), "{r:?}");
+        let r = interpret(&call("edit_file", json!({ "path": "a.py", "old_text": null, "new_text": "x" })));
+        assert!(matches!(r, Ok(Request::Edit { ref old_text, .. }) if old_text == "null"), "{r:?}");
+        let r = interpret(&call("edit_file", json!({ "path": "a.py", "old_text": "None" })));
+        assert!(matches!(r, Ok(Request::Edit { ref new_text, .. }) if new_text.is_empty()), "left out: {r:?}");
+        let r = interpret(&call("search", json!({ "text": null })));
+        assert!(matches!(r, Ok(Request::Search { ref text, .. }) if text == "null"), "{r:?}");
+        let r = interpret(&call("create_file", json!({ "path": "a.txt", "content": null })));
+        assert!(matches!(r, Ok(Request::Create { ref content, .. }) if content == "null"), "{r:?}");
+        // Numbers and bools are their JSON text.
+        let r = interpret(&call("edit_file", json!({ "path": "a.py", "old_text": 42, "new_text": true })));
+        assert!(matches!(r, Ok(Request::Edit { ref old_text, ref new_text, .. }) if old_text == "42" && new_text == "true"), "{r:?}");
+        // An optional filter given as null is no filter.
+        let r = interpret(&call("search", json!({ "text": "x", "pattern": null })));
+        assert!(matches!(r, Ok(Request::Search { pattern: None, .. })), "{r:?}");
+    }
+
     #[test]
     fn only_the_tools_we_offer_are_accepted() {
         // The model can name anything; only this list is real.
@@ -1316,7 +1357,7 @@ mod tests {
         assert_eq!((r.name(), r.path()), ("update_plan", ""));
         assert_eq!(plan_message(&parse_plan("[x] a\n[ ] b\n[~] c")), "Plan updated: 1 of 3 done.");
         // Nothing to list is an answer for the model, not an empty card.
-        for args in [json!({}), json!({ "plan": "  \n" }), json!({ "plan": 7 })] {
+        for args in [json!({}), json!({ "plan": "  \n" }), json!({ "plan": [1] })] {
             let err = interpret(&call("update_plan", args)).unwrap_err();
             assert!(err.starts_with("update_plan was called without any steps"), "{err}");
         }

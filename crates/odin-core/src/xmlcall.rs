@@ -388,20 +388,23 @@ fn trim_value(raw: &str) -> String {
 }
 
 /// `parseTypedToolValue`, ported with its single-type fallbacks intact: null
-/// is checked first regardless of the declared type, and when a value fails
-/// to parse as the one type it was given, it falls back to the raw string
-/// rather than being lost.
+/// is checked first, and when a value fails to parse as the one type it was
+/// given, it falls back to the raw string rather than being lost.
+///
+/// **Except that a parameter declared `string` keeps the word `null` as text.**
+/// Ollama's parser turns it into JSON null, and the tool layer then could not tell
+/// "replace `None` with `null`" from "delete `None`".
 fn typed_value(raw: &str, prop_type: Option<&Value>) -> Value {
     let raw = trim_value(raw);
-    if raw.to_lowercase() == "null" {
-        return Value::Null;
-    }
 
     let types: Vec<String> = match prop_type {
         Some(Value::String(s)) => vec![s.clone()],
         Some(Value::Array(a)) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
         _ => vec![],
     };
+    if raw.to_lowercase() == "null" && types != ["string"] {
+        return Value::Null;
+    }
     if types.is_empty() {
         return Value::String(raw);
     }
@@ -901,6 +904,19 @@ mod tests {
         let (_, calls, _) = extract_calls(content, &add_tools());
         assert_eq!(calls[0].function.arguments["a"], json!(847));
         assert_eq!(calls[0].function.arguments["b"], json!(1.5));
+    }
+
+    #[test]
+    fn a_string_parameter_holding_the_word_null_stays_text() {
+        let content = "<tool_call>
+<function=read_file>
+<parameter=path>
+null
+</parameter>
+</function>
+</tool_call>";
+        let (_, calls, _) = extract_calls(content, &small_tools());
+        assert_eq!(calls[0].function.arguments["path"], "null");
     }
 
     #[test]

@@ -1084,6 +1084,13 @@ function App() {
       // another conversation can be opened in its place.
       const gen = threadGen.current;
 
+      // Rust starts Ollama itself before the first round; this only says why that
+      // round is waiting, the way `send`'s path does.
+      if (!(await invoke<boolean>("ollama_running"))) {
+        if (!live()) return;
+        setStatus("Starting Ollama…");
+      }
+
       // A bound, not a timeout. Without one, a model that keeps asking loops
       // forever and the only symptom is the app getting warm.
       //

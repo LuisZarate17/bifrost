@@ -56,6 +56,39 @@ enum StreamEvent {
     },
 }
 
+/// Make sure Ollama is answering, starting it if not, before a request that needs it.
+///
+/// Ollama has no autostart and does not survive a reboot (A1), so the first
+/// request after a restart would otherwise fail rather than wait. `send` passes its
+/// channel so the window can say what the wait is; `ask_with_tools` has none (the
+/// front end asks [`ollama_running`] first and names the wait itself), but starts
+/// Ollama all the same, so a tool turn never depends on the front end for it.
+async fn start_ollama(on_event: Option<&Channel<StreamEvent>>) -> Result<(), String> {
+    let running = tauri::async_runtime::spawn_blocking(ollama::is_running)
+        .await
+        .unwrap_or(false);
+    if !running {
+        if let Some(on_event) = on_event {
+            let _ = on_event.send(StreamEvent::StartingOllama);
+        }
+        let started = tauri::async_runtime::spawn_blocking(ollama::ensure_running).await;
+        if let Ok(Err(e)) = started {
+            return Err(format!("could not start Ollama: {e}"));
+        }
+    }
+    Ok(())
+}
+
+/// Whether Ollama is answering right now, so the window can say "Starting Ollama…"
+/// before a tool turn's first round instead of looking stuck. Only a hint: the turn
+/// starts Ollama itself either way.
+#[tauri::command]
+async fn ollama_running() -> bool {
+    tauri::async_runtime::spawn_blocking(ollama::is_running)
+        .await
+        .unwrap_or(false)
+}
+
 /// Send the conversation and stream the reply back.
 ///
 /// Takes every turn each time rather than appending to server-side state: the
@@ -79,18 +112,7 @@ async fn send(
         .unwrap_or_default();
     let model = model.unwrap_or(cfg.model);
 
-    // Ollama has no autostart and does not survive a reboot (A1), so the first
-    // request after a restart would otherwise fail rather than wait.
-    let running = tauri::async_runtime::spawn_blocking(ollama::is_running)
-        .await
-        .unwrap_or(false);
-    if !running {
-        let _ = on_event.send(StreamEvent::StartingOllama);
-        let started = tauri::async_runtime::spawn_blocking(ollama::ensure_running).await;
-        if let Ok(Err(e)) = started {
-            return Err(format!("could not start Ollama: {e}"));
-        }
-    }
+    start_ollama(Some(&on_event)).await?;
 
     // Cold? Say so before the wait, not after. Checked rather than assumed — the
     // model may have been warmed from Heimdall's tray, from `odin warm`, or simply
@@ -782,6 +804,11 @@ async fn ask_with_tools(
         .await
         .unwrap_or_default();
     let model = model.unwrap_or(cfg.model.clone());
+
+    // The capability check below ignores an error, so without this a stopped Ollama
+    // would pass it and fail later with a raw connection error — after a reboot,
+    // with nothing else having started it.
+    start_ollama(None).await?;
 
     // Offering tools to a model that cannot carry them wastes a round trip and
     // produces a confusing prose answer instead of a call. Better to say so.
@@ -1679,6 +1706,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             send,
+            ollama_running,
             models,
             card,
             conversations,
