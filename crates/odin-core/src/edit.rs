@@ -11,7 +11,13 @@
 //!    is asked. [`apply`] writes those bytes and nothing else.
 //! 3. **Nothing is written over a file that changed since you saw the diff.** The
 //!    plan carries a hash of the file as it was; [`apply`] refuses if the file on
-//!    disk no longer matches it.
+//!    disk no longer matches it. It checks at the start, and once more with the new
+//!    bytes already written beside the file, immediately before the rename that
+//!    replaces it ([`write_replacing`]); [`undo`] does the same. On Windows that last
+//!    read holds the file against writers until the rename is done, so there is no
+//!    gap: a save in that moment fails loudly instead of being replaced. Elsewhere
+//!    "compare, then replace" cannot be one step on a plain file, and a save landing
+//!    in the few microseconds between the read and the rename is still replaced.
 //! 4. **Every edit can be undone.** The original bytes are kept before anything
 //!    is written, and [`undo`] restores them — but only if the file is still
 //!    exactly what the edit left, so undo never throws away work done since.
@@ -1207,19 +1213,78 @@ pub fn backups_dir() -> Option<PathBuf> {
     Some(PathBuf::from(appdata).join("odin").join("backups"))
 }
 
-/// Write `bytes` to `path` via a temporary file in the same folder and a
-/// rename, so a crash leaves either the old file or the new one — never half.
+/// Write `bytes` over `path` — **only if it is still exactly what the caller saw**
+/// (it hashes to `expect`) — via a temporary file in the same folder and a rename,
+/// so a crash leaves either the old file or the new one, never half.
 ///
 /// **Replaces what is there**, which is what an edit means — and why a create, a
 /// restore and a move never use it: see [`write_new`] and [`move_new`].
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
+///
+/// An edit checks its file when it starts, and then makes folders, writes a backup
+/// and a record before it replaces anything — long enough for an editor's save to
+/// land in between, and that save would be replaced by bytes made from the older
+/// file, in neither the backup nor the result. Undo has the same stretch between
+/// its check and its rename. So the check is repeated as late as it can be: after
+/// the temporary file is written (the slow part) and immediately before the rename.
+/// On a mismatch the temporary file is removed and the file is left as the other
+/// writer made it.
+///
+/// **On Windows the gap between that read and the rename is closed, not just
+/// narrowed.** The file is read through a handle that allows others to read and
+/// rename but not to write, and the handle stays open across the rename (which
+/// replaces by name, so it does not need the file closed). An editor saving in that
+/// moment gets a sharing error — it fails loudly and can retry — instead of its
+/// bytes being silently replaced. Elsewhere there is no such handle, and what is left
+/// is the few microseconds between the read and the rename.
+fn write_replacing(path: &Path, bytes: &[u8], expect: u64) -> Result<(), String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let tmp = path.with_file_name(format!(".{name}.odin-tmp"));
     std::fs::write(&tmp, bytes).map_err(|e| format!("writing {}: {e}", plain(path)))?;
-    std::fs::rename(&tmp, path).map_err(|e| {
+    let held = fingerprint_held(path);
+    match &held {
+        Ok((h, _)) if *h == expect => {}
+        Ok(_) => {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("{} changed just now — nothing was changed", plain(path)));
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(format!("reading {}: {e}", plain(path)));
+        }
+    }
+    let replaced = std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("replacing {}: {e}", plain(path))
-    })
+    });
+    drop(held);
+    replaced
+}
+
+/// [`fingerprint_file`], keeping the file open so the caller can hold it: on
+/// Windows with no write sharing, so nobody can save to it until the handle is
+/// dropped; elsewhere an ordinary read.
+fn fingerprint_held(path: &Path) -> std::io::Result<(u64, std::fs::File)> {
+    use std::io::Read;
+    #[cfg(windows)]
+    let mut f = {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_READ | FILE_SHARE_DELETE: others may read it and rename over it.
+        std::fs::OpenOptions::new().read(true).share_mode(1 | 4).open(path)?
+    };
+    #[cfg(not(windows))]
+    let mut f = std::fs::File::open(path)?;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            return Ok((h, f));
+        }
+        for b in &buf[..n] {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
 }
 
 /// Rename `from` to `to`, **failing if `to` exists**.
@@ -1323,7 +1388,7 @@ fn stale(plan: &Plan, current: Option<&[u8]>) -> Option<String> {
 /// Backs the original up first.
 ///
 /// **Never overwrites a file it did not plan to.** Edits replace the file they
-/// read ([`write_atomic`]); every other way a path gets bytes goes through
+/// read ([`write_replacing`]); every other way a path gets bytes goes through
 /// [`move_new`], which refuses an existing destination.
 ///
 /// Order, so a failure at any step leaves the project as it was:
@@ -1390,7 +1455,15 @@ pub fn apply(plan: &Plan, backups: &Path) -> Result<Applied, String> {
             create: plan.create,
             op: plan.op,
             to: plan.to_display.clone(),
-            folders: if made.is_empty() { Vec::new() } else { plan.folders.clone() },
+            // Only the folders this call made: one that appeared since the card was
+            // shown is somebody else's, and undo will leave it too.
+            folders: plan
+                .make_dirs
+                .iter()
+                .zip(&plan.folders)
+                .filter(|(dir, _)| made.contains(dir))
+                .map(|(_, shown)| shown.clone())
+                .collect(),
         }),
         Err(e) => {
             let _ = std::fs::remove_file(backups.join(format!("{id}.json")));
@@ -1484,13 +1557,14 @@ fn apply_steps(
     // right before acting: an editor saving it since the check above would
     // otherwise have its newest bytes deleted, with only the older ones backed up.
     if matches!(plan.op, Op::Delete | Op::Move) {
-        let now = std::fs::read(&plan.path).map_err(|e| format!("reading {}: {e}", plan.display))?;
-        if Some(fingerprint(&now)) != plan.before {
+        // By chunks: a move has no size limit, and its bytes are not needed.
+        let now = fingerprint_file(&plan.path).map_err(|e| format!("reading {}: {e}", plan.display))?;
+        if Some(now) != plan.before {
             return Err(format!("{} changed just now — nothing was changed", plan.display));
         }
     }
     match plan.op {
-        Op::Edit => write_atomic(&plan.path, &plan.after),
+        Op::Edit => write_replacing(&plan.path, &plan.after, plan.before.ok_or("an edit with no original")?),
         Op::Create => write_new(&plan.path, &plan.after),
         Op::Delete => std::fs::remove_file(&plan.path)
             .map_err(|e| format!("deleting {}: {e}", plan.display)),
@@ -1673,10 +1747,18 @@ pub fn undo(id: &str, backups: &Path) -> Result<String, String> {
         return Err(format!("not an edit id: {id}"));
     }
     let meta = backups.join(format!("{id}.json"));
-    let record: Record = serde_json::from_slice(
-        &std::fs::read(&meta).map_err(|_| "that edit has already been undone, or was never made".to_string())?,
-    )
-    .map_err(|e| format!("reading the backup record: {e}"))?;
+    // Only a record that is not there means "already undone". One that is there but
+    // cannot be read (a lock, antivirus) is a change still on disk, and saying
+    // otherwise would mark its card Undone.
+    let bytes = std::fs::read(&meta).map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            "that edit has already been undone, or was never made".to_string()
+        } else {
+            format!("reading the backup record for {id}: {e}")
+        }
+    })?;
+    let record: Record =
+        serde_json::from_slice(&bytes).map_err(|e| format!("reading the backup record: {e}"))?;
 
     check_undo(&record, &look).map_err(|r| r.single())?;
 
@@ -1684,7 +1766,15 @@ pub fn undo(id: &str, backups: &Path) -> Result<String, String> {
     match record.op() {
         Op::Edit => {
             let original = std::fs::read(&bak).map_err(|e| format!("reading the backup: {e}"))?;
-            write_atomic(&record.path, &original)?;
+            // As undo all checks (see `simulate`): a truncated or swapped backup is
+            // not the file the edit started from, and would replace the user's file.
+            if record.before.is_some_and(|b| b != fingerprint(&original)) {
+                return Err(format!(
+                    "the backup of {} is not what the file was before the edit, so it is not put back",
+                    record.display
+                ));
+            }
+            write_replacing(&record.path, &original, record.after)?;
         }
         Op::Create => {
             std::fs::remove_file(&record.path).map_err(|e| format!("removing {}: {e}", record.display))?;
@@ -1863,9 +1953,15 @@ pub fn undo_turn(ids: &[String], backups: &Path) -> Result<TurnUndo, String> {
             continue;
         }
         seen.push(n);
-        let Ok(bytes) = std::fs::read(backups.join(format!("{id}.json"))) else {
-            already.push(id.clone());
-            continue;
+        // Only a record that is not there is "already undone"; one that cannot be
+        // read is still a change on disk, so the whole turn is refused, naming it.
+        let bytes = match std::fs::read(backups.join(format!("{id}.json"))) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                already.push(id.clone());
+                continue;
+            }
+            Err(e) => return Err(format!("reading the backup record for {id}: {e}")),
         };
         let record: Record =
             serde_json::from_slice(&bytes).map_err(|e| format!("reading the backup record for {id}: {e}"))?;
@@ -2793,7 +2889,7 @@ mod tests {
         s.write("b.txt", b"red\n");
         let a = replace(&s, &ws, "a.txt", "one", "two");
         let b = replace(&s, &ws, "b.txt", "red", "blue");
-        // A directory where write_atomic wants its temporary file makes the
+        // A directory where write_replacing wants its temporary file makes the
         // write to a.txt fail on any OS.
         let block = ws.root().join(".a.txt.odin-tmp");
         std::fs::create_dir(&block).unwrap();
@@ -3599,5 +3695,220 @@ mod tests {
             assert_eq!(v["create"], false);
             assert!(!Path::new(v["path"].as_str().unwrap()).exists());
         }
+    }
+
+    // ── review round 2: R-12 to R-16 ────────────────────────────────────────
+
+    #[test]
+    fn single_undo_refuses_a_backup_that_is_not_the_original() {
+        // R-12. Undo all compares the backup with `before`; the single undo used to
+        // write whatever `.bak` held — a truncated or swapped one — over the file.
+        let s = Sandbox::new("r12");
+        let ws = s.ws();
+        s.write("a.txt", b"one two\n");
+        let id = replace(&s, &ws, "a.txt", "one", "1");
+        let edited = s.read("a.txt");
+        std::fs::write(s.backups().join(format!("{id}.bak")), b"").unwrap();
+        let err = undo(&id, &s.backups()).unwrap_err();
+        assert!(err.contains("not what the file was before"), "{err}");
+        assert_eq!(s.read("a.txt"), edited);
+        assert!(s.backups().join(format!("{id}.json")).exists(), "the record is kept");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_record_that_cannot_be_read_is_not_reported_as_already_undone() {
+        // R-13. Only a record that is not there means "already undone"; one held open
+        // by another process is a change still on disk, and the card must not flip.
+        use std::os::windows::fs::OpenOptionsExt;
+        let s = Sandbox::new("r13");
+        let ws = s.ws();
+        s.write("a.txt", b"one\n");
+        let id = replace(&s, &ws, "a.txt", "one", "two");
+        let json = s.backups().join(format!("{id}.json"));
+        let lock = std::fs::OpenOptions::new().read(true).share_mode(0).open(&json).unwrap();
+        let single = undo(&id, &s.backups()).unwrap_err();
+        let turn = undo_turn(std::slice::from_ref(&id), &s.backups()).unwrap_err();
+        drop(lock);
+        assert!(!single.contains("already been undone") && single.contains(&id), "{single}");
+        assert!(turn.contains(&id), "{turn}");
+        assert_eq!(s.read("a.txt"), b"two\n");
+        assert!(json.exists());
+        // and a record that really is gone still is "already undone"
+        let gone = undo_turn(&["abc123".to_string()], &s.backups()).unwrap();
+        assert_eq!(gone.already, vec!["abc123".to_string()]);
+        assert!(undo("abc123", &s.backups()).unwrap_err().contains("already been undone"));
+    }
+
+    /// Saves `path` the way an editor does as soon as a file named by `pred` shows up
+    /// in `watch`; true if the save was made.
+    fn editor_save_on(
+        path: PathBuf,
+        watch: PathBuf,
+        pred: fn(&str) -> bool,
+        done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> std::thread::JoinHandle<bool> {
+        use std::sync::atomic::Ordering;
+        std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
+            while !done.load(Ordering::SeqCst) && t0.elapsed().as_secs() < 5 {
+                let hit = std::fs::read_dir(&watch)
+                    .map(|rd| rd.flatten().any(|e| pred(&e.file_name().to_string_lossy())))
+                    .unwrap_or(false);
+                if hit {
+                    return std::fs::write(&path, b"one\nSAVED BY AN EDITOR AFTER THE CHECK\n").is_ok();
+                }
+            }
+            false
+        })
+    }
+
+    #[test]
+    fn an_edit_never_replaces_a_save_that_landed_after_its_staleness_check() {
+        // R-14. The save lands as soon as the record is written — after the check at the
+        // start of `apply`, before the replacing rename. The old code lost it about a
+        // quarter of the time; now it is refused, or the save fails, never replaced.
+        let mut lost = 0;
+        for _ in 0..30 {
+            let s = Sandbox::new("r14-edit");
+            let ws = s.ws();
+            let path = s.write("a.txt", b"one\n");
+            let plan = plan_replace(&ws, "a.txt", "one", "two").unwrap();
+            std::fs::create_dir_all(s.backups()).unwrap();
+            let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let h = editor_save_on(path, s.backups(), |n| n.ends_with(".json"), done.clone());
+            let r = apply(&plan, &s.backups());
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+            let saved = h.join().unwrap();
+            if r.is_ok() && saved && s.read("a.txt") == plan.after {
+                lost += 1;
+            }
+        }
+        assert_eq!(lost, 0, "an edit replaced a save that landed after its check, {lost} of 30 times");
+    }
+
+    #[test]
+    fn the_undo_of_an_edit_never_replaces_a_save_that_landed_after_its_check() {
+        // R-14, undo's side: the save lands when the temporary file appears.
+        let mut lost = 0;
+        for _ in 0..30 {
+            let s = Sandbox::new("r14-undo");
+            let ws = s.ws();
+            let path = s.write("a.txt", b"one\n");
+            let id = replace(&s, &ws, "a.txt", "one", "two");
+            let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let h = editor_save_on(path, ws.root().to_path_buf(), |n| n.ends_with(".odin-tmp"), done.clone());
+            let r = undo(&id, &s.backups());
+            done.store(true, std::sync::atomic::Ordering::SeqCst);
+            let saved = h.join().unwrap();
+            if r.is_ok() && saved && s.read("a.txt") == b"one\n" {
+                lost += 1;
+            }
+        }
+        assert_eq!(lost, 0, "an undo replaced a save that landed after its check, {lost} of 30 times");
+    }
+
+    #[test]
+    fn a_file_that_changed_before_the_replacing_rename_is_left_alone_and_no_temp_remains() {
+        // R-14, the check itself, with no timing: `write_replacing` given a hash that
+        // the file does not have.
+        let s = Sandbox::new("r14-unit");
+        let p = s.write("a.txt", b"theirs\n");
+        let err = write_replacing(&p, b"ours\n", fingerprint(b"one\n")).unwrap_err();
+        assert!(err.contains("changed just now"), "{err}");
+        assert_eq!(s.read("a.txt"), b"theirs\n");
+        assert!(!s.dir.join("project").join(".a.txt.odin-tmp").exists());
+        write_replacing(&p, b"ours\n", fingerprint(b"theirs\n")).unwrap();
+        assert_eq!(s.read("a.txt"), b"ours\n");
+    }
+
+    #[test]
+    fn applied_folders_names_only_the_folders_this_apply_made() {
+        // R-15. `n/` appeared after the card was shown; only `n/m/` is this create's.
+        let s = Sandbox::new("r15");
+        let ws = s.ws();
+        let plan = plan_create(&ws, "n/m/x.txt", "x\n").unwrap();
+        assert_eq!(plan.folders, ["n/", "n/m/"]);
+        std::fs::create_dir(ws.root().join("n")).unwrap();
+        let done = apply(&plan, &s.backups()).unwrap();
+        assert_eq!(done.folders, ["n/m/"]);
+        undo(&done.id, &s.backups()).unwrap();
+        assert!(ws.root().join("n").is_dir() && !ws.root().join("n/m").exists());
+    }
+
+    mod tracking {
+        //! Counts the bytes the current thread holds at once, so a test can say how
+        //! much memory one call needed while other tests run beside it.
+        use std::alloc::{GlobalAlloc, Layout, System};
+        use std::cell::Cell;
+
+        thread_local! {
+            static CUR: Cell<usize> = const { Cell::new(0) };
+            static PEAK: Cell<usize> = const { Cell::new(0) };
+        }
+
+        pub struct Track;
+
+        fn grow(by: usize) {
+            let _ = CUR.try_with(|c| {
+                let n = c.get() + by;
+                c.set(n);
+                let _ = PEAK.try_with(|p| p.set(p.get().max(n)));
+            });
+        }
+
+        fn shrink(by: usize) {
+            let _ = CUR.try_with(|c| c.set(c.get().saturating_sub(by)));
+        }
+
+        // SAFETY: every call is forwarded to `System` unchanged; only counters change.
+        unsafe impl GlobalAlloc for Track {
+            unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+                let p = unsafe { System.alloc(l) };
+                if !p.is_null() {
+                    grow(l.size());
+                }
+                p
+            }
+            unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+                unsafe { System.dealloc(p, l) };
+                shrink(l.size());
+            }
+            unsafe fn realloc(&self, p: *mut u8, l: Layout, new: usize) -> *mut u8 {
+                let q = unsafe { System.realloc(p, l, new) };
+                if !q.is_null() {
+                    shrink(l.size());
+                    grow(new);
+                }
+                q
+            }
+        }
+
+        /// Run `f`; the most bytes this thread held beyond what it held before.
+        pub fn peak_of<T>(f: impl FnOnce() -> T) -> (T, usize) {
+            let base = CUR.with(|c| c.get());
+            PEAK.with(|p| p.set(base));
+            let out = f();
+            (out, PEAK.with(|p| p.get()).saturating_sub(base))
+        }
+    }
+
+    #[global_allocator]
+    static ALLOC: tracking::Track = tracking::Track;
+
+    #[test]
+    fn applying_a_move_does_not_hold_the_file_in_memory() {
+        // R-16. Moves have no size limit; the last-moment re-check used to read the
+        // whole file. A sparse 64 MiB file costs nothing on disk.
+        let s = Sandbox::new("r16");
+        let ws = s.ws();
+        let f = std::fs::File::create(ws.root().join("big.bin")).unwrap();
+        f.set_len(64 * 1024 * 1024).unwrap();
+        drop(f);
+        let plan = plan_move(&ws, "big.bin", "sub/big.bin").unwrap();
+        let (done, peak) = tracking::peak_of(|| apply(&plan, &s.backups()).unwrap());
+        assert!(ws.root().join("sub/big.bin").exists() && !ws.root().join("big.bin").exists());
+        undo(&done.id, &s.backups()).unwrap();
+        assert!(peak < 4 << 20, "apply held {} MiB for a move of 64 MiB", peak >> 20);
     }
 }
