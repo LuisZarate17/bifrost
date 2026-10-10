@@ -270,9 +270,15 @@ struct FormA {
 }
 
 /// The next place `<tool_call>` is followed (ignoring whitespace) by
-/// `<function=NAME>`, from `from`. `NAME` may or may not be one we offered —
-/// that distinction is made by the caller.
-fn find_form_a(s: &str, from: usize) -> Option<FormA> {
+/// `<function=NAME>`, from `from`. With `offered` `None`, `NAME` may or may not be
+/// one we offered — that distinction is made by the caller, which wants to say
+/// "no such tool" for a call to something else.
+///
+/// With `offered` given, only a `NAME` we offered counts. **That is how a call's
+/// region ends (R-18):** a value that quotes the format with
+/// `<function=example_function_name>` — the example in Qwen3-Coder's own prompt —
+/// must not cut the call short, as it did when any name ended it.
+fn find_form_a(s: &str, from: usize, offered: Option<&HashSet<&str>>) -> Option<FormA> {
     let mut search_from = from;
     loop {
         let rel = s[search_from..].find("<tool_call>")?;
@@ -284,7 +290,9 @@ fn find_form_a(s: &str, from: usize) -> Option<FormA> {
         {
             let name_start = ws_end + "<function=".len();
             let name_end = name_start + gt;
-            return Some(FormA { tc_at, tag_end: name_end + 1, name: s[name_start..name_end].to_string() });
+            if offered.is_none_or(|names| names.contains(&s[name_start..name_end])) {
+                return Some(FormA { tc_at, tag_end: name_end + 1, name: s[name_start..name_end].to_string() });
+            }
         }
         search_from = after_tc;
     }
@@ -530,6 +538,12 @@ fn typed_value(raw: &str, prop_type: Option<&Value>) -> Value {
 /// One call's parameters, read from the region between its `<function=NAME>`
 /// tag and the next call start (or the end of the text). Returns the
 /// arguments and how far into the region the call's own closing tags reached.
+///
+/// **A call that is not closed must have every required parameter (R-19).** A
+/// reply cut off after `old_text` has no `</function>`, and read as it stands it
+/// is an edit whose `new_text` is empty — a deletion card for something nobody
+/// asked to delete. Once the call is closed the model meant it as written, and
+/// the tool layer decides what a missing parameter means.
 fn parse_params(region: &str, tool_name: &str, tools: &[Tool]) -> Result<(Map<String, Value>, usize), String> {
     let schema = tools.iter().find(|t| t.function.name == tool_name);
     let props = schema.and_then(|t| t.function.parameters.get("properties")).and_then(Value::as_object);
@@ -574,12 +588,21 @@ fn parse_params(region: &str, tool_name: &str, tools: &[Tool]) -> Result<(Map<St
         }
     }
 
+    let mut closed = false;
     if region[i..].starts_with("</function>") {
         i += "</function>".len();
+        closed = true;
     }
     i = skip_ws(region, i);
     if region[i..].starts_with("</tool_call>") {
         i += "</tool_call>".len();
+        closed = true;
+    }
+    if !closed {
+        let required = schema.and_then(|t| t.function.parameters.get("required")).and_then(Value::as_array);
+        if let Some(missing) = required.into_iter().flatten().filter_map(Value::as_str).find(|k| !args.contains_key(*k)) {
+            return Err(fail(&format!("the reply ended before the required parameter {missing}")));
+        }
     }
     Ok((args, i))
 }
@@ -604,7 +627,7 @@ pub fn extract_calls(content: &str, tools: &[Tool]) -> (String, Vec<ToolCall>, V
     let mut last_bare = false;
 
     loop {
-        let form_a = find_form_a(content, pos);
+        let form_a = find_form_a(content, pos, None);
         let form_b = if !seen_call_start || last_bare { find_form_b(content, pos, &names) } else { None };
 
         let (start, tag_end, name, bare) = match (form_a, form_b) {
@@ -637,7 +660,7 @@ pub fn extract_calls(content: &str, tools: &[Tool]) -> (String, Vec<ToolCall>, V
         // no wrapper to look for, so it also ends at the next `<function=...>`
         // of an offered tool at the start of a line; a wrapped call does not
         // stop there, since its values may quote such a line as code.
-        let mut region_end = find_form_a(content, tag_end).map(|a| a.tc_at).unwrap_or(content.len());
+        let mut region_end = find_form_a(content, tag_end, Some(&names)).map(|a| a.tc_at).unwrap_or(content.len());
         if bare && let Some(b) = find_form_b(content, tag_end, &names) {
             region_end = region_end.min(b.at);
         }
@@ -655,8 +678,12 @@ pub fn extract_calls(content: &str, tools: &[Tool]) -> (String, Vec<ToolCall>, V
         }
     }
 
-    let cleaned = text.replace("<tool_call>", "").replace("</tool_call>", "");
-    (cleaned.trim().to_string(), calls, failures)
+    // **Nothing read, nothing changed (R-17).** A reply that only talks about the
+    // wrapper tags — "each call is wrapped in <tool_call> and </tool_call>" — is
+    // an answer, and the user reads it. Around a call that did parse, the tags
+    // that wrapped it are already left out of `text`: the call's region begins at
+    // its opening tag and `parse_params` takes its closing ones.
+    (text.trim().to_string(), calls, failures)
 }
 
 #[cfg(test)]
@@ -1133,5 +1160,51 @@ o
         assert!(failures.is_empty(), "{failures:?}");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.arguments["new_text"], json!(v));
+    }
+
+    #[test]
+    fn prose_that_mentions_the_wrapper_tags_comes_back_unchanged() {
+        let prose = "Each call is wrapped in <tool_call> and </tool_call> tags.";
+        let (text, calls, failures) = extract_calls(prose, &small_tools());
+        assert!(calls.is_empty() && failures.is_empty());
+        assert_eq!(text, prose);
+        // Around a call that did parse, the call's own tags are left out and the prose is not.
+        let content = "Use <tool_call> tags.\n<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>";
+        let (text, calls, _) = extract_calls(content, &small_tools());
+        assert_eq!((text.as_str(), calls.len()), ("Use <tool_call> tags.", 1));
+    }
+
+    #[test]
+    fn a_quoted_example_function_tag_does_not_end_a_calls_region() {
+        let v = "format:\n<tool_call>\n<function=example_function_name>\nvalue";
+        let content = format!("<tool_call>\n<function=edit_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=old_text>\nx\n</parameter>\n<parameter=new_text>\n{v}\n</parameter>\n</function>\n</tool_call>");
+        let (_, calls, failures) = extract_calls(&content, &small_tools());
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.arguments["new_text"], json!(v));
+        // A second wrapped call to an offered tool still starts a new region.
+        let two = "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>\n<tool_call>\n<function=read_file>\n<parameter=path>\nb.rs\n</parameter>\n</function>\n</tool_call>";
+        assert_eq!(extract_calls(two, &small_tools()).1.len(), 2);
+    }
+
+    #[test]
+    fn a_reply_cut_off_before_a_required_parameter_is_not_a_call() {
+        let full = "<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\nlet keep = 1;\n</parameter>\n<parameter=new_text>\nlet keep = 2;\n</parameter>\n</function>\n</tool_call>";
+        let required = ["path", "old_text", "new_text"];
+        for cut in full.char_indices().map(|(i, _)| i) {
+            let (_, calls, _) = extract_calls(&full[..cut], &small_tools());
+            if let Some(c) = calls.first() {
+                for k in required {
+                    assert!(c.function.arguments.get(k).is_some(), "cut at {cut} accepted without {k}");
+                }
+            }
+        }
+        // Cut after old_text: a failure that says what is missing, not a deletion.
+        let cut = full.find("<parameter=new_text>").unwrap();
+        let (_, calls, failures) = extract_calls(&full[..cut], &small_tools());
+        assert!(calls.is_empty() && failures[0].contains("required parameter new_text"), "{failures:?}");
+        // A closed call is the model's own words: a missing parameter is the tool layer's to judge.
+        let closed = "<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\nx\n</parameter>\n</function>\n</tool_call>";
+        assert_eq!(extract_calls(closed, &small_tools()).1.len(), 1);
     }
 }

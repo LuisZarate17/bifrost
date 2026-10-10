@@ -17,8 +17,8 @@
 //!   files' contents).
 //! - **Still asks, every call:** a read outside the folder, of a file the
 //!   `.gitignore` hides, of a secret-named file, or through a link that points
-//!   out; every edit, every create, every `run_check`. There is still no
-//!   allowlist and no "always allow".
+//!   out; every edit, every create, every delete, every move, every `run_check`.
+//!   There is still no allowlist and no "always allow".
 //! - **Never worth asking:** a read of a folder, or of a file that is not there —
 //!   they go straight back to the model with the reason.
 //! - **The switch:** `"ask_every_call": true` in `config.json` brings G6 back
@@ -44,6 +44,18 @@
 //! too big to read whole answers with its size and line count and says to read in
 //! parts; search already gives line numbers. See [`read_text`], and [`Lines`] for
 //! what the ticket and the card carry.
+//!
+//! **A result starts with `error:` if and only if the call failed (R-20, R-25).**
+//! Nothing else tells the model, the repeat rule ([`prior_failures`]), compaction
+//! or the app's own `ok` that a call failed, so the prefix has to mean exactly that.
+//! Every kind of failure carries it: a tool's own error, a refusal from
+//! [`interpret`], an unreadable call, the 7th plan update ([`PLAN_LIMIT_NOTE`]),
+//! and a rejection from [`approval`] (which the app prefixes as it sends it). And
+//! nothing that worked may begin with it: a file whose text starts `error:` — a
+//! saved compiler log — is answered under a `[lines 1–N of N]` header, the one a
+//! ranged read already has, so it is not mistaken for a failed read, shown as
+//! Failed, and stopped as stuck on its third read. A check that ran and found
+//! problems did not fail to run, and its output never starts that way (`check`).
 //!
 //! The descriptions and the system prompt live here, not in the app, so the G7
 //! probe measures the exact words the app ships with. A probe that tested
@@ -527,7 +539,21 @@ pub fn read_range(args: &serde_json::Value) -> Result<Option<Lines>, String> {
 ///
 /// **An unknown tool is refused here, not at execution.** The model can name
 /// anything it likes; only these are real.
+///
+/// **A refusal starts `error:` like every other failed result (R-20).** The app
+/// sends it to the model as it is, and the repeat rule counts only results that
+/// start that way, so a model that kept resending `start_line: "abc"` was never
+/// stopped.
 pub fn interpret(call: &ToolCall) -> Result<Request, String> {
+    interpret_call(call).map_err(|why| failure(&why))
+}
+
+/// `text` as a failed result: `error: text`, unless it already says so.
+pub fn failure(text: &str) -> String {
+    if text.trim_start().starts_with("error:") { text.to_string() } else { format!("error: {text}") }
+}
+
+fn interpret_call(call: &ToolCall) -> Result<Request, String> {
     let name = call.function.name.as_str();
     let path = arg(call, "path").unwrap_or_default().trim().to_string();
     if path.is_empty() && matches!(name, "read_file" | "edit_file" | "create_file" | "write_file" | "delete_file" | "move_file") {
@@ -580,6 +606,16 @@ pub fn interpret(call: &ToolCall) -> Result<Request, String> {
         other => Err(format!("no such tool: {other}")),
     }
 }
+
+/// How [`approval`] rejects a read of a folder and of a file that is not there,
+/// after the path, and how the app and the probes say a `run_check` that was never
+/// set up. Constants so that the three places that answer them cannot word them
+/// differently (R-36): a probe that answered in other words would measure a model
+/// reacting to a text the app never sends.
+pub const READ_OF_FOLDER: &str = " is a folder; use list_files to see what is in it";
+pub const READ_OF_MISSING: &str = " does not exist in the project folder";
+pub const CHECK_UNAVAILABLE: &str = "run_check is not available — no check command is set for this folder. \
+     Carry on without it, and tell the user they can choose one.";
 
 /// What a call needs before it runs.
 #[derive(Debug, Clone, PartialEq)]
@@ -639,15 +675,14 @@ pub fn approval(ws: Option<&Workspace>, req: &Request, ask_every_call: bool) -> 
     }
     match req {
         Request::Read { path, range } => match ws.locate(path) {
-            Located::Inside(real) if real.is_dir() => Approval::Reject(format!(
-                "{} is a folder; use list_files to see what is in it",
-                edit::clean(path)
-            )),
+            Located::Inside(real) if real.is_dir() => {
+                Approval::Reject(format!("{}{READ_OF_FOLDER}", edit::clean(path)))
+            }
             Located::Inside(real) if !protected(Some(ws), &real, ask_every_call) => {
                 Approval::Auto(Auto::Read { real, range: *range })
             }
             Located::MissingInside => {
-                Approval::Reject(format!("{} does not exist in the project folder", edit::clean(path)))
+                Approval::Reject(format!("{}{READ_OF_MISSING}", edit::clean(path)))
             }
             Located::Inside(_) | Located::Outside(_) => Approval::Ask,
         },
@@ -775,6 +810,13 @@ pub fn read_text(shown: &str, bytes: &[u8], range: Option<Lines>) -> String {
     let text = edit::for_model(bytes);
     let Some(range) = range else {
         if bytes.len() as u64 <= MAX_READ_BYTES {
+            // A file that itself begins `error:` must not look like a failed call
+            // (R-25): it gets the ranged read's header, and every other file keeps
+            // exactly its text.
+            if text.trim_start().starts_with("error:") {
+                let total = text.split_inclusive('\n').count();
+                return format!("[lines 1–{total} of {total}]\n{text}");
+            }
             return text;
         }
         return format!(
@@ -790,17 +832,22 @@ pub fn read_text(shown: &str, bytes: &[u8], range: Option<Lines>) -> String {
     if total == 0 {
         return format!("error: {shown} is empty, so it has no lines to read");
     }
-    if range.start > total {
+    // `read_range` never makes line 0 or an end before the start, but this is public
+    // (R-24): line 0 reads from line 1, and an end before the start is said so.
+    let start = range.start.max(1);
+    if let Some(end) = range.end.filter(|&e| e < start) {
+        return format!("error: end_line {end} is before start_line {start}");
+    }
+    if start > total {
         return format!(
-            "error: {shown} has {total} line{}; start_line {} is past the end",
+            "error: {shown} has {total} line{}; start_line {start} is past the end",
             if total == 1 { "" } else { "s" },
-            range.start
         );
     }
     let last = range.end.map_or(total, |e| e.min(total));
     let mut body = String::new();
     let mut taken = 0;
-    for line in &lines[range.start - 1..last] {
+    for line in &lines[start - 1..last] {
         if body.len() + line.len() > MAX_READ_BYTES as usize {
             break;
         }
@@ -809,18 +856,17 @@ pub fn read_text(shown: &str, bytes: &[u8], range: Option<Lines>) -> String {
     }
     if taken == 0 {
         return format!(
-            "error: line {} of {shown} is {} bytes, over the {MAX_READ_BYTES}-byte limit for one read",
-            range.start,
-            lines[range.start - 1].len()
+            "error: line {start} of {shown} is {} bytes, over the {MAX_READ_BYTES}-byte limit for one read",
+            lines[start - 1].len()
         );
     }
-    let to = range.start + taken - 1;
+    let to = start + taken - 1;
     let cut = if to < last {
         format!("; cut at {MAX_READ_BYTES} bytes — read on from line {}", to + 1)
     } else {
         String::new()
     };
-    format!("[lines {}–{to} of {total}{cut}]\n{body}", range.start)
+    format!("[lines {start}–{to} of {total}{cut}]\n{body}")
 }
 
 /// Whether a line is the header a ranged read puts first — which is never part
@@ -951,7 +997,7 @@ pub const MAX_PLAN_STEP_CHARS: usize = 120;
 pub const MAX_PLAN_UPDATES: usize = 6;
 
 /// What the 7th update in a turn is told.
-pub const PLAN_LIMIT_NOTE: &str = "You have updated the plan 6 times this turn — do the work now.";
+pub const PLAN_LIMIT_NOTE: &str = "error: You have updated the plan 6 times this turn — do the work now.";
 
 /// Read a task list leniently: one step per line, marked `[ ]`, `[~]` or `[x]`
 /// (any case), with or without a bullet (`-`, `*`) or a number (`1.`, `1)`) in
@@ -990,10 +1036,24 @@ pub fn parse_plan(text: &str) -> Vec<PlanStep> {
     steps
 }
 
-/// What the model is told after an update: one line.
+/// What the model is told after an update: one line, or two when the list is as
+/// long as a list can be.
+///
+/// **A list cut to the caps says so (R-23).** [`parse_plan`] keeps the first
+/// [`MAX_PLAN_STEPS`] steps and the list that comes back has no sign of how many
+/// were sent, so a list of exactly that length is answered with the rule: a model
+/// that sent twenty steps and was told "0 of 12 done" would otherwise work to a
+/// list that quietly lost eight of them. (A list of exactly twelve gets the line
+/// too, and it is true of it.)
 pub fn plan_message(steps: &[PlanStep]) -> String {
     let done = steps.iter().filter(|s| s.status == PlanStatus::Done).count();
-    format!("Plan updated: {done} of {} done.", steps.len())
+    let mut said = format!("Plan updated: {done} of {} done.", steps.len());
+    if steps.len() >= MAX_PLAN_STEPS {
+        said.push_str(&format!(
+            " A list keeps at most {MAX_PLAN_STEPS} steps; if you sent more, only the first {MAX_PLAN_STEPS} were kept."
+        ));
+    }
+    said
 }
 
 /// How many `update_plan` calls the model has made since the user's last message.
@@ -1049,7 +1109,8 @@ pub const MAX_IDENTICAL_FAILURES: usize = 3;
 ///
 /// Reads in between do not reset the count — the loop the probe caught was
 /// read, fail, read, fail — and a failure is a tool result starting `error:`,
-/// which is how every tool here reports one.
+/// which is how every kind of failure is reported (see the module header: the
+/// prefix means exactly that, nothing else starts with it).
 pub fn prior_failures(history: &[Message], call: &ToolCall) -> usize {
     let since = history.iter().rposition(|m| m.role == "user").map_or(0, |i| i + 1);
     let turns = &history[since..];
@@ -1058,7 +1119,8 @@ pub fn prior_failures(history: &[Message], call: &ToolCall) -> usize {
         let same = m.role == "assistant"
             && m.tool_calls.as_deref().is_some_and(|calls| {
                 calls.iter().any(|c| {
-                    c.function.name == call.function.name && c.function.arguments == call.function.arguments
+                    c.function.name == call.function.name
+                        && same_arguments(&c.function.arguments, &call.function.arguments)
                 })
             });
         let failed = turns
@@ -1069,6 +1131,18 @@ pub fn prior_failures(history: &[Message], call: &ToolCall) -> usize {
         }
     }
     count
+}
+
+/// Whether the arguments in the history (`kept`) are those of a call sent now
+/// (`sent`). Equal, or equal apart from long strings that compaction has since
+/// set aside — see [`crate::compact::same_argument`] (R-21).
+fn same_arguments(kept: &serde_json::Value, sent: &serde_json::Value) -> bool {
+    match (kept.as_object(), sent.as_object()) {
+        (Some(k), Some(s)) => {
+            k.len() == s.len() && k.iter().all(|(key, v)| s.get(key).is_some_and(|w| crate::compact::same_argument(v, w)))
+        }
+        _ => kept == sent,
+    }
 }
 
 /// Build files changed by an edit since the user's last message: `build.rs`,
@@ -1382,7 +1456,7 @@ mod tests {
         // Nothing to list is an answer for the model, not an empty card.
         for args in [json!({}), json!({ "plan": "  \n" }), json!({ "plan": [1] })] {
             let err = interpret(&call("update_plan", args)).unwrap_err();
-            assert!(err.starts_with("update_plan was called without any steps"), "{err}");
+            assert!(err.starts_with("error: update_plan was called without any steps"), "{err}");
         }
     }
 
@@ -1446,7 +1520,7 @@ mod tests {
             history.push(asked(&plan_call("[ ] a")));
             history.push(Message::tool_result("update_plan", "x"));
         }
-        assert_eq!(PLAN_LIMIT_NOTE, "You have updated the plan 6 times this turn — do the work now.");
+        assert_eq!(PLAN_LIMIT_NOTE, "error: You have updated the plan 6 times this turn — do the work now.");
     }
 
     #[test]
@@ -1644,11 +1718,11 @@ mod tests {
         let ws = s.ws();
         s.write("src/main.rs", "x");
         match approval(Some(&ws), &read("src"), false) {
-            Approval::Reject(why) => assert_eq!(why, "src is a folder; use list_files to see what is in it"),
+            Approval::Reject(why) => assert_eq!(why, format!("src{READ_OF_FOLDER}")),
             other => panic!("{other:?}"),
         }
         match approval(Some(&ws), &read("src/none.rs"), false) {
-            Approval::Reject(why) => assert_eq!(why, "src/none.rs does not exist in the project folder"),
+            Approval::Reject(why) => assert_eq!(why, format!("src/none.rs{READ_OF_MISSING}")),
             other => panic!("{other:?}"),
         }
     }
@@ -2062,7 +2136,9 @@ mod tests {
 
     #[test]
     fn a_range_that_cannot_be_read_is_refused_with_the_reason() {
-        let r = |args: serde_json::Value| interpret(&call("read_file", args)).unwrap_err();
+        let r = |args: serde_json::Value| {
+            interpret(&call("read_file", args)).unwrap_err().strip_prefix("error: ").expect("a refusal starts error:").to_string()
+        };
         assert_eq!(
             r(json!({ "path": "a", "start_line": 90, "end_line": 20 })),
             "end_line is the last line to read, not a count"
@@ -2252,6 +2328,78 @@ mod tests {
             })
         );
         assert_eq!(approval(Some(&ws), &req, true), Approval::Ask);
+    }
+
+    // ── the contract: a result starts `error:` if and only if the call failed ──
+
+    #[test]
+    fn a_refusal_from_interpret_starts_error_so_the_repeat_rule_counts_it() {
+        let bad = call("read_file", json!({ "path": "a.rs", "start_line": "abc" }));
+        let why = interpret(&bad).unwrap_err();
+        assert!(why.starts_with("error: "), "{why}");
+        for c in [call("rm_rf", json!({ "path": "/" })), call("read_file", json!({})), call("search", json!({}))] {
+            assert!(interpret(&c).unwrap_err().starts_with("error: "), "{c:?}");
+        }
+        let history = vec![Message::user("go"), asked(&bad), Message::tool_result("read_file", why)];
+        assert_eq!(prior_failures(&history, &bad), 1);
+        // Already worded as a failure: not prefixed twice.
+        assert_eq!(failure("error: x"), "error: x");
+        assert_eq!(failure("x"), "error: x");
+    }
+
+    #[test]
+    fn the_seventh_plan_update_refusal_is_counted_as_a_failure() {
+        let plan = plan_call("[ ] a");
+        let history = vec![Message::user("go"), asked(&plan), Message::tool_result("update_plan", PLAN_LIMIT_NOTE)];
+        assert_eq!(prior_failures(&history, &plan), 1);
+    }
+
+    #[test]
+    fn a_failing_call_is_still_recognised_after_its_long_argument_was_set_aside() {
+        let edit = call("edit_file", json!({ "path": "a.rs", "old_text": "x".repeat(3000), "new_text": "y" }));
+        let mut history = vec![Message::user("go"), asked(&edit), Message::tool_result("edit_file", "error: not found")];
+        crate::compact::set_aside(&mut history[1], None);
+        assert_eq!(prior_failures(&history, &edit), 1);
+        // A different path, or a text of another length, is another call.
+        let other_path = call("edit_file", json!({ "path": "b.rs", "old_text": "x".repeat(3000), "new_text": "y" }));
+        let other_len = call("edit_file", json!({ "path": "a.rs", "old_text": "x".repeat(3001), "new_text": "y" }));
+        assert_eq!((prior_failures(&history, &other_path), prior_failures(&history, &other_len)), (0, 0));
+    }
+
+    #[test]
+    fn a_file_that_begins_error_is_read_under_a_header_and_other_files_are_untouched() {
+        let log = b"error: could not compile `demo`\nmore output\n";
+        let out = read_text("f", log, None);
+        assert_eq!(out, "[lines 1–2 of 2]\nerror: could not compile `demo`\nmore output\n");
+        assert!(!out.starts_with("error:"));
+        // Leading blank space counts as the start, as the repeat rule reads it.
+        assert!(!read_text("f", b"\n  error: x", None).trim_start().starts_with("error:"));
+        // Everything else is exactly its text, as before.
+        assert_eq!(read_text("f", b"hello\nan error: here\n", None), "hello\nan error: here\n");
+        assert_eq!(read_text("f", b"", None), "");
+        // A ranged read has its header already.
+        assert_eq!(read_text("f", log, lines(1, Some(1))), "[lines 1–1 of 2]\nerror: could not compile `demo`\n");
+    }
+
+    #[test]
+    fn a_range_read_never_makes_is_clamped_or_refused_not_a_panic() {
+        let file = b"a\nb\nc\nd\ne\n";
+        assert_eq!(read_text("f", file, lines(0, None)), read_text("f", file, lines(1, None)));
+        assert_eq!(read_text("f", file, lines(0, Some(2))), "[lines 1–2 of 5]\na\nb\n");
+        for (start, end) in [(3, 1), (5, 2), (2, 1)] {
+            let out = read_text("f", file, lines(start, Some(end)));
+            assert!(out.starts_with("error: end_line ") && out.contains("before start_line"), "{start}-{end}: {out}");
+        }
+        assert!(read_text("f", file, lines(9, None)).contains("is past the end"));
+    }
+
+    #[test]
+    fn a_list_cut_to_the_caps_is_told_so() {
+        let twenty: String = (1..=20).map(|i| format!("[ ] step {i}\n")).collect();
+        let said = plan_message(&parse_plan(&twenty));
+        assert!(said.starts_with("Plan updated: 0 of 12 done.") && said.contains("only the first 12"), "{said}");
+        // A short list gets just the one line.
+        assert_eq!(plan_message(&parse_plan("[ ] a")), "Plan updated: 0 of 1 done.");
     }
 
     #[test]

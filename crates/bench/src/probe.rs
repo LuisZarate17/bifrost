@@ -130,20 +130,27 @@ pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
     };
     if call.function.name == chat::INVALID_TOOL_CALL {
         let why = call.function.arguments["error"].as_str().unwrap_or("unreadable");
-        return text(format!("error: {why}. Send the call again as valid JSON."), true);
+        return text(tools::failure(&format!("{why}. Send the call again as valid JSON.")), true);
     }
+    // `interpret`'s refusals already start `error:`, as the app sends them.
     let request = match tools::interpret(call) {
-        Err(e) => return text(format!("error: {e}"), true),
+        Err(e) => return text(e, true),
         Ok(r) => r,
     };
     // The app's own rule. `Reject` never reaches a card, and `Auto` never asks.
-    let asked = matches!(tools::approval(Some(s.ws), &request, false), tools::Approval::Ask);
+    let decided = tools::approval(Some(s.ws), &request, false);
+    let asked = matches!(decided, tools::Approval::Ask);
     let read = |t: String, failed: bool| {
         let mut ran = text(t, failed);
         ran.asked = asked;
         ran.asked_every_call = true;
         ran
     };
+    // What the app answers for a read that could never work — a folder, a file that
+    // is not there — in its words, not whatever the read itself would say (R-36).
+    if let (Request::Read { .. }, tools::Approval::Reject(why)) = (&request, &decided) {
+        return read(tools::failure(why), true);
+    }
     match request {
         // A read that fails is marked so, as the app marks it, and gets the app's
         // repeat note; `run` still does not count it among the edit errors.
@@ -186,7 +193,7 @@ pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
         Request::Plan { steps } => text(tools::plan_message(&steps), false),
         Request::Check => {
             let Some(c) = s.check else {
-                return text("error: run_check is not available — no check command is set for this folder".into(), true);
+                return text(tools::failure(tools::CHECK_UNAVAILABLE), true);
             };
             match check::run(s.ws.root(), &c.argv, check::timeout_for(&c.argv), &c.env, || false) {
                 Ok(o) => Ran {

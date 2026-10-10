@@ -784,12 +784,13 @@ fn compact_for_send(
 ///
 /// **What it runs itself is only what `tools::approval` calls automatic** — a
 /// read inside the project folder of a file the listing would show, a listing, a
-/// search (H5; `ask_every_call` in the config turns it off). Those come back as
-/// `"auto"`, already run. Everything else it returns as an answer, a request to
-/// approve, or — for a request that could never succeed, like an edit whose text
-/// is not in the file — a rejection, which goes straight back to the model so it
-/// can read the file again and retry without the user being asked about
-/// something impossible.
+/// search (H5; `ask_every_call` in the config turns it off), and the task list
+/// (`update_plan`, H10, which touches nothing and works even with no folder or
+/// with `ask_every_call` on). Those come back as `"auto"`, already run. Everything
+/// else it returns as an answer, a request to approve, or — for a request that
+/// could never succeed, like an edit whose text is not in the file — a rejection,
+/// which goes straight back to the model so it can read the file again and retry
+/// without the user being asked about something impossible.
 ///
 /// **`closing` is the last request of a turn that hit its bound (R-03).** It
 /// offers no tools, adds [`tools::CLOSING_NOTE`] as one last user message, runs
@@ -936,7 +937,12 @@ async fn ask_with_tools(
 
         // Rejected without asking anyone: the reason goes back to the model. The raw
         // call goes with it, so the conversation shows the model its own attempt.
+        //
+        // **Every rejection starts `error:` (R-20)**: the unreadable call, the refusals of
+        // `interpret`, the 7th plan update. The repeat rule counts only results that start
+        // that way, and the probe's results do.
         let reject = |name: &str, path: &str, why: String| {
+            let why = tools::failure(&why);
             let why = if prior > 0 { format!("{why}{}", tools::repeated_note(name)) } else { why };
             serde_json::json!({
                 "kind": "rejected",
@@ -1066,9 +1072,7 @@ async fn ask_with_tools(
                     return Ok(reject(
                         "run_check",
                         "",
-                        "error: run_check is not available — no check command is set for this folder. \
-                         Carry on without it, and tell the user they can choose one."
-                            .into(),
+                        format!("error: {}", tools::CHECK_UNAVAILABLE),
                     ));
                 }
             },
@@ -1218,8 +1222,12 @@ struct Ran {
 }
 
 impl Ran {
+    /// A result worded by a tool. **Whether it worked is read from its first word,
+    /// which is sound because of the contract in `tools`'s header (R-25): a result
+    /// starts `error:` if and only if the call failed**, and a read of a file that
+    /// itself begins that way is given a header so it does not.
     fn text(result: String) -> Self {
-        let ok = !result.starts_with("error:");
+        let ok = !result.trim_start().starts_with("error:");
         Self { result, ok, stopped: false, undo: None }
     }
 }

@@ -168,9 +168,13 @@ fn call_path(call: &ToolCall) -> Option<String> {
 /// 300–400 do not replace each other, and the second would otherwise let the
 /// first be set aside, making the model read what it already had. The range goes
 /// through [`tools::read_range`], so `120` and `"120"` are one key.
+///
+/// **A range that cannot be read has no key (R-22).** It was refused before it ran,
+/// so it returned no content; falling back to the whole-file key made it look like
+/// the newest copy of the file and put the one good read first in line to go.
 fn read_key(call: &ToolCall) -> Option<String> {
     let path = call_path(call)?;
-    Some(match tools::read_range(&call.function.arguments).ok().flatten() {
+    Some(match tools::read_range(&call.function.arguments).ok()? {
         Some(r) => format!("{path}#{}-{}", r.start, r.end.map_or(String::new(), |e| e.to_string())),
         None => path,
     })
@@ -217,7 +221,11 @@ pub fn compact(messages: &[Message], tools: &[Tool], budget: &Budget) -> Compact
             }
             let call = paired_call(messages, i);
             let name = call.map(|c| c.function.name.as_str()).or(m.tool_name.as_deref());
+            // Only a read that returned content is a copy of the file: one that
+            // failed (`error: …`, by [`tools`]'s contract) is a few words and must
+            // not stand in for the good read of the same file.
             if name == Some("read_file")
+                && !m.content.trim_start().starts_with("error:")
                 && let Some(key) = call.and_then(read_key)
             {
                 newest_read.insert(key, i);
@@ -264,12 +272,44 @@ pub fn compact(messages: &[Message], tools: &[Tool], budget: &Budget) -> Compact
     Compaction { set_aside: set, fits: estimated_tokens <= budget.hard_tokens(), estimated_tokens }
 }
 
+/// What a long argument becomes once it has been sent: its length, and a short
+/// fingerprint of the text so that an identical resend can still be recognised
+/// ([`same_argument`]). The fingerprint is 32 bits of FNV-1a — stable across Rust
+/// versions, like the undo hash — and means nothing to the model.
+fn argument_stub(text: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in text.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("[{} characters, already sent, #{:08x}]", text.chars().count(), h as u32)
+}
+
+/// Whether `kept`, an argument as the conversation holds it now, is `sent`, the
+/// same call's argument as the model sends it again. **They are equal, or `kept`
+/// is the stub ([`set_aside`]) of exactly `sent`'s text (R-21):** once an old long
+/// argument is set aside, an identical resend no longer equals the history, and the
+/// repeat rule ([`tools::prior_failures`]) would start counting again from nothing —
+/// the model could resend one impossible edit for ever. The stub keeps the length
+/// **and a fingerprint**: length alone would make a retry with one character fixed
+/// (same length, different text) count as the same failed call, and end a turn
+/// that was making progress.
+pub fn same_argument(kept: &serde_json::Value, sent: &serde_json::Value) -> bool {
+    if kept == sent {
+        return true;
+    }
+    match (kept.as_str(), sent.as_str()) {
+        (Some(k), Some(s)) => s.chars().count() > ARG_LIMIT && k == argument_stub(s),
+        _ => false,
+    }
+}
+
 /// Replace what `message` carries with a stub.
 ///
 /// A tool result becomes one line naming the tool and path (from `call`, the
 /// assistant call that produced it, when known). An assistant call keeps its name
 /// and every argument, but a long string argument becomes
-/// `"[N characters, already sent]"`.
+/// `"[N characters, already sent, #fingerprint]"`.
 pub fn set_aside(message: &mut Message, call: Option<&ToolCall>) {
     if message.role == "tool" {
         let lines = message.content.lines().count();
@@ -297,9 +337,10 @@ pub fn set_aside(message: &mut Message, call: Option<&ToolCall>) {
     for c in message.tool_calls.as_deref_mut().unwrap_or(&mut []) {
         if let Some(args) = c.function.arguments.as_object_mut() {
             for v in args.values_mut() {
-                let n = v.as_str().map_or(0, |s| s.chars().count());
-                if n > ARG_LIMIT {
-                    *v = serde_json::Value::String(format!("[{n} characters, already sent]"));
+                if let Some(s) = v.as_str()
+                    && s.chars().count() > ARG_LIMIT
+                {
+                    *v = serde_json::Value::String(argument_stub(s));
                 }
             }
         }
@@ -444,8 +485,23 @@ mod tests {
         let mut stubbed = m[2].clone();
         set_aside(&mut stubbed, None);
         let args = &stubbed.tool_calls.unwrap()[0].function.arguments;
-        assert_eq!(args["content"], "[8000 characters, already sent]");
+        let stub = args["content"].as_str().unwrap();
+        assert!(stub.starts_with("[8000 characters, already sent, #"), "{stub}");
         assert_eq!(args["path"], "n.rs");
+    }
+
+    /// **A retry with one character changed is not the call that failed (R-21).**
+    /// Same length, different text: the stub's fingerprint tells them apart, so the
+    /// repeat rule does not end a turn that is making progress. The identical text
+    /// still matches.
+    #[test]
+    fn a_stub_matches_only_the_text_it_replaced_not_another_of_the_same_length() {
+        let first = "x".repeat(3000);
+        let mut retry = first.clone();
+        retry.replace_range(1500..1501, "y");
+        let stub = serde_json::Value::String(argument_stub(&first));
+        assert!(same_argument(&stub, &json!(first)));
+        assert!(!same_argument(&stub, &json!(retry)), "a same-length retry counted as the same call");
     }
 
     #[test]
@@ -562,6 +618,49 @@ mod tests {
         assert_eq!(Budget::new(8192, Some((0, 10))).chars_per_token, 2.5);
         assert_eq!(Budget::new(8192, Some((10, 0))).chars_per_token, 2.5);
         assert_eq!(Budget::new(8192, None).allowed_tokens(), 6144);
+    }
+
+    #[test]
+    fn a_refused_read_does_not_demote_the_good_read_of_the_same_file() {
+        let mut m = vec![Message::system("sys"), Message::user("go")];
+        m.extend(read("a.rs", 5000));
+        m.extend([
+            asks("read_file", json!({ "path": "a.rs", "start_line": 90, "end_line": 20 })),
+            Message::tool_result("read_file", "end_line is the last line to read, not a count"),
+        ]);
+        m.extend(found(5000));
+        m.extend(read("b.rs", 5000));
+        // The search (index 7) goes; the only copy of a.rs (index 3) stays.
+        assert_eq!(compact(&m, &[], &tight(5000)).set_aside, vec![7]);
+    }
+
+    #[test]
+    fn a_read_that_failed_is_not_the_newest_copy_of_its_file() {
+        let mut m = vec![Message::system("sys"), Message::user("go")];
+        m.extend(read("a.rs", 5000));
+        m.extend([
+            asks("read_file", json!({ "path": "a.rs" })),
+            Message::tool_result("read_file", format!("error: cannot read a.rs{}", " x".repeat(2500))),
+        ]);
+        m.extend(found(5000));
+        m.extend(read("b.rs", 5000));
+        // The failed result is long here, but not content: the good read (3) stays
+        // ahead of it, and the oldest of the rest goes first.
+        let c = compact(&m, &[], &tight(5000));
+        assert!(!c.set_aside.contains(&3), "{:?}", c.set_aside);
+    }
+
+    #[test]
+    fn a_stubbed_argument_is_the_same_argument_as_the_text_it_replaced() {
+        let long = "x".repeat(ARG_LIMIT + 1);
+        let mut stubbed = asks("edit_file", json!({ "old_text": long }));
+        set_aside(&mut stubbed, None);
+        let kept = &stubbed.tool_calls.as_ref().unwrap()[0].function.arguments["old_text"];
+        assert!(same_argument(kept, &json!(long)));
+        assert!(!same_argument(kept, &json!("x".repeat(ARG_LIMIT + 2))));
+        assert!(!same_argument(kept, &json!("short")));
+        assert!(same_argument(&json!("short"), &json!("short")));
+        assert!(!same_argument(&json!(5), &json!(long)));
     }
 
     #[test]
