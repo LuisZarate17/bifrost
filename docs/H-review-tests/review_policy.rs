@@ -414,6 +414,7 @@ fn defect_edit_planning_returns_lines_of_a_secret_file_without_a_card() {
 
 /// The same planner also answers "how many times does this text occur" for any file in the
 /// folder, secret or ignored, with no card. A weaker oracle than the excerpt above.
+// Updated in review round 2: a failed plan on a protected file now returns one fixed message with no count, no text and no reason (R-01).
 #[test]
 fn note_edit_planning_counts_occurrences_in_a_secret_file() {
     let s = Sandbox::new("edit-oracle");
@@ -421,7 +422,17 @@ fn note_edit_planning_counts_occurrences_in_a_secret_file() {
     let ws = s.ws();
     let two = edit::plan_replace(&ws, ".env", "=1", "=9");
     eprintln!("{two:?}");
-    assert!(matches!(&two, Err(e) if e.contains("appears 2 times")), "{two:?}");
+    assert_eq!(
+        two.as_ref().err().map(String::as_str),
+        Some(
+            "old_text does not match exactly one place in .env. It is a protected file, so its text is \
+             not shown; ask the user to allow a read of it first."
+        ),
+        "{two:?}"
+    );
+    let none = edit::plan_replace(&ws, ".env", "=7", "=9");
+    assert_eq!(none.as_ref().err(), two.as_ref().err(), "a miss and an ambiguous match read the same: {none:?}");
+    assert!(!format!("{two:?}").contains("times") && !format!("{two:?}").contains("A=1"), "{two:?}");
 }
 
 // ═══ 3. Config: the off switch ═════════════════════════════════════════════
@@ -476,6 +487,7 @@ fn defect_an_unparseable_config_silently_turns_ask_every_call_off() {
 }
 
 /// Edit planning through a hard link reads the file the link points at, wherever it lives.
+// Updated in review round 2: a failed plan on a protected file now returns one fixed message with no file text (R-01), where it used to return the closest lines.
 #[test]
 fn note_edit_planning_reads_through_a_hard_link_to_an_outside_file() {
     let s = Sandbox::new("edit-hardlink");
@@ -487,7 +499,15 @@ fn note_edit_planning_reads_through_a_hard_link_to_an_outside_file() {
     let ws = s.ws();
     let out = edit::plan_replace(&ws, "innocent.txt", "the outside line is wrong", "x");
     eprintln!("{out:?}");
-    assert!(matches!(&out, Err(e) if e.contains("ODINSECRET-OUTSIDE")), "{out:?}");
+    assert_eq!(
+        out.as_ref().err().map(String::as_str),
+        Some(
+            "old_text does not match exactly one place in innocent.txt. It is a protected file, so its text is \
+             not shown; ask the user to allow a read of it first."
+        ),
+        "{out:?}"
+    );
+    assert!(!format!("{out:?}").contains("ODINSECRET-OUTSIDE"), "{out:?}");
 }
 
 // ═══ 3b. The approval table ════════════════════════════════════════════════
@@ -702,6 +722,7 @@ fn note_junctions_that_point_back_inside_or_loop() {
     assert!(r.starts_with("1 match") && r.contains("src/main.rs:1:"), "{r}");
 }
 
+// Updated in review round 2: approval now asks up front for a hard-linked file (R-01: one shared protection test, `tools::protected`, which runs the checked open), instead of "automatic, then the open refuses".
 #[test]
 fn holds_a_hard_link_to_an_outside_file_is_never_read_or_searched_unasked() {
     let s = Sandbox::new("hardlink");
@@ -712,8 +733,8 @@ fn holds_a_hard_link_to_an_outside_file_is_never_read_or_searched_unasked() {
         return;
     }
     let ws = s.ws();
-    // Its name is ordinary, so the decision is automatic; the checked open then refuses.
-    assert!(matches!(decide(&ws, "innocent.txt"), Out::AutoThenAsk), "{}", brief(&decide(&ws, "innocent.txt")));
+    // Its name is ordinary, but `tools::protected` runs the checked open, so approval asks up front.
+    assert!(matches!(decide(&ws, "innocent.txt"), Out::Ask), "{}", brief(&decide(&ws, "innocent.txt")));
     let r = search::search(&ws, MARK, None, || false).unwrap();
     assert!(r.starts_with("No matches") && r.contains("second name"), "{r}");
     // Names only: the listing shows it.

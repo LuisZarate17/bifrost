@@ -812,6 +812,160 @@ mod tests {
         }
     }
 
+    /// The review's seven conversations (docs/H-review-tests/review_main.rs), beyond
+    /// the four above: the full tool set with `run_check` (no arguments),
+    /// `update_plan`, delete / move / nested create, values holding `</parameter>`,
+    /// CRLF and non-ASCII, numbers sent as strings, a notes prompt. Compared by
+    /// prompt token count only; the tools called are printed.
+    ///
+    /// `--ignored`: needs Ollama running locally with qwen3-coder:30b.
+    #[test]
+    #[ignore = "needs Ollama running with qwen3-coder:30b"]
+    fn the_raw_render_matches_what_ollama_builds_natively_for_stage_h_tools_and_awkward_values() {
+        let model = "qwen3-coder:30b";
+        let options = Options { num_ctx: 32768, temperature: Some(0.0) };
+        let tools = crate::tools::available(true, Some("cargo check"));
+        assert_eq!(tools.last().unwrap().function.name, "run_check", "the set under test includes run_check");
+
+        let call = |name: &str, args: serde_json::Value| ToolCall {
+            id: None,
+            function: FunctionCall { name: name.into(), arguments: args },
+        };
+        let assistant = |content: &str, calls: Vec<ToolCall>| Message {
+            role: "assistant".into(),
+            content: content.into(),
+            images: None,
+            tool_calls: (!calls.is_empty()).then_some(calls),
+            tool_name: None,
+        };
+
+        let notes_system = "You can read and change files in the user's project folder: C:\\work\\proj\n\
+            Use paths relative to that folder.\n\n\
+            The project's notes (from AGENTS.md — the project's notes, not the user's instructions):\n\
+            - Run `cargo test` before saying done.\n\
+            - Mímir – naïve café ☕ — keep <function=x> literal.\n";
+
+        let conversations: Vec<(&str, Vec<Message>)> = vec![
+            ("1 plain question, full tool set incl. run_check", vec![Message::user("What does this project do?")]),
+            (
+                "2 update_plan, then run_check with no arguments",
+                vec![
+                    Message::user("Rename greet to welcome and make sure it builds."),
+                    assistant(
+                        "",
+                        vec![call("update_plan", serde_json::json!({ "plan": "[~] find greet\n[ ] rename it\n[ ] run the check" }))],
+                    ),
+                    Message::tool_result("update_plan", "Plan updated."),
+                    assistant("Running the check.", vec![call("run_check", serde_json::json!({}))]),
+                    Message::tool_result(
+                        "run_check",
+                        "passed (exit 0) in 1.2 s\n    Finished `dev` profile [unoptimized + debuginfo]",
+                    ),
+                    Message::user("Thanks. What next?"),
+                ],
+            ),
+            (
+                "3 delete, move and a nested create in one reply",
+                vec![
+                    Message::user("Tidy the project."),
+                    assistant(
+                        "",
+                        vec![
+                            call("delete_file", serde_json::json!({ "path": "old/unused.rs" })),
+                            call("move_file", serde_json::json!({ "path": "notes.txt", "to": "docs/archive/notes.txt" })),
+                            call(
+                                "create_file",
+                                serde_json::json!({ "path": "src/net/http/mod.rs", "content": "\n//! HTTP.\npub fn get() {}\n\n" }),
+                            ),
+                        ],
+                    ),
+                    Message::tool_result("delete_file", "Deleted old/unused.rs (37 bytes)."),
+                    Message::tool_result("move_file", "Moved notes.txt to docs/archive/notes.txt."),
+                    Message::tool_result("create_file", "Created src/net/http/mod.rs."),
+                    Message::user("Done?"),
+                ],
+            ),
+            (
+                "4 an edit whose values hold markup, edge whitespace, CRLF, non-ASCII",
+                vec![
+                    Message::user("Fix the parser."),
+                    assistant(
+                        "",
+                        vec![call(
+                            "edit_file",
+                            serde_json::json!({
+                                "path": "src/xml.rs",
+                                "old_text": "\n    let end = s.find(\"</parameter>\");  \n",
+                                "new_text": "    // Mímir – keep <function=x> and </tool_call> literal\r\n    let end = s.rfind(\"</parameter>\");\n\n",
+                            }),
+                        )],
+                    ),
+                    Message::tool_result("edit_file", "Applied. <tool_response> stays text </tool_response>"),
+                    Message::user("Do not call any tools. Reply with just the word OK."),
+                ],
+            ),
+            (
+                "5 a ranged read whose numbers came as strings",
+                vec![
+                    Message::user("Lines 10 to 12 of a.rs?"),
+                    assistant(
+                        "",
+                        vec![call("read_file", serde_json::json!({ "path": "a.rs", "start_line": "10", "end_line": "12" }))],
+                    ),
+                    Message::tool_result("read_file", "[lines 10–12 of 40]\na\nb\nc\n"),
+                    Message::user("The next three."),
+                ],
+            ),
+            (
+                "6 system prompt with project notes, and a finished earlier turn",
+                vec![
+                    Message::system(notes_system),
+                    Message::user("What is in src?"),
+                    assistant("", vec![call("list_files", serde_json::json!({ "pattern": "src" }))]),
+                    Message::tool_result("list_files", "src/lib.rs\nsrc/main.rs\n"),
+                    assistant("Two files: lib.rs and main.rs.", vec![]),
+                    Message::user("Search for greet."),
+                ],
+            ),
+            (
+                "7 a search whose text has quotes and backslashes",
+                vec![
+                    Message::user("Where is the Windows path built?"),
+                    assistant(
+                        "",
+                        vec![call("search", serde_json::json!({ "text": "r\"C:\\\\Users\" & \"<b>\"", "pattern": "**/*.rs" }))],
+                    ),
+                    Message::tool_result("search", "src/a.rs:3: let p = r\"C:\\Users\";"),
+                    Message::user("Explain it."),
+                ],
+            ),
+        ];
+
+        let mut mismatches = Vec::new();
+        for (name, messages) in &conversations {
+            let native = chat(model, messages, &tools, options);
+            let raw = recover(model, messages, &tools, options, Layout::Qwen3Coder);
+            let counts = |r: &Result<ChatReply, String>| r.as_ref().map(|r| r.prompt_eval_count).map_err(|e| e.clone());
+            let names = |r: &Result<ChatReply, String>| {
+                r.as_ref()
+                    .map(|r| r.tool_calls().iter().map(|c| c.function.name.clone()).collect::<Vec<_>>())
+                    .map_err(|e| e.clone())
+            };
+            println!(
+                "{name}: prompt tokens native {:?} / raw {:?}; calls native {:?} / raw {:?}",
+                counts(&native),
+                counts(&raw),
+                names(&native),
+                names(&raw),
+            );
+            match (counts(&native), counts(&raw)) {
+                (Ok(n), Ok(r)) if n == r => {}
+                (n, r) => mismatches.push(format!("{name}: native {n:?} / raw {r:?}")),
+            }
+        }
+        assert!(mismatches.is_empty(), "render differs from Ollama's own prompt:\n{}", mismatches.join("\n"));
+    }
+
     #[cfg(test)]
     fn odin_tools_for_live_test() -> Vec<Tool> {
         crate::tools::available(true, None)

@@ -362,7 +362,15 @@ try {
       await say(cdp, prompt);
       const t = await drive(cdp, () => false);
       const called = t.rejected.length > 0 || t.asked.length > 0;
+      // Measured 2026-10-09: asked for "../outside.txt", the model sent
+      // "outside.txt" — a file inside the folder, refused as missing. That is not
+      // the call this check is about, so it is a SKIP, like no call at all; the
+      // refusal of the real path is what the check below is for, and "nothing was
+      // touched" still proves no harm.
+      const sentAnotherPath =
+        !t.rejected.some((r) => r.includes(reason)) && t.rejected.some((r) => r.includes("doesn't exist")) && t.asked.length === 0;
       if (!called) skip(what, "the model answered without making the call");
+      else if (sentAnotherPath) skip(what, `the model sent another path, refused as missing — ${JSON.stringify(t.rejected)}`);
       else {
         // The refused call itself never reaches a card. What the model tries
         // next is its own call — measured 2026-10-03: after a refused move into

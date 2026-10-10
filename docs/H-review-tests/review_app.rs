@@ -400,12 +400,14 @@ fn holds_config_round_trips_through_disk_with_the_h4b_h5_h10_fields() {
 /// way to set a custom check) makes `load()` answer with defaults (by design), and
 /// the very next save from any Mimir command writes those defaults over the file.
 /// Nothing keeps the malformed original, so the hand-typed content is gone.
+// Updated in review round 2: since R-02 a malformed config.json loads as the defaults with `ask_every_call: true` (and is copied to config.json.bad).
 #[test]
 fn defect_a_syntax_slip_in_config_json_is_erased_by_the_next_save_with_no_backup() {
     let _g = sandbox();
     let p = config_file();
     std::fs::write(&p, r#"{"model":"mine","checks":{"C:/proj":["cargo","clippy","--all"]},}"#).unwrap();
-    assert_eq!(config::load(), Config::default(), "premise: a malformed file loads as defaults");
+    let loaded = config::load();
+    assert_eq!(loaded, Config { ask_every_call: true, ..Config::default() }, "premise: a malformed file loads as defaults, asking");
     // What any Mimir command does: load, change one field, save.
     let mut c = config::load();
     c.num_ctx = 16384;
@@ -447,16 +449,13 @@ fn defect_unknown_fields_are_dropped_by_the_next_save() {
 /// no lock; two that overlap lose one update. H6's results call this race "real"
 /// and defer a lock; H10 added another writer (`set_notes`) and
 /// `accept_model_offer` holds a stale copy across a network call.
+// Updated in review round 2: since R-29 every command changes the config through `config::update` (one lock across load, change, save); a stale load+save is no longer how commands write.
 #[test]
 fn defect_two_config_commands_that_read_before_either_writes_lose_one_update() {
     let _g = sandbox();
     let folder = r"C:\review\proj";
-    let mut set_check = config::load();
-    let mut set_notes = config::load();
-    set_check.set_check(folder, Some(vec!["cargo".into(), "check".into()]));
-    config::save(&set_check).unwrap();
-    set_notes.set_instructions(folder, true);
-    config::save(&set_notes).unwrap();
+    config::update(|c| c.set_check(folder, Some(vec!["cargo".into(), "check".into()]))).unwrap();
+    config::update(|c| c.set_instructions(folder, true)).unwrap();
     let now = config::load();
     assert!(
         now.check_for(folder).is_some() && now.instructions_for(folder),
