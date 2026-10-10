@@ -67,8 +67,15 @@ opened (`..` resolved, no `\\?\`), and Allow opens exactly that.
 
 `"ask_every_call": true` in `%APPDATA%\odin\config.json` makes every call ask again, read again on
 every round. **Read leniently, failing toward asking:** `true`, `"true"` and `1` are on; `false`,
-`"false"`, `0` and a missing field are off; **anything else is on** — because a config that does
-not parse resets every setting to its default, and a typo must not silently mean "never ask".
+`"false"`, `0` and a missing field are off; **anything else is on** — because a typo must not
+silently mean "never ask".
+
+*Since review round 1 (R-02, 2026-10-09)* that holds for the whole file too. Before it, a
+config.json that did not parse — a trailing comma, a single-backslash path, a BOM — loaded as every
+default, `ask_every_call` off, and the next save wrote those defaults over it. Now such a file is
+copied to `config.json.bad` first and loads as the defaults **with `ask_every_call` on**; a BOM is
+skipped, a `null` or a wrong type costs only its own field, unknown fields are kept, and saves go
+through a temp file and a rename.
 
 ## What the model is told
 
@@ -156,6 +163,10 @@ list is the backstop for folders that do not.
 - **An older Mímir** saving `config.json` would drop `ask_every_call`.
 - **The global gitignore and `.git/info/exclude`** are not consulted, by `list_files` or by the
   rule — so a file hidden only there is listed and read unasked. Consistent, and noted.
+  *Closed in part by review round 1 (R-07, 2026-10-09):* `.git/info/exclude` is now honoured, so
+  are the `.gitignore` files above the folder up to the repository's root, and patterns ignore case
+  on Windows as git does there — checked against `git check-ignore`. The global excludes file is
+  still not read: it is the user's taste, not the project's.
 
 ## Files
 

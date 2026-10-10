@@ -301,6 +301,9 @@ often chosen before the first question — the offer must start it.
 > inside the folder run without asking — cards per coding task 3.9 → 2.5, finding code 0 —
 > with gitignored, secret-named, linked, remote and broad-folder reads still asking, and
 > `ask_every_call` to switch it off. Benchmark 29/48 after the wording change (28 before).
+> *Review round 1 (2026-10-09):* "gitignored" now means what git means — `.git/info/exclude`, the
+> `.gitignore` files above the folder up to the repository's root, case-insensitive on Windows (R-07);
+> and a config.json that does not parse now fails toward asking and is kept as `config.json.bad` (R-02).
 
 **Do:** Starts with a decision: keep every call asking (A), let in-folder reads and searches run
 freely (B), or review a whole turn at its end (C). If B: in-folder `read_file`, `list_files` and
@@ -404,6 +407,12 @@ undo removes the folders it created.
 > task list ship; the repo map was measured and left out — one vague question gained, three no-tool
 > ones lost, unasked edits. The finish line: 2 of 3 real rename-and-test runs did the whole job,
 > and Undo all restored every run byte for byte. **Stage H is complete.**
+> *Review round 1 (2026-10-09, R-03):* every one of those runs had ended at the 10-round cap — the
+> last check ran, its result never went back, and the model never said it was done. Now automatic
+> in-folder reads, listings and searches cost no round (a ceiling of 30 requests still bounds a turn),
+> and a turn that reaches a bound gets one closing request with no tools, so it ends in the model's
+> own words. Acceptance since: **3 of 3, no cap banner**; taskprobe 28/48 + 1 late, inside the
+> 25–32 spread.
 
 **Do:** `AGENTS.md`, off until turned on per folder, capped at 4 KB, inside `tools::system_prompt`
 so the probes measure it. An `update_plan(items)` tool — no side effects, so it does not ask —

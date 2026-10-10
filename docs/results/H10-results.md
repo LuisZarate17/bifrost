@@ -53,6 +53,15 @@ those edits would ask, but it is the wrong instinct, and the bar was not met. **
 findprobe variant (`--variant map`) and is not in the app.** Qwen3-Coder already answers 18 of 21
 vague questions on its own; H2's case for a map was built on qwen3-vl's 2 of 21.
 
+*Re-measured in review round 1 (R-09, 2026-10-09).* The "without" column's 18/21 included one
+Ollama connection ERROR, and every run shared one worktree with the edit tools on. On clean runs
+(read, list and search only, the worktree reset after each run):
+- **without the map:** vague 19/21, no tool 9/9;
+- **with it:** vague 15/21, no tool 4/9.
+
+The map loses vague questions as well as no-tool ones, so the decision stands. See
+[H-review-round1.md](H-review-round1.md).
+
 ## Measured
 
 **taskprobe, same build, the task list on and off** — the bar, set before: on ≥ 26/48, no errors,
@@ -68,8 +77,10 @@ not worse than off beyond the spread:
 | Time per task | 41 s | 34 s |
 
 It clears the bar, and the gap is inside the spread the same code has shown across runs (25–32).
-Read task by task, most of the difference sits in tasks where the model never planned at all
-(a03, a04, b06, b11); of the 7 runs in 64 that did plan, 4 passed. **But the model barely uses it**
+Read task by task, part of the difference sits in tasks where the model never planned at all (a04
+and b06); b09 did plan, and a03 and b11 are not part of the gap at the app's sampling (*corrected
+by review round 1, 2026-10-09: this sentence first named a03, a04, b06 and b11*). Of the 7 runs in
+64 that did plan, 4 passed. **But the model barely uses it**
 — about one task in ten — **and the "on" run was slower.** It ships because it costs little and makes
 a long turn readable; whether it pays is a question for daily use.
 
@@ -97,6 +108,17 @@ the same impossible edit three times; Mímir's repeat-stop ended the turn and sa
 the rename half done, visibly — and **Undo all put every file back byte for byte.** Trusting the
 result without re-reading every line holds when it succeeds; when it does not, it fails loudly and
 reversibly.
+
+**Corrected by review round 1 (R-03, 2026-10-09).** All three runs — the two passes too — ended on
+the banner *"the model kept asking for tools; stopped after 10 rounds"*, which was not true: the task
+takes exactly ten sequential calls (list, three reads, three edits, a failing check, a fix, a passing
+check), so the tenth ran, its result never went back, and the model never said it was done. The
+runs above did the work; the turn did not finish. Fixed by letting automatic in-folder reads,
+listings and searches cost no round (a ceiling of 30 requests still bounds a turn) and by giving a
+turn that reaches a bound one closing request with no tools. The script now fails a run that ends at
+the cap, checks that a test body really calls `shout` (the old pattern matched without one), and
+prints the model. **Since: 3 of 3 runs, every check passed, no cap banner** (qwen3-coder:30b,
+17–21 s a run).
 
 ## End to end
 
