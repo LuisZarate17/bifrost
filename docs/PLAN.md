@@ -8,8 +8,10 @@ captures the screen and streams an answer into the popup. Model chosen at A2:
 `qwen3-vl:8b-instruct-q4_K_M`. What is left of the original plan is one deferred testing round
 (BUILD.md D1/D2), not a feature.
 
-**Next: Stage G** — **Citadel**, a local chat app sharing Warden's model.
-See [`../stages/STAGE-G.md`](../stages/STAGE-G.md); built through G7 and in testing.
+**Now: Stage H is complete and pushed** — Mímir finds code, checks its work and runs longer.
+The independent review's round 1 is done and round 2 is under way; see [`H-status.md`](H-status.md)
+and [`../stages/STAGE-H.md`](../stages/STAGE-H.md). The checks by hand for Stages G and H still wait in
+[`PENDING-CHECKS.md`](PENDING-CHECKS.md).
 
 **Repo root:** `C:\Users\you\source\repos\odin` *(renamed from `warden` on 2026-09-25, the same
 day the GitHub repo became `LuisZarate17/odin`)*

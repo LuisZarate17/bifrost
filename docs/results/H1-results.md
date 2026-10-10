@@ -1,7 +1,7 @@
 # H1 — The model runs your check, and fixes what it says
 
 `run_check`: the one command you chose for the project folder, run when the model asks, approved
-each time. **Built 2026-09-29.**
+each time. **Built 2026-09-29.** *No margin was recorded before the run, so the comparison below is not held against a bar set in advance (review §7).*
 
 G7 made edits byte-exact. It could not tell the model that a byte-exact edit had broken the build —
 rename a function, miss its call site, and every edit "worked". H1 gives the model a way to find out.

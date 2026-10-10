@@ -1,7 +1,7 @@
 # H7 — A context budget inside the turn
 
 Inside one tool turn, every result now counts against the model's context, and old ones are set
-aside before Ollama has to cut. **Built 2026-10-02.**
+aside before Ollama has to cut. **Built 2026-10-02.** *No margin was recorded before the run, so the comparison below is not held against a bar set in advance (review §7).*
 
 ## The problem, measured
 
@@ -65,7 +65,8 @@ only grows, so a round reported smaller than the one before, with nothing set as
 **On this benchmark at 32k, the turns stay under budget**, so H7 mostly has nothing to do: the
 pass-rate difference (26 vs 30) is the run-to-run spread seen before (25–29). It does no harm, which
 is what Phase 4 requires of every chunk. **The one run it acted in shows it working:** `b07` at
-temperature 0 ran 13 rounds, its prompt climbing 1.7k → 23k tokens; four old results were set aside
+temperature 0 ran 13 rounds, its prompt climbing 1.7k → 24,887 tokens (the largest prompt in the table above);
+*Corrected 2026-10-09 (review §7): this said 23k.* four old results were set aside
 and every later round stayed inside the context, with nothing cut — it still failed, as `b07` always
 has, but on its own merits. Saved in `evals/out/H3-task-1791002629/` (off) and `…1791005230/` (on);
 logs in `evals/out/H7-2026-10-02/`.

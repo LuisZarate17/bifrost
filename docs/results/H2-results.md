@@ -1,6 +1,6 @@
 # H2 — The model looks for code instead of guessing where it is
 
-`list_files` and `search`, inside the project folder, approved each time. **Built 2026-09-29.**
+`list_files` and `search`, inside the project folder, approved each time. **Built 2026-09-29.** *No margin was recorded before the run, so the comparison below is not held against a bar set in advance (review §7).*
 
 Until H2, `read_file` was only any use when someone named the file. H1's fix probe watched the
 model read a compiler error that could only be in `main.rs` and keep editing `config.rs`, because

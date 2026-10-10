@@ -18,6 +18,8 @@ Stage G's worksheet is [G-testing.md](G-testing.md).
 - In Mímir: turn on **Tools**, then **Choose folder** → `C:\Users\you\source\repos\odin\practice`
   (double-click *into* `practice` before **Select Folder** — selecting `odin` itself would let
   Mímir work on the real project)
+- When a folder is chosen, Mímir may offer the coding model (H4b). Press **Not now** unless the
+  step is the one testing that switch
 - Tick as you go. Anything that fails: write what you saw next to it
 
 What the practice folder holds:
@@ -229,17 +231,17 @@ below unless the step says to apply it.
       u16) -> String`. **Expect:** a card headed **Create file** that says *Makes the folders:
       src/net/, …* above the diff. Apply it, then **Undo**. **Expect:** the file and the folders it
       made are gone, and the card says *Undone — the file is removed.*
-- [ ] **A delete.** Ask `Delete the file notes.txt` (any small file). **Expect:** a card headed
+- [ ] **A delete.** Ask `Delete the file facts.txt`. **Expect:** a card headed
       **Delete file** with a trash icon and the file's size, a button that says **Delete file**,
       and the line *Nothing has been deleted yet*. Apply it, then **Undo**. **Expect:** the file is
       back exactly as it was (open it), and the card says *Undone — the file is back.*
-- [ ] **A move.** Ask `Move notes.txt to archive/notes.txt`. **Expect:** a card headed **Move
-      file** showing *notes.txt → archive/notes.txt*, the folders it will make, and a note that
+- [ ] **A move.** Ask `Move facts.txt to archive/facts.txt`. **Expect:** a card headed **Move
+      file** showing *facts.txt → archive/facts.txt*, the folders it will make, and a note that
       references are not updated. Apply it, then **Undo**. **Expect:** it is back, and `archive` is
       gone.
-- [ ] **Not a rewrite.** Ask `Rewrite notes.txt so it says hello`. **Expect:** an **Edit file**
+- [ ] **Not a rewrite.** Ask `Rewrite shopping.md so it says hello`. **Expect:** an **Edit file**
       card with a diff — not a delete followed by a create.
-- [ ] **A refused place.** Ask `Delete .git/config`, then `Move notes.txt to ../elsewhere.txt`.
+- [ ] **A refused place.** Ask `Delete .git/config`, then `Move facts.txt to ../elsewhere.txt`.
       **Expect:** no card at all — a quiet line that says the model was told, with the reason in
       its details.
 - [ ] **Undo all over a mixed turn.** Ask for an edit and a move in one message. **Expect:** *2
@@ -272,8 +274,8 @@ Use `practice` (`node tools/practice.mjs`) as the folder, with Tools on and a ch
 - [ ] **Another name.** Rename the file to `CLAUDE.md` and ask anything. **Expect:** the model
       already gets CLAUDE.md's notes for that question, and once it answers the chip says
       **CLAUDE.md** — no restart.
-- [ ] **A task list.** Ask `Read src/config.rs, then src/main.rs, then tell me which port it
-      prints. Keep a task list.` **Expect:** one **Plan** card headed *Plan · N of M done* that fills
+- [ ] **A task list.** Ask `Read facts.txt, then shopping.md, then tell me the practice code and
+      the third item. Keep a task list.` **Expect:** one **Plan** card headed *Plan · N of M done* that fills
       in as the model works — a ring that is filled for the step under way, a tick and struck-out
       text for what is done — and not a new card per update.
 - [ ] **It never asks, and a long task is not cut short.** **Expect:** the Plan card has no buttons,

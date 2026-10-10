@@ -55,7 +55,7 @@ records of what happened.
 - **[STAGE-G.md](../stages/STAGE-G.md)** — **Mímir**, the local chat app sharing Heimdall's
   model. Built through G7 (editing files); the testing round is open.
 - **[STAGE-H.md](../stages/STAGE-H.md)** — Mímir learns to find code, check its work and run
-  longer: ten chunks in four phases, each gated on a measurement. H1 (the check command), H2
+  longer: twelve chunks (H1–H10, plus H4a and H4b) in four phases, each gated on a measurement. H1 (the check command), H2
   (finding code) and H3 (the benchmark of real work) built; H4 measured three coding models;
   Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5 and H6 built. H7 built. H8 built. H9 built. H10 built — Stage H complete.
 
@@ -173,7 +173,7 @@ package from G1, so **one renderer means one security review rather than two tha
   24 checks, `--only N` for one scenario
 - **The grading rubric** — `evals/cases.md`
 - **Cases that regenerate from tracked source** — `evals/fixtures/`
-- **Saved runs** — `evals/out/`
+- **Saved runs** — `evals/out/` (local and gitignored; see the note under Results)
 - **The Node harness F1 was ported from** — `evals/bench.mjs`
 
 > `evals/shots/` is gitignored on purpose. Screenshots of a real desktop can contain anything, so
@@ -185,6 +185,10 @@ package from G1, so **one renderer means one security review rather than two tha
 
 Finished chunks: what was built, what was measured, what the measurement changed. Never rewritten
 — a correction goes in the next one, with a note saying so.
+
+`evals/out/` is local and gitignored, so a clone cannot open the saved runs the results docs name.
+Each results doc quotes its numbers in full. The raw logs and `results.json` files stay on the
+machine that ran them.
 
 **Stage A — foundations, no GUI**
 

@@ -181,8 +181,8 @@ malform. Output is `path:line: text`, sorted, capped at about **8 KB** with the 
 says "to find code, use list_files and search; don't guess paths". Re-run editprobe after the
 wording change: tools.rs promises the probes measure the words the app ships.
 
-*Measured by:* `findprobe` — a detached worktree of odin at a pinned commit, fifteen questions
-(half exact, half vague, plus a few needing no tool), passing when the answer names the right file
+*Measured by:* `findprobe` — a detached worktree of odin at a pinned commit, eighteen questions
+(8 named, 7 vague, 3 needing no tool), passing when the answer names the right file
 **and** the fact. Variants: read only, with search, and later with a repo map (H10).
 
 **Done when:** findprobe has numbers for read-only against search, and the checks pass.
@@ -201,7 +201,8 @@ tools or their wording before building a benchmark on top of them.
 
 ## H3 — `taskprobe`
 
-> **Built 2026-09-30** — [H3-results.md](../docs/results/H3-results.md). As designed, plus: reads
+> **Built 2026-09-30** — [H3-results.md](../docs/results/H3-results.md). As designed, except
+> that the removals number twelve, not about fourteen (16 tasks in all); reads
 > in the probe are confined to the worktree, and runs share the repo's own target folder rather
 > than a fresh one.
 
@@ -210,7 +211,7 @@ task:
 
 - **Real commits**, cut to the files their tests cover — b38bc86 (`LoadedModel::pinned`), e3b43eb
   (odin-core's `tools.rs`), 871f297 (`store::attachment_path`), 27f6faf (`config.rs`).
-- **About fourteen function removals** at a pinned HEAD — the body becomes `todo!()` and the
+- **Twelve function removals** at a pinned HEAD — the body becomes `todo!()` and the
   function's own tests are hidden: `tidy_deletion`, CRLF/BOM handling, `Workspace` containment,
   `undo`, `render_chatml`, `extract_calls`, `repair`, `prior_failures`, `interpret`,
   `display_title`.
@@ -386,8 +387,9 @@ undo removes the folders it created.
 - **New paths** walk to the deepest existing folder inside the root, refuse `..` in the rest, cap
   new folders at 8 levels, refuse names Windows mishandles (`CON`, a trailing dot or space) and
   keep every H1 refusal (`.git`, `.cargo`, streams, app data). Delete and move take files only;
-  a link as the source, a read-only file, a case-only rename and a move across drives are
-  refused; deletes are capped at 16 MiB (the bytes are backed up).
+  a link as the source, a read-only file and a case-only rename are refused before any card;
+  a move across drives fails only when applied, after Allow (`ERROR_NOT_SAME_DEVICE`), says so and
+  changes nothing; deletes are capped at 16 MiB (the bytes are backed up).
 - **Records gain a kind** (Edit, Create, Delete, Move), the move's destination, and the folders
   apply *actually* made; undo removes only those, never recursively, and only if empty.
 - **Undo all is generalised:** instead of H6's chain per path, it replays the turn's changes newest
@@ -414,8 +416,8 @@ undo removes the folders it created.
 > own words. Acceptance since: **3 of 3, no cap banner**; taskprobe 28/48 + 1 late, inside the
 > 25–32 spread.
 
-**Do:** `AGENTS.md`, off until turned on per folder, capped at 4 KB, inside `tools::system_prompt`
-so the probes measure it. An `update_plan(items)` tool — no side effects, so it does not ask —
+**Do:** `AGENTS.md`, off until turned on per folder, capped at 4 KB, added by `tools::with_notes`, which only
+the app calls, so **no probe measures the notes**. An `update_plan(plan)` tool — no side effects, so it does not ask —
 shown as a checklist and re-sent each round. A repo map: paths plus each file's first comment line,
 about 2k tokens, scored with findprobe's repo-map variant. Embeddings only if findprobe still misses
 vague questions, as a separate `search_meaning` tool beside grep.

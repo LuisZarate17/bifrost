@@ -34,8 +34,9 @@ copy-then-delete fallback). Only edits keep the replacing atomic write, which is
 **What is refused, before any card:** anything outside the project, network and device paths (never
 even resolved — H5), a new folder named `.git` or `.cargo`, names Windows mishandles (`CON`, a
 trailing dot or space), more than 8 new folder levels, a folder as the source, a link or junction as
-the source (it would act on the target), a read-only file, a case-only rename, and a move across
-drives. A move onto `build.rs` is flagged on the next check's card, like an edit of it.
+the source (it would act on the target), a read-only file, and a case-only rename. A move onto `build.rs` is flagged on the next check's card, like an edit of it.
+
+*Corrected 2026-10-09 (review §7): this list used to include a move across drives. That one is not refused before a card. It fails only when applied, after Allow (`ERROR_NOT_SAME_DEVICE`), says so and changes nothing — test `move_across_drives_says_so_and_changes_nothing`.*
 
 **Right before acting,** apply checks again that every folder involved is still where it was planned
 (a junction swapped in since would point the action elsewhere) and that a file being deleted or moved
