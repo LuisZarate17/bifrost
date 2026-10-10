@@ -14,7 +14,7 @@
 //! save over it, the file is copied to `config.json.bad` beside it, so a
 //! hand-typed setting is never erased by the next unrelated save. A leading
 //! byte-order mark (PowerShell 5.1's `Set-Content -Encoding UTF8` writes one) is
-//! not a typo and is skipped. Saving goes through `config.json.tmp` and a rename,
+//! not a typo and is skipped. Saving goes through a temporary file beside it and a rename,
 //! so a reader never sees a half-written file, and fields this build does not
 //! know are kept.
 //!
@@ -28,6 +28,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -175,6 +176,15 @@ pub struct Config {
     /// kept as they were so the next save does not drop them.
     #[serde(flatten)]
     pub extra: serde_json::Map<String, serde_json::Value>,
+    /// **Set by [`load_from`] when the file is there but nothing of it was kept**:
+    /// it could not be read at all (locked by another program, a sharing violation),
+    /// or it did not parse and the copy to `config.json.bad` failed too. This value
+    /// is then only the fail-closed defaults, and every caller loads, changes one
+    /// thing and saves, so [`save_to`] refuses to write it: the real file, which is
+    /// still on disk, is not replaced by defaults. Never read from or written to the
+    /// file.
+    #[serde(skip)]
+    pub unsaved: bool,
 }
 
 /// A field read on its own: whatever is there if it fits, else the type's default
@@ -309,6 +319,7 @@ impl Default for Config {
             ask_every_call: false,
             instructions: BTreeSet::new(),
             extra: serde_json::Map::new(),
+            unsaved: false,
         }
     }
 }
@@ -339,10 +350,19 @@ pub fn load() -> Config {
 
 /// [`load`] for a given file, so tests need not touch `%APPDATA%`.
 pub fn load_from(p: &Path) -> Config {
-    let bytes = match std::fs::read(p) {
+    let bytes = match read_with_retries(p) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Config::default(),
-        Err(_) => return unreadable(p),
+        // A file that is there but cannot be read (another program has it open
+        // without sharing) is not "no file": its settings still exist. Fail
+        // closed, and refuse to let a save replace it with these defaults.
+        Err(_) => {
+            return Config {
+                ask_every_call: true,
+                unsaved: true,
+                ..Config::default()
+            };
+        }
     };
     let parsed = String::from_utf8(bytes).ok().and_then(|text| {
         // A byte-order mark is how some Windows editors say "this is UTF-8".
@@ -351,15 +371,33 @@ pub fn load_from(p: &Path) -> Config {
     parsed.unwrap_or_else(|| unreadable(p))
 }
 
+/// `std::fs::read`, tried a few times when it fails with anything but
+/// `NotFound`: a sharing violation is usually another program's write finishing,
+/// and a short wait turns it into a plain read. `NotFound` is final at once.
+fn read_with_retries(p: &Path) -> std::io::Result<Vec<u8>> {
+    let mut tries = 0;
+    loop {
+        match std::fs::read(p) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound && tries < 5 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// The answer for a file that is there but cannot be used: keep a copy of it
 /// beside itself, and fail towards asking. The copy is best effort — if even that
-/// fails, `load` must still not.
+/// fails, `load` must still not fail, but then nothing keeps what the person
+/// typed, so the result is marked `unsaved` and a save will not write over it.
 fn unreadable(p: &Path) -> Config {
     let mut bad = p.as_os_str().to_owned();
     bad.push(".bad");
-    let _ = std::fs::copy(p, PathBuf::from(bad));
+    let kept = std::fs::copy(p, PathBuf::from(bad)).is_ok();
     Config {
         ask_every_call: true,
+        unsaved: !kept,
         ..Config::default()
     }
 }
@@ -373,20 +411,35 @@ pub fn save(config: &Config) -> Result<(), String> {
     save_to(&p, config)
 }
 
-/// [`save`] for a given file. **Written to `config.json.tmp` and renamed**, as
+/// [`save`] for a given file. **Written to a temporary file beside it and renamed**, as
 /// `store::save` does, so a reader (Heimdall reads this on every summon) sees the
 /// old file or the new one, never a half-written one.
+///
+/// The temporary file has a name of its own for every save (process id and a
+/// process-wide counter), so two saves at once, from two threads or two programs,
+/// never write or rename the same file; it is removed if the rename fails. A
+/// config marked [`Config::unsaved`] is refused, see there.
 pub fn save_to(p: &Path, config: &Config) -> Result<(), String> {
+    if config.unsaved {
+        return Err(format!(
+            "{} could not be read when it was loaded, so it is not saved over",
+            p.display()
+        ));
+    }
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     }
     let json = serde_json::to_string_pretty(config)
         .map_err(|e| format!("serializing config: {e}"))?;
     let mut tmp = p.as_os_str().to_owned();
-    tmp.push(".tmp");
+    static SAVES: AtomicU64 = AtomicU64::new(0);
+    tmp.push(format!(".{}.{}.tmp", std::process::id(), SAVES.fetch_add(1, Ordering::Relaxed)));
     let tmp = PathBuf::from(tmp);
     std::fs::write(&tmp, json).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, p).map_err(|e| format!("replacing {}: {e}", p.display()))
+    std::fs::rename(&tmp, p).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("replacing {}: {e}", p.display())
+    })
 }
 
 #[cfg(test)]
@@ -426,6 +479,7 @@ mod tests {
             ask_every_call: true,
             instructions: BTreeSet::from([r"C:\work\demo".into()]),
             extra: serde_json::Map::new(),
+            unsaved: false,
         };
         let back: Config = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
         assert_eq!(c, back);
@@ -636,6 +690,77 @@ mod tests {
         let after = std::fs::read_to_string(&p).unwrap();
         assert!(after.contains("future_setting"), "{after}");
         assert_eq!(load_from(&p), c);
-        assert!(!p.with_extension("json.tmp").exists(), "the temp file is renamed away");
+        let leftovers = std::fs::read_dir(p.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0, "the temp file is renamed away");
+    }
+
+    #[test]
+    fn a_normal_load_is_not_marked_unsaved() {
+        let p = temp_file("normal");
+        assert!(!load_from(&p).unsaved);
+        std::fs::write(&p, r#"{"model":"mine"}"#).unwrap();
+        assert!(!load_from(&p).unsaved);
+        // A parse failure whose `.bad` copy succeeded may still be saved over.
+        std::fs::write(&p, "{ not json").unwrap();
+        assert!(!load_from(&p).unsaved);
+    }
+
+    /// A file another program holds open without sharing is not "no file": the load
+    /// asks every call, is marked, and a save leaves the real file alone.
+    #[cfg(windows)]
+    #[test]
+    fn a_locked_file_loads_closed_and_is_not_saved_over() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let p = temp_file("locked");
+        let real = r#"{"model":"mine","ask_every_call":false}"#;
+        std::fs::write(&p, real).unwrap();
+        let guard = std::fs::OpenOptions::new().read(true).share_mode(0).open(&p).unwrap();
+        let c = load_from(&p);
+        assert!(c.ask_every_call && c.unsaved);
+        assert!(save_to(&p, &c).unwrap_err().contains("could not be read"));
+        drop(guard);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), real);
+        let again = load_from(&p);
+        assert!(!again.unsaved);
+        assert_eq!(again.model, "mine");
+    }
+
+    #[test]
+    fn concurrent_saves_never_collide_and_a_reader_never_sees_a_broken_file() {
+        let p = temp_file("concurrent");
+        save_to(&p, &Config::default()).unwrap();
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        std::thread::scope(|scope| {
+            let writers: Vec<_> = (0..6)
+                .map(|w| {
+                    let p = &p;
+                    scope.spawn(move || {
+                        for i in 0..100 {
+                            let c = Config { model: format!("m{w}-{i}"), ..Config::default() };
+                            save_to(p, &c).unwrap();
+                        }
+                    })
+                })
+                .collect();
+            let reader = scope.spawn(|| {
+                while !stop.load(Ordering::Relaxed) {
+                    // A read can be refused for an instant while a rename lands
+                    // on Windows; what it does return must always parse.
+                    if let Ok(text) = std::fs::read_to_string(&p) {
+                        serde_json::from_str::<Config>(&text).expect("a broken file was seen");
+                    }
+                }
+            });
+            for w in writers {
+                w.join().unwrap();
+            }
+            stop.store(true, Ordering::Relaxed);
+            reader.join().unwrap();
+        });
+        assert!(!p.with_extension("json.bad").exists());
     }
 }

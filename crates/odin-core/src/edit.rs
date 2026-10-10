@@ -1613,8 +1613,14 @@ fn check_undo(record: &Record, look: &dyn Fn(&Path) -> State) -> Result<(), Refu
 /// undone, since undoing deletes its record — has its `path` or its `to` inside
 /// `dir`. Such a change still needs the folder: a delete would have nowhere to be
 /// put back, a move nowhere to return to.
+///
+/// **Errors count as "needed".** If the backups folder cannot be listed, or another
+/// record's file is there but cannot be read or parsed (a transient lock, a half
+/// write), there is no telling that it does not lie inside `dir`, and removing the
+/// folder on a guess could strand a change with nowhere to go back to. An empty
+/// folder left behind is harmless; a stranded change is not.
 fn folder_still_needed(dir: &Path, own_id: &str, backups: &Path) -> bool {
-    let Ok(entries) = std::fs::read_dir(backups) else { return false };
+    let Ok(entries) = std::fs::read_dir(backups) else { return true };
     let dir = PathBuf::from(key(dir));
     entries.flatten().any(|entry| {
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -1623,7 +1629,7 @@ fn folder_still_needed(dir: &Path, own_id: &str, backups: &Path) -> bool {
             return false;
         }
         let Some(other) = std::fs::read(entry.path()).ok().and_then(|b| serde_json::from_slice::<Record>(&b).ok()) else {
-            return false;
+            return true;
         };
         std::iter::once(&other.path)
             .chain(other.to.as_ref())
@@ -3066,6 +3072,19 @@ mod tests {
         undo(&deleted, &s.backups()).unwrap();
         assert!(ws.root().join("n/y.txt").exists(), "the deleted file came back");
         undo(&second, &s.backups()).unwrap();
+    }
+
+    #[test]
+    fn a_single_undo_keeps_a_made_folder_when_another_record_cannot_be_read() {
+        let s = Sandbox::new("mk-needed-unreadable");
+        let ws = s.ws();
+        let first = create(&s, &ws, "n/x.txt", "x\n");
+        // A record that is there but cannot be parsed: there is no telling it does
+        // not lie inside `n/`, so the folder stays.
+        std::fs::write(s.backups().join("broken.json"), b"{ half a write").unwrap();
+        undo(&first, &s.backups()).unwrap();
+        assert!(!ws.root().join("n/x.txt").exists());
+        assert!(ws.root().join("n").is_dir(), "the folder was removed on a guess");
     }
 
     #[test]

@@ -243,17 +243,50 @@ fn repo_root(root: &Path) -> Option<PathBuf> {
 /// `parents` setting is used and every folder above counts. That can only hide more
 /// (a hidden file asks before it is read), never less.
 ///
+/// **A chosen folder that the rules above it hide** (`build/` in the repository's
+/// `.gitignore`, chosen folder `repo/build/out`) would, walked from the repository's
+/// root, list nothing at all: the walk never goes into `build`. The user chose that
+/// folder on purpose, so it is then treated as a project of its own, as it was before
+/// the repository's rules were read: the walk starts at it, no folder above counts
+/// (`parents(false)`), and the `.gitignore` files inside it still apply. Whether this
+/// is the case is found by [`hidden_from_above`].
+///
 /// `only`, when given, narrows the walk to the folders on the way to that path
 /// and the path itself, which is how [`visible`] asks the walker about one file
 /// without reading the whole project. The skips are the same either way.
 fn walker(root: &Path, app_data: Option<PathBuf>, only: Option<PathBuf>) -> ignore::WalkBuilder {
-    let repo = repo_root(root);
-    let top = repo.clone().unwrap_or_else(|| root.to_path_buf());
+    match repo_root(root) {
+        Some(repo) if repo == root || !hidden_from_above(&repo, root, &app_data) => {
+            configured(&repo, root, false, app_data, only)
+        }
+        Some(_) => configured(root, root, false, app_data, only),
+        None => configured(root, root, true, app_data, only),
+    }
+}
+
+/// Whether the rules from the repository's root down to the chosen folder hide
+/// the chosen folder itself. It asks the very walk [`walker`] would use, narrowed
+/// to the chosen folder, whether that folder comes out of it: the `ignore` crate
+/// does not descend into a folder a rule hides, nor into one below a hidden one, so
+/// if the folder is not yielded some rule on the way hid it. Using the walk itself
+/// means there is no second copy of git's rules to drift from the first.
+fn hidden_from_above(repo: &Path, root: &Path, app_data: &Option<PathBuf>) -> bool {
+    !configured(repo, root, false, app_data.clone(), Some(root.to_path_buf()))
+        .build()
+        .filter_map(Result::ok)
+        .any(|e| e.path() == root)
+}
+
+/// The walker proper: starts at `top`, keeps only the folders on the way down to
+/// `root` and everything inside it, and reads ignore files as [`walker`] describes.
+/// `parents` is the `ignore` crate's own climb above `top`, wanted only outside a
+/// repository.
+fn configured(top: &Path, root: &Path, parents: bool, app_data: Option<PathBuf>, only: Option<PathBuf>) -> ignore::WalkBuilder {
     let root = root.to_path_buf();
-    let mut walker = ignore::WalkBuilder::new(&top);
+    let mut walker = ignore::WalkBuilder::new(top);
     walker
         .hidden(false)
-        .parents(repo.is_none())
+        .parents(parents)
         .require_git(false)
         .git_global(false)
         .git_exclude(true)
@@ -1326,6 +1359,30 @@ use b;
         let beside = std::fs::canonicalize(repo.join("pkg/sibling.txt")).unwrap();
         assert!(!visible(&ws, &beside), "a file beside the chosen folder was visible");
         assert!(wrong.is_empty(), "disagreements with git:\n{}", wrong.join("\n"));
+    }
+
+    /// A folder the user chose inside a folder the repository's `.gitignore` hides
+    /// (`build/` ignored, `repo/build/out` chosen) is still listed and readable:
+    /// it is its own project then, and its own `.gitignore` still applies.
+    #[test]
+    fn a_chosen_folder_inside_an_ignored_folder_is_its_own_project() {
+        let s = Sandbox::new("ignored-above");
+        let repo = s.dir.join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(repo.join(".gitignore"), "build/
+").unwrap();
+        let out = repo.join("build").join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        std::fs::write(out.join("a.txt"), "hello").unwrap();
+        std::fs::write(out.join("b.log"), "hello").unwrap();
+        std::fs::write(out.join(".gitignore"), "*.log
+").unwrap();
+        let ws = Workspace::open(&out).unwrap();
+        let files = list_in(&ws, None, None, &never).unwrap();
+        assert!(files.lines().any(|l| l == "a.txt"), "{files}");
+        assert!(!files.contains("b.log"), "{files}");
+        assert!(seen(&ws, "a.txt"));
+        assert!(!seen(&ws, "b.log"));
     }
 
     /// A `.gitignore` above the repository's root is not git's business and is not

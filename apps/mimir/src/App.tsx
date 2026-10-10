@@ -1132,6 +1132,8 @@ function App() {
         // nothing after the stop is shown or acted on.
         if (!live()) return;
         const out: ToolReply = await invoke<ToolReply>("ask_with_tools", { messages: convo, model, calibration });
+        // The server is up now (if "Starting Ollama…" was showing, it is done).
+        setStatus("");
         // `convo` must end up exactly what was sent, or the next round's prefix
         // differs and Ollama's prompt cache is lost.
         out.setAside.forEach((at, k) => {
@@ -1431,6 +1433,8 @@ function App() {
         // A stopped request was already wrapped up and saved by stop().
         if (live()) {
           setStreaming(false);
+          // A failed or cut-short turn must not leave "Starting Ollama…" behind.
+          setStatus("");
           composerRef.current?.focus();
           await persist(await settle((all) => all), convoId);
           // The turn may have created or removed a notes file (AGENTS.md…): ask
@@ -1690,6 +1694,7 @@ function App() {
   const current = models.find((m) => m.name === model);
   const resident = models.find((m) => m.isResident);
   const title = convoId ? convos.find((c) => c.id === convoId)?.title.trim() || "Untitled" : "";
+  const lastEntry = entries[entries.length - 1];
   const lastAssistant = (() => {
     for (let i = entries.length - 1; i >= 0; i--) {
       const e = entries[i];
@@ -1900,6 +1905,18 @@ function App() {
                     {turnLine(i)}
                   </Fragment>
                 ))}
+                {/* The tool path appends no empty assistant turn to hold the
+                    waiting row, so a status with nowhere to show goes here. */}
+                {status && !(lastEntry?.kind === "turn" && lastEntry.role === "assistant" && !lastEntry.content) && (
+                  <div className="waiting" role="status">
+                    <span className="pulse" aria-hidden="true">
+                      <i />
+                      <i />
+                      <i />
+                    </span>
+                    <span className="waiting-text">{status}</span>
+                  </div>
+                )}
                 {squeeze.aside > 0 && (
                   <p className="dropped">
                     Set aside {squeeze.aside} earlier {squeeze.aside === 1 ? "result" : "results"} to fit

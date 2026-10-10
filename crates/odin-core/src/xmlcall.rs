@@ -326,6 +326,38 @@ fn is_identifier(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+/// Whether, from just after a `<parameter=NAME>` tag (`from`), the rest of
+/// the region is nothing but that parameter's own value and close, any further
+/// `<parameter=IDENT>...</parameter>` blocks separated by whitespace, then
+/// optionally `</function>` and `</tool_call>`, then whitespace. This is what
+/// a genuine tail of a call looks like. A value that merely quotes the tool
+/// format (a doc sample with a `<parameter=mode>` block followed by ordinary
+/// prose) fails it, so those tags stay inside the value instead of silently
+/// cutting it short.
+fn only_parameter_blocks_follow(region: &str, from: usize) -> bool {
+    const CLOSE: &str = "</parameter>";
+    let mut pos = from;
+    loop {
+        let Some(rel) = region[pos..].find(CLOSE) else {
+            return false;
+        };
+        pos = skip_ws(region, pos + rel + CLOSE.len());
+        if let Some(rest) = region[pos..].strip_prefix("<parameter=")
+            && let Some(gt) = rest.find('>')
+            && is_identifier(&rest[..gt])
+        {
+            pos += "<parameter=".len() + gt + 1;
+            continue;
+        }
+        for tail in ["</function>", "</tool_call>"] {
+            if region[pos..].starts_with(tail) {
+                pos = skip_ws(region, pos + tail.len());
+            }
+        }
+        return pos >= region.len();
+    }
+}
+
 struct ValueEnd {
     value_end: usize,
     next_pos: usize,
@@ -366,14 +398,15 @@ fn find_value_end(region: &str, value_start: usize, key: &str, arg_names: &[&str
             let expected = k2 != key && arg_names.contains(&k2) && !taken.contains(k2);
             // Any other identifier-shaped name (one the tool lacks, one already
             // given, this very one again) ends it only when it is a real
-            // parameter, that is, it has a `</parameter>` of its own further on,
-            // and the closing tag looks like a close rather than code that quotes
+            // parameter, that is, it has a `</parameter>` of its own further on
+            // and nothing but more parameter blocks (and the call's own closing
+            // tags) follows it to the end of the region, and the closing tag looks like a close rather than code that quotes
             // one: on a line of its own when the value began on its own line.
             // Without that last test a value such as `x </parameter>` followed by
             // `<parameter=zzz>` in a code sample could never come back exact.
             let tag_at = ws_end + "<parameter=".len() + gt + 1;
             let real = is_identifier(k2)
-                && region[tag_at..].contains(CLOSE)
+                && only_parameter_blocks_follow(region, tag_at)
                 && (!own_lines || (region[..at].ends_with('\n') && at > value_start + 1));
             if expected || real {
                 a = Some(at);
@@ -1015,6 +1048,61 @@ null
         let content = "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=path>\nb.rs\n</parameter>\n</function>\n</tool_call>";
         let (_, calls, _) = extract_calls(content, &small_tools());
         assert_eq!(calls[0].function.arguments["path"], json!("b.rs"));
+    }
+
+    #[test]
+    fn a_value_quoting_the_tool_format_with_any_parameter_name_comes_back_exact() {
+        let v = "Example:
+<parameter=path>
+src/a.rs
+</parameter>
+<parameter=mode>
+fast
+</parameter>
+End";
+        let content = format!("<tool_call>
+<function=edit_file>
+<parameter=path>
+a.rs
+</parameter>
+<parameter=old_text>
+o
+</parameter>
+<parameter=new_text>
+{v}
+</parameter>
+</function>
+</tool_call>");
+        let (_, calls, failures) = extract_calls(&content, &small_tools());
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(calls[0].function.arguments["new_text"], json!(v));
+    }
+
+    #[test]
+    fn a_quoted_block_at_the_very_end_of_a_value_followed_by_the_real_close_is_exact() {
+        let v = "Example:
+<parameter=path>
+src/a.rs
+</parameter>
+<parameter=mode>
+fast
+</parameter>";
+        let content = format!("<tool_call>
+<function=edit_file>
+<parameter=path>
+a.rs
+</parameter>
+<parameter=old_text>
+o
+</parameter>
+<parameter=new_text>
+{v}
+</parameter>
+</function>
+</tool_call>");
+        let (_, calls, failures) = extract_calls(&content, &small_tools());
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(calls[0].function.arguments["new_text"], json!(v));
     }
 
     #[test]
