@@ -15,8 +15,10 @@
 //!    junctions, and skips `.git` and Mímir's own settings folder — the same
 //!    places [`crate::edit`] will not write.
 //! 2. **Not the build's files.** `target/` and `node_modules/` are skipped even
-//!    in a folder with no `.gitignore`, and `.gitignore` files inside the folder
-//!    are honoured. Otherwise one search of a Rust project reads gigabytes of
+//!    in a folder with no `.gitignore`, and git's own ignore rules are honoured:
+//!    `.gitignore` files inside the folder and, when it sits in a repository, in the
+//!    folders above it up to the repository's root, plus `.git/info/exclude`.
+//!    Otherwise one search of a Rust project reads gigabytes of
 //!    build output.
 //! 3. **It ends.** Files visited, bytes read and time are capped, and Stop
 //!    reaches a walk under way — choosing your whole home folder by mistake
@@ -215,25 +217,58 @@ fn walk(
     None
 }
 
+/// The folder that holds the `.git` this folder sits in: the folder itself, or
+/// the nearest one above it that has a `.git` (a folder, or the file a git
+/// worktree has). `None` when it is not inside a repository at all.
+fn repo_root(root: &Path) -> Option<PathBuf> {
+    root.ancestors().find(|dir| dir.join(".git").symlink_metadata().is_ok()).map(Path::to_path_buf)
+}
+
 /// The one walker both [`walk`] and [`visible`] use, so that what a read may
 /// run unasked is decided by exactly the rules `list_files` shows.
 ///
+/// **The rules are git's.** A file git hides is hidden here: what a `.gitignore`
+/// names, at any level, and what `.git/info/exclude` names. When the chosen folder
+/// sits inside a repository (a package in a monorepo), the `.gitignore` files in the
+/// folders above it count too, **up to the repository's root and no further**. The
+/// `ignore` crate's own `parents` setting goes up to the top of the drive, so it
+/// is not used there; instead the walk starts at the repository's root and
+/// `filter_entry` keeps only the folders on the way down to the chosen one and
+/// everything inside it. Each folder's rules are then read as git reads them, with a
+/// deeper file overriding a higher one. Patterns match without regard to case on
+/// Windows, as they do in git there (`core.ignorecase` is true). The global
+/// excludes file is still not read: it is the user's own taste, not the project's.
+///
+/// **Outside any repository** there is no root to stop at, so the `ignore` crate's
+/// `parents` setting is used and every folder above counts. That can only hide more
+/// (a hidden file asks before it is read), never less.
+///
 /// `only`, when given, narrows the walk to the folders on the way to that path
-/// and the path itself — which is how [`visible`] asks the walker about one file
+/// and the path itself, which is how [`visible`] asks the walker about one file
 /// without reading the whole project. The skips are the same either way.
 fn walker(root: &Path, app_data: Option<PathBuf>, only: Option<PathBuf>) -> ignore::WalkBuilder {
-    let mut walker = ignore::WalkBuilder::new(root);
+    let repo = repo_root(root);
+    let top = repo.clone().unwrap_or_else(|| root.to_path_buf());
+    let root = root.to_path_buf();
+    let mut walker = ignore::WalkBuilder::new(&top);
     walker
         .hidden(false)
-        .parents(false)
+        .parents(repo.is_none())
         .require_git(false)
         .git_global(false)
-        .git_exclude(false)
+        .git_exclude(true)
+        .ignore_case_insensitive(cfg!(windows))
         .follow_links(false)
         .sort_by_file_path(|a, b| a.cmp(b))
         .filter_entry(move |e| {
             if e.path_is_symlink() {
                 return false;
+            }
+            // Above the chosen folder only the way down to it is walked: the
+            // folders between the repository's root and it, kept for their ignore
+            // files. Nothing beside it is listed, read or searched.
+            if !e.path().starts_with(&root) {
+                return e.file_type().is_some_and(|t| t.is_dir()) && root.starts_with(e.path());
             }
             if only.as_ref().is_some_and(|target| !target.starts_with(e.path())) {
                 return false;
@@ -245,7 +280,7 @@ fn walker(root: &Path, app_data: Option<PathBuf>, only: Option<PathBuf>) -> igno
                 return false;
             }
             let is_dir = e.file_type().is_some_and(|t| t.is_dir());
-            if is_dir && e.depth() > 0 {
+            if is_dir && e.path() != root {
                 if SKIPPED.iter().any(|s| name.eq_ignore_ascii_case(s)) {
                     return false;
                 }
@@ -1197,5 +1232,125 @@ use b;
         assert_eq!(mapped(&s, line * 2), ["src/a.rs — file a", "src/b.rs — file b", "… 2 more files"]);
         assert_eq!(mapped(&s, line * 4).len(), 4, "everything fits, so no note");
         assert!(!map_in(&s.ws(), line * 4, None, &never).contains("more files"));
+    }
+
+    // ── git's rules, checked against git ──
+
+    /// Whether `git` is on the PATH; the tests that ask it say so and skip if not.
+    fn have_git() -> bool {
+        std::process::Command::new("git").arg("--version").output().is_ok_and(|o| o.status.success())
+    }
+
+    /// A repository with every kind of ignore rule at different levels, the chosen
+    /// folder being `repo/pkg/app` (a package in a monorepo), and files that each
+    /// rule hides or, through a negation, does not. Every file is then put to
+    /// `git check-ignore` and to this module: `visible` and `list` must say what
+    /// git says. `visible` is what decides whether a read runs unasked, so a
+    /// disagreement in either direction is a defect.
+    #[test]
+    fn the_ignore_rules_answer_the_way_git_check_ignore_does() {
+        if !have_git() {
+            eprintln!("skipped: git is not on the PATH");
+            return;
+        }
+        let s = Sandbox::new("git-agrees");
+        let repo = s.dir.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let init = std::process::Command::new("git").arg("init").arg("-q").current_dir(&repo).output().unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        let put = |rel: &str, text: &str| {
+            let p = repo.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        // Rules at the repository's root, above the chosen folder.
+        put(".gitignore", "*.log\n!keep.log\nCache/\n/rooted.txt\n");
+        put(".git/info/exclude", "local-only.txt\n");
+        // A folder between the root and the chosen one.
+        put("pkg/.gitignore", "mid.dat\n");
+        // The chosen folder's own, with a negation, and a nested one below it.
+        put("pkg/app/.gitignore", "*.tmp\n!important.tmp\n");
+        put("pkg/app/sub/.gitignore", "zz.txt\n");
+
+        let mut files = vec![
+            "pkg/app/a.rs",
+            "pkg/app/x.log",
+            "pkg/app/keep.log",
+            "pkg/app/sub/deep.log",
+            "pkg/app/local-only.txt",
+            "pkg/app/mid.dat",
+            "pkg/app/y.tmp",
+            "pkg/app/important.tmp",
+            "pkg/app/rooted.txt",
+            "pkg/app/sub/zz.txt",
+            "pkg/app/sub/ok.txt",
+            "pkg/app/.gitignore",
+            "pkg/app/sub/.gitignore",
+        ];
+        // Windows git runs with core.ignorecase=true; `Cache/` hides `cache/`.
+        if cfg!(windows) {
+            files.push("pkg/app/cache/c.txt");
+        }
+        // Not under the chosen folder, so neither listed nor visible - and not
+        // something this test compares.
+        put("outside.txt", "x\n");
+        put("pkg/sibling.txt", "x\n");
+        for f in &files {
+            put(f, "x\n");
+        }
+
+        let ws = Workspace::open(repo.join("pkg/app")).unwrap();
+        let listing = listed(&ws, None);
+        let mut wrong = Vec::new();
+        for f in &files {
+            let out = std::process::Command::new("git")
+                .args(["-c", "core.ignorecase=true", "check-ignore", "-q", f])
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            let ignored = match out.status.code() {
+                Some(0) => true,
+                Some(1) => false,
+                other => panic!("git check-ignore {f}: {other:?}"),
+            };
+            let rel = f.strip_prefix("pkg/app/").unwrap();
+            let real = std::fs::canonicalize(repo.join(f)).unwrap();
+            let sees = visible(&ws, &real);
+            let lists = listing.iter().any(|l| l == rel);
+            if sees == ignored || lists == ignored {
+                wrong.push(format!("{rel}: git ignores it = {ignored}, visible = {sees}, listed = {lists}"));
+            }
+        }
+        // The folder above is not walked beside the chosen one.
+        let beside = std::fs::canonicalize(repo.join("pkg/sibling.txt")).unwrap();
+        assert!(!visible(&ws, &beside), "a file beside the chosen folder was visible");
+        assert!(wrong.is_empty(), "disagreements with git:\n{}", wrong.join("\n"));
+    }
+
+    /// A `.gitignore` above the repository's root is not git's business and is not
+    /// ours either: the walk stops at the root.
+    #[test]
+    fn a_gitignore_above_the_repository_root_is_not_read() {
+        let s = Sandbox::new("above-root");
+        std::fs::write(s.dir.join(".gitignore"), "a.rs\n").unwrap();
+        s.write(".git/config", "x\n");
+        s.write("a.rs", "x\n");
+        s.write("b.rs", "x\n");
+        // The project folder is the repository (it holds `.git`), the folder
+        // above it holds a stray `.gitignore`.
+        assert_eq!(listed(&s.ws(), None), ["a.rs", "b.rs"]);
+    }
+
+    #[test]
+    fn info_exclude_and_case_different_patterns_hide_files_in_a_plain_repository() {
+        let s = Sandbox::new("exclude-case");
+        s.write(".git/info/exclude", "local-only.txt\n");
+        s.write(".gitignore", "Secrets/\n");
+        s.write("local-only.txt", "x\n");
+        s.write("secrets/a.txt", "x\n");
+        s.write("src/lib.rs", "x\n");
+        let expect: &[&str] = if cfg!(windows) { &[".gitignore", "src/lib.rs"] } else { &[".gitignore", "secrets/a.txt", "src/lib.rs"] };
+        assert_eq!(listed(&s.ws(), None), expect);
     }
 }

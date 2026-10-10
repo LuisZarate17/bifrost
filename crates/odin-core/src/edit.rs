@@ -1609,11 +1609,40 @@ fn check_undo(record: &Record, look: &dyn Fn(&Path) -> State) -> Result<(), Refu
     }
 }
 
+/// Whether some record in `backups` other than `own_id` — a change not yet
+/// undone, since undoing deletes its record — has its `path` or its `to` inside
+/// `dir`. Such a change still needs the folder: a delete would have nowhere to be
+/// put back, a move nowhere to return to.
+fn folder_still_needed(dir: &Path, own_id: &str, backups: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(backups) else { return false };
+    let dir = PathBuf::from(key(dir));
+    entries.flatten().any(|entry| {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(id) = name.strip_suffix(".json") else { return false };
+        if id == own_id {
+            return false;
+        }
+        let Some(other) = std::fs::read(entry.path()).ok().and_then(|b| serde_json::from_slice::<Record>(&b).ok()) else {
+            return false;
+        };
+        std::iter::once(&other.path)
+            .chain(other.to.as_ref())
+            .any(|p| PathBuf::from(key(p)).starts_with(&dir))
+    })
+}
+
 /// Take away the folders a change made — each only if it is empty, deepest
 /// first, stopping quietly at the first that is not. Never recursive.
-fn remove_made(record: &Record) {
+///
+/// **And not while another change that is still live lies inside it.** Create
+/// `n/x.txt` (which makes `n/`), create `n/y.txt`, delete `n/y.txt`: undoing the
+/// first card empties `n/`, and taking the folder away would leave the delete with
+/// nowhere to be put back — its bytes would exist only in the backups. So a single
+/// undo leaves the folder; [`undo_turn`] undoes newest first, so by the time it
+/// reaches the change that made the folder nothing else is live and the folder goes.
+fn remove_made(record: &Record, own_id: &str, backups: &Path) {
     for dir in &record.made_dirs {
-        if std::fs::remove_dir(dir).is_err() {
+        if folder_still_needed(dir, own_id, backups) || std::fs::remove_dir(dir).is_err() {
             break;
         }
     }
@@ -1653,7 +1682,7 @@ pub fn undo(id: &str, backups: &Path) -> Result<String, String> {
         }
         Op::Create => {
             std::fs::remove_file(&record.path).map_err(|e| format!("removing {}: {e}", record.display))?;
-            remove_made(&record);
+            remove_made(&record, id, backups);
         }
         Op::Delete => {
             let original = std::fs::read(&bak).map_err(|e| format!("reading the backup: {e}"))?;
@@ -1668,7 +1697,7 @@ pub fn undo(id: &str, backups: &Path) -> Result<String, String> {
         Op::Move => {
             let to = record.to.as_deref().ok_or("that move has no destination on record")?;
             move_new(to, &record.path)?;
-            remove_made(&record);
+            remove_made(&record, id, backups);
         }
     }
     let _ = std::fs::remove_file(&meta);
@@ -3021,6 +3050,59 @@ mod tests {
         undo(&id, &s.backups()).unwrap();
         assert!(!ws.root().join("a/b/x.rs").exists());
         assert_eq!(s.read("a/b/mine.txt"), b"mine\n");
+    }
+
+    #[test]
+    fn a_single_undo_keeps_a_made_folder_a_later_delete_needs() {
+        let s = Sandbox::new("mk-needed-delete");
+        let ws = s.ws();
+        let first = create(&s, &ws, "n/x.txt", "x\n");
+        let second = create(&s, &ws, "n/y.txt", "y\n");
+        let deleted = apply(&plan_delete(&ws, "n/y.txt").unwrap(), &s.backups()).unwrap().id;
+        // The first card made `n/`, but the delete of y.txt still has to put it back.
+        undo(&first, &s.backups()).unwrap();
+        assert!(!ws.root().join("n/x.txt").exists());
+        assert!(ws.root().join("n").is_dir(), "the delete's folder was taken away");
+        undo(&deleted, &s.backups()).unwrap();
+        assert!(ws.root().join("n/y.txt").exists(), "the deleted file came back");
+        undo(&second, &s.backups()).unwrap();
+    }
+
+    #[test]
+    fn a_single_undo_keeps_a_made_folder_a_later_move_came_from() {
+        let s = Sandbox::new("mk-needed-move");
+        let ws = s.ws();
+        let first = create(&s, &ws, "n/x.txt", "x\n");
+        s.write("n/mine.txt", b"mine\n");
+        let moved = apply(&plan_move(&ws, "n/mine.txt", "out.txt").unwrap(), &s.backups()).unwrap().id;
+        undo(&first, &s.backups()).unwrap();
+        assert!(ws.root().join("n").is_dir());
+        undo(&moved, &s.backups()).unwrap();
+        assert_eq!(s.read("n/mine.txt"), b"mine\n");
+    }
+
+    #[test]
+    fn undo_all_removes_a_made_folder_once_nothing_needs_it() {
+        let s = Sandbox::new("mk-needed-turn");
+        let ws = s.ws();
+        let first = create(&s, &ws, "n/x.txt", "x\n");
+        let second = create(&s, &ws, "n/y.txt", "y\n");
+        let deleted = apply(&plan_delete(&ws, "n/y.txt").unwrap(), &s.backups()).unwrap().id;
+        let out = undo_turn(&[first, second, deleted], &s.backups()).unwrap();
+        assert!(out.failed.is_none(), "{out:?}");
+        assert!(!ws.root().join("n").exists());
+        assert!(backup_files(&s).is_empty());
+    }
+
+    #[test]
+    fn a_made_folder_is_still_removed_while_unrelated_changes_are_live() {
+        let s = Sandbox::new("mk-needed-other");
+        let ws = s.ws();
+        s.write("other/keep.txt", b"k\n");
+        let _edit = apply(&plan_delete(&ws, "other/keep.txt").unwrap(), &s.backups()).unwrap().id;
+        let made = create(&s, &ws, "n/x.txt", "x\n");
+        undo(&made, &s.backups()).unwrap();
+        assert!(!ws.root().join("n").exists());
     }
 
     #[test]

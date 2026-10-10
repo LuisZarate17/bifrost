@@ -23,9 +23,10 @@
 //! same idea `toolcall.rs` uses for the JSON layout, ported to this one.
 //!
 //! **The remaining ambiguity, stated honestly:** a value that itself contains
-//! `</parameter>` followed by `<parameter=ANOTHER_ARG_OF_THIS_TOOL>`, or a
-//! later `<tool_call>` followed by `<function=OFFERED_TOOL>`, is still split
-//! there. This is the same class of limit `toolcall.rs`'s key-position
+//! `</parameter>` at the end of a line followed by `<parameter=ANY_NAME>` that has a
+//! `</parameter>` of its own further on, or a later `<tool_call>` followed by
+//! `<function=OFFERED_TOOL>`, is still split there (and, in a call with no
+//! `<tool_call>` wrapper, so is a line-start `<function=OFFERED_TOOL>`). This is the same class of limit `toolcall.rs`'s key-position
 //! anchoring has — and, as there, every call still goes to the user for
 //! approval before anything runs.
 
@@ -320,6 +321,11 @@ fn find_form_b(s: &str, from: usize, names: &HashSet<&str>) -> Option<FormB> {
     None
 }
 
+/// Whether `name` is shaped like a parameter name: letters, digits, `_` and `-`.
+fn is_identifier(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 struct ValueEnd {
     value_end: usize,
     next_pos: usize,
@@ -342,6 +348,11 @@ fn find_value_end(region: &str, value_start: usize, key: &str, arg_names: &[&str
         return None;
     }
 
+    // A value written the way the format asks starts on its own line, and its
+    // closing tag then sits on a line of its own too. A value written inline
+    // (`<parameter=path>src/a.rs</parameter>`) has no such shape to check.
+    let own_lines = region[value_start..].starts_with('\n');
+
     let mut a = None;
     for &at in &occurrences {
         let ws_end = skip_ws(region, at + CLOSE.len());
@@ -349,7 +360,22 @@ fn find_value_end(region: &str, value_start: usize, key: &str, arg_names: &[&str
             && let Some(gt) = rest.find('>')
         {
             let k2 = &rest[..gt];
-            if k2 != key && arg_names.contains(&k2) && !taken.contains(k2) {
+            // A tool's own other parameter that is still to come ends the value
+            // wherever the closing tag sits: that is the anchor this module is
+            // built on.
+            let expected = k2 != key && arg_names.contains(&k2) && !taken.contains(k2);
+            // Any other identifier-shaped name (one the tool lacks, one already
+            // given, this very one again) ends it only when it is a real
+            // parameter, that is, it has a `</parameter>` of its own further on,
+            // and the closing tag looks like a close rather than code that quotes
+            // one: on a line of its own when the value began on its own line.
+            // Without that last test a value such as `x </parameter>` followed by
+            // `<parameter=zzz>` in a code sample could never come back exact.
+            let tag_at = ws_end + "<parameter=".len() + gt + 1;
+            let real = is_identifier(k2)
+                && region[tag_at..].contains(CLOSE)
+                && (!own_lines || (region[..at].ends_with('\n') && at > value_start + 1));
+            if expected || real {
                 a = Some(at);
                 break;
             }
@@ -502,6 +528,11 @@ fn parse_params(region: &str, tool_name: &str, tools: &[Tool]) -> Result<(Map<St
                 .ok_or_else(|| fail(&format!("{key} is not closed with </parameter>")))?;
 
             let raw_value = &region[value_start..end.value_end];
+            // A parameter the tool does not have (the model does send them:
+            // `range` on `read_file`) is kept as a string, as Ollama's own parser
+            // does; the tools read only the names they know, so it does no harm,
+            // and what matters is that it no longer bleeds into its neighbour's
+            // value. A repeated one keeps its last value, as a map insert does.
             let prop_type = props.and_then(|m| m.get(&key)).and_then(|p| p.get("type"));
             args.insert(key, typed_value(raw_value, prop_type));
             i = end.next_pos;
@@ -534,15 +565,19 @@ pub fn extract_calls(content: &str, tools: &[Tool]) -> (String, Vec<ToolCall>, V
     let mut failures = Vec::new();
     let mut pos = 0usize;
     let mut seen_call_start = false;
+    // Whether the call just read had no `<tool_call>` wrapper. A reply of
+    // several bare calls is read call by call; once a wrapped call has been
+    // seen, a bare `<function=...>` line afterwards is prose again.
+    let mut last_bare = false;
 
     loop {
         let form_a = find_form_a(content, pos);
-        let form_b = if !seen_call_start { find_form_b(content, pos, &names) } else { None };
+        let form_b = if !seen_call_start || last_bare { find_form_b(content, pos, &names) } else { None };
 
-        let (start, tag_end, name) = match (form_a, form_b) {
-            (Some(a), Some(b)) if a.tc_at <= b.at => (a.tc_at, a.tag_end, a.name),
-            (Some(a), None) => (a.tc_at, a.tag_end, a.name),
-            (_, Some(b)) => (b.at, b.tag_end, b.name),
+        let (start, tag_end, name, bare) = match (form_a, form_b) {
+            (Some(a), Some(b)) if a.tc_at <= b.at => (a.tc_at, a.tag_end, a.name, false),
+            (Some(a), None) => (a.tc_at, a.tag_end, a.name, false),
+            (_, Some(b)) => (b.at, b.tag_end, b.name, true),
             (None, None) => {
                 text.push_str(&content[pos..]);
                 break;
@@ -551,6 +586,7 @@ pub fn extract_calls(content: &str, tools: &[Tool]) -> (String, Vec<ToolCall>, V
 
         text.push_str(&content[pos..start]);
         seen_call_start = true;
+        last_bare = bare;
 
         if !names.contains(name.as_str()) {
             // Worded like every other failure here and in `toolcall`, since it
@@ -564,7 +600,14 @@ pub fn extract_calls(content: &str, tools: &[Tool]) -> (String, Vec<ToolCall>, V
             continue;
         }
 
-        let region_end = find_form_a(content, tag_end).map(|a| a.tc_at).unwrap_or(content.len());
+        // A wrapped call ends where the next `<tool_call>` starts. A bare one has
+        // no wrapper to look for, so it also ends at the next `<function=...>`
+        // of an offered tool at the start of a line; a wrapped call does not
+        // stop there, since its values may quote such a line as code.
+        let mut region_end = find_form_a(content, tag_end).map(|a| a.tc_at).unwrap_or(content.len());
+        if bare && let Some(b) = find_form_b(content, tag_end, &names) {
+            region_end = region_end.min(b.at);
+        }
         let region = &content[tag_end..region_end];
 
         match parse_params(region, &name, tools) {
@@ -942,5 +985,65 @@ null
         assert_eq!(calls[0].function.arguments["start_line"], json!(120));
         assert_eq!(calls[0].function.arguments["end_line"], json!(180));
         assert!(calls[0].function.arguments["start_line"].is_number());
+    }
+
+    #[test]
+    fn an_unknown_parameter_after_a_known_one_does_not_join_its_value() {
+        let content = "<tool_call>\n<function=read_file>\n<parameter=path>\nsrc/a.rs\n</parameter>\n<parameter=range>\n1-50\n</parameter>\n</function>\n</tool_call>";
+        let (_, calls, failures) = extract_calls(content, &small_tools());
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(calls[0].function.arguments["path"], json!("src/a.rs"));
+        assert_eq!(calls[0].function.arguments["range"], json!("1-50"));
+    }
+
+    #[test]
+    fn an_inline_value_followed_by_an_unknown_parameter_ends_at_its_own_close() {
+        let content = "<tool_call>\n<function=read_file>\n<parameter=path>src/a.rs</parameter>\n<parameter=range>1-50</parameter>\n</function>\n</tool_call>";
+        let (_, calls, _) = extract_calls(content, &small_tools());
+        assert_eq!(calls[0].function.arguments["path"], json!("src/a.rs"));
+    }
+
+    #[test]
+    fn a_trailing_unknown_parameter_stays_out_of_new_text() {
+        let content = "<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\nx\n</parameter>\n<parameter=new_text>\ny\n</parameter>\n<parameter=replace_all>\ntrue\n</parameter>\n</function>\n</tool_call>";
+        let (_, calls, _) = extract_calls(content, &small_tools());
+        assert_eq!(calls[0].function.arguments["new_text"], json!("y"));
+    }
+
+    #[test]
+    fn a_repeated_parameter_keeps_its_last_value() {
+        let content = "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=path>\nb.rs\n</parameter>\n</function>\n</tool_call>";
+        let (_, calls, _) = extract_calls(content, &small_tools());
+        assert_eq!(calls[0].function.arguments["path"], json!("b.rs"));
+    }
+
+    #[test]
+    fn an_unknown_parameter_tag_quoted_in_a_value_mid_line_stays_in_the_value() {
+        // The closing tag sits mid-line, so this is code quoting the format.
+        let v = "x </parameter>\n<parameter=zzz>\ny";
+        let content = format!("<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\no\n</parameter>\n<parameter=new_text>\n{v}\n</parameter>\n</function>\n</tool_call>");
+        let (_, calls, failures) = extract_calls(&content, &small_tools());
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(calls[0].function.arguments["new_text"], json!(v));
+    }
+
+    #[test]
+    fn calls_without_wrappers_are_read_one_by_one() {
+        let content = "<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n<function=read_file>\n<parameter=path>\nb.rs\n</parameter>\n</function>";
+        let (text, calls, failures) = extract_calls(content, &small_tools());
+        assert!(failures.is_empty(), "{failures:?}");
+        let paths: Vec<_> = calls.iter().map(|c| c.function.arguments["path"].clone()).collect();
+        assert_eq!(paths, vec![json!("a.rs"), json!("b.rs")]);
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn a_wrapped_value_quoting_a_function_line_is_not_split() {
+        let v = "<function=read_file>\n<parameter=path>\nfoo\n</parameter>\n</function>";
+        let content = format!("<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\no\n</parameter>\n<parameter=new_text>\n{v}\n</parameter>\n</function>\n</tool_call>");
+        let (_, calls, failures) = extract_calls(&content, &small_tools());
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.arguments["new_text"], json!(v));
     }
 }
