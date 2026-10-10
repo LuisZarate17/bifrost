@@ -470,10 +470,31 @@ pub fn save_to(p: &Path, config: &Config) -> Result<(), String> {
     tmp.push(format!(".{}.{}.tmp", std::process::id(), SAVES.fetch_add(1, Ordering::Relaxed)));
     let tmp = PathBuf::from(tmp);
     std::fs::write(&tmp, json).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, p).map_err(|e| {
+    rename_patiently(&tmp, p).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("replacing {}: {e}", p.display())
     })
+}
+
+/// `std::fs::rename`, tried again for up to about half a second when Windows says
+/// "access denied". Replacing a file fails that way while another program holds
+/// it without delete sharing — a virus scanner looking at the temporary file just
+/// written, the indexer, a reader that opened it the old way — and that hold lasts
+/// milliseconds. Without this, picking a model could fail with "Access is denied"
+/// for no reason the person can see. (Seen twice as a test that hung, before the
+/// test learned to report a failed save; not reproduced on demand.) Any other error
+/// is returned at once.
+fn rename_patiently(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && tries < 25 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            done => return done,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -828,37 +849,69 @@ mod tests {
         assert_eq!(load_from(&p).model, "mine");
     }
 
+    /// **A save waits out a brief hold on the file.** Another program holding
+    /// config.json without delete sharing (a scanner, the indexer) makes replacing it
+    /// fail with "access denied" for as long as it holds it; a save that lands then
+    /// must succeed once the hold ends, not report an error.
+    #[cfg(windows)]
+    #[test]
+    fn a_save_waits_out_a_brief_hold_on_the_file() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let p = temp_file("held");
+        save_to(&p, &Config::default()).unwrap();
+        // FILE_SHARE_READ | FILE_SHARE_WRITE, but not FILE_SHARE_DELETE.
+        let held = std::fs::OpenOptions::new().read(true).share_mode(1 | 2).open(&*p).unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            drop(held);
+        });
+        let c = Config { model: "after the hold".into(), ..Config::default() };
+        let saved = save_to(&p, &c);
+        release.join().unwrap();
+        assert!(saved.is_ok(), "{saved:?}");
+        assert_eq!(load_from(&p).model, "after the hold");
+    }
+
     #[test]
     fn concurrent_saves_never_collide_and_a_reader_never_sees_a_broken_file() {
         let p = temp_file("concurrent");
         save_to(&p, &Config::default()).unwrap();
         let stop = std::sync::atomic::AtomicBool::new(false);
         std::thread::scope(|scope| {
+            // Every save's error is collected, never unwrapped in the thread: a writer
+            // that panicked used to leave `stop` unset, and the reader then spun for
+            // ever — the test hung instead of failing and saying why.
             let writers: Vec<_> = (0..6)
                 .map(|w| {
                     let p = &p;
                     scope.spawn(move || {
-                        for i in 0..100 {
-                            let c = Config { model: format!("m{w}-{i}"), ..Config::default() };
-                            save_to(p, &c).unwrap();
-                        }
+                        (0..100)
+                            .filter_map(|i| {
+                                let c = Config { model: format!("m{w}-{i}"), ..Config::default() };
+                                save_to(p, &c).err()
+                            })
+                            .collect::<Vec<_>>()
                     })
                 })
                 .collect();
             let reader = scope.spawn(|| {
+                let mut broken = 0;
                 while !stop.load(Ordering::Relaxed) {
                     // A read can be refused for an instant while a rename lands
                     // on Windows; what it does return must always parse.
-                    if let Ok(text) = std::fs::read_to_string(&p) {
-                        serde_json::from_str::<Config>(&text).expect("a broken file was seen");
+                    if let Ok(text) = std::fs::read_to_string(&p)
+                        && serde_json::from_str::<Config>(&text).is_err()
+                    {
+                        broken += 1;
                     }
                 }
+                broken
             });
-            for w in writers {
-                w.join().unwrap();
-            }
+            let errors: Vec<String> = writers.into_iter().flat_map(|w| w.join().unwrap_or_default()).collect();
             stop.store(true, Ordering::Relaxed);
-            reader.join().unwrap();
+            let broken = reader.join().unwrap_or(usize::MAX);
+            assert!(errors.is_empty(), "{} of 600 saves failed, e.g. {:?}", errors.len(), errors.first());
+            assert_eq!(broken, 0, "a reader saw a broken file {broken} times");
         });
         assert!(!p.with_extension("json.bad").exists());
     }
