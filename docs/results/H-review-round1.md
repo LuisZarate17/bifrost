@@ -3,7 +3,7 @@
 The high and the ten medium findings of [the review](../H-review.md), fixed 2026-10-09. The 31
 lows (R-12 to R-42) and the rest of the review's §7 doc list are round 2.
 
-**All eleven are fixed and committed locally, in five commits. Nothing is pushed.**
+**All eleven are fixed and committed locally, in five commits plus a follow-up from an independent check of them. Nothing is pushed.**
 
 | Commit | Findings |
 |---|---|
@@ -12,6 +12,7 @@ lows (R-12 to R-42) and the rest of the review's §7 doc list are round 2.
 | `c290697` | R-03 |
 | `b1909a6` | R-05, R-07, R-08 |
 | `dbb5826` | R-09, R-10, R-11 |
+| `c5a127c` | Follow-up: six findings from the check of the round-1 commits (below) |
 
 Two of these were Luis's decisions:
 - **R-03, the round cap:** automatic reads don't count, and every turn ends in the model's answer.
@@ -26,7 +27,7 @@ Two of these were Luis's decisions:
 | **R-03** | The acceptance task needs exactly ten calls, so every run ended at the cap before the model said it was done | Successful automatic in-folder reads, listings and searches cost no round, as accepted `update_plan` calls already didn't. A ceiling of 30 requests still bounds a turn. A turn that reaches either bound gets **one closing request with no tools**, so it ends in the model's words. The banner says which bound was hit and whether the last step ran. The probe mirrors all of this. |
 | **R-04** | `null` as a whole string argument became a deletion | A string argument that arrives as JSON `null` is the word `null`, a number or bool is its JSON text, and only an absent one is missing. The XML recovery keeps `null` as text for a `string` parameter. |
 | **R-05** | The XML recovery folded an unknown or repeated parameter into the value before it | A value also ends at any parameter tag that has its own closing tag, with the close on its own line when the value began on its own line. A repeated parameter keeps its last value. A bare call ends at the next line-start `<function=…>`. Unknown parameters are kept as text: the review's own schema test expects it, Ollama's parser does the same, and the tools ignore them. |
-| **R-06** | A tool turn never started Ollama | `ask_with_tools` starts it, and the window says "Starting Ollama…". |
+| **R-06** | A tool turn never started Ollama | `ask_with_tools` starts it, and the window says "Starting Ollama…" (shown only since the follow-up, below). |
 | **R-07** | The ignore rules were not git's | `list`, `search` and `visible` follow git: `.git/info/exclude`, the `.gitignore` files above the folder up to the repository root, and case-insensitive patterns on Windows. This is checked against `git check-ignore` on a fixture repo. Outside any repository, every parent `.gitignore` counts. That can only hide more, which means more asking. The global excludes file is still not read. |
 | **R-08** | Undoing the card that made a folder stranded later changes inside it | A single Undo leaves a folder a change made while another live change's path or destination lies under it. Undo all still removes the folder at the end. |
 | **R-09** | findprobe's runs shared one worktree, with the edit tools on | findprobe offers only read, list and search, and resets its worktree after every run. A failed reset is booked ERROR. |
@@ -35,8 +36,8 @@ Two of these were Luis's decisions:
 
 ## Evidence
 
-**Unit tests:** odin-core 365 (341 at the review, plus about 24 permanent tests carried over from
-the review's), mimir 31, bench all pass. Clippy and `tsc` are clean.
+**Unit tests:** odin-core 372 (341 at the review, plus 31 permanent tests added in round 1 and its
+follow-up), mimir 31, bench all pass. Clippy and `tsc` are clean.
 
 **The review's tests** (`docs/H-review-tests/`, copied in only to run them): **146 pass, 27 fail**,
 against 133 / 43 at the review.
@@ -111,6 +112,25 @@ from a clean worktree, and only read, list and search are offered:
 still loses five of the nine that need no tool.
 
 Saved in `evals/out/H2-find-1791591347/` (search) and `…1791591932/` (map).
+
+## The check of round 1, and its follow-up
+
+An independent checker reviewed `5fc2d5a`, `c290697` and `b1909a6` after they were committed. It
+found nothing high and six things that are fixed in `c5a127c`:
+
+| | What it found | Fixed |
+|---|---|---|
+| R-05 | **A regression.** A value that quotes the tool format (`<parameter=x>…</parameter>` inside `new_text`) was cut at the quoted block, with no failure reported. Before round 1 it came back exact. | An unknown or repeated parameter ends a value only when nothing but parameter blocks and the call's close follow it. The checker's case comes back exact, and the four R-05 cases still pass. |
+| R-07 | A chosen folder inside a folder git ignores (`repo/build/out`, with `build/` ignored) listed and searched as empty. Reads asked, so nothing leaked. | Such a folder is walked as its own project, with its own `.gitignore` files still honoured. |
+| R-02 | A config.json that was locked when read loaded as fail-closed defaults with no `.bad`, and the next save overwrote it. | A read error is retried. If it persists, the config is marked so that a save refuses to write it. The same applies when a bad file could not be copied to `.bad`. |
+| R-02 | Concurrent saves shared one `config.json.tmp` and collided. | Each save has its own temp name. The load-modify-save lock is R-29, in round 2. |
+| R-06 | **The claim in the R-06 row above was not true when written.** "Starting Ollama…" never showed on a tool turn: the status line lived only in an empty answer row, which tool turns don't have. | It shows in its own waiting row and is cleared when the turn answers or ends. Checked live: with Ollama stopped, the tool turn showed "Starting Ollama…", answered, and left nothing behind. |
+| R-08 | A record that could not be read counted as "not needed", so the made folder could still go. | An unreadable record keeps the folder. An empty folder left behind is the cheaper mistake. |
+
+After the follow-up:
+- odin-core: 372 tests.
+- policy e2e: 47/47 again.
+- clippy and tsc: clean.
 
 ## Found on the way
 

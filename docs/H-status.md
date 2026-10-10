@@ -29,7 +29,7 @@ every chunk**, alongside its results doc. Last updated 2026-10-09, after review 
 
 | Round | What | Status | Result |
 |---|---|---|---|
-| 1 | R-01 to R-11: the high and the ten mediums | ✅ Done · local (fdfac8a, 5fc2d5a, c290697, b1909a6, dbb5826) | Protected files stay protected when an edit misses; a turn always ends in the model's answer; acceptance 3/3 with no cap — [round 1](results/H-review-round1.md) |
+| 1 | R-01 to R-11: the high and the ten mediums | ✅ Done · local (fdfac8a, 5fc2d5a, c290697, b1909a6, dbb5826; follow-up c5a127c) | Protected files stay protected when an edit misses; a turn always ends in the model's answer; acceptance 3/3 with no cap — [round 1](results/H-review-round1.md) |
 | 2 | R-12 to R-42 (the lows) and the rest of the doc list | Not started | |
 
 ## Also open
