@@ -470,6 +470,9 @@ function App() {
   // did not need to. Forgotten when another conversation opens.
   const lastCalibration = useRef<{ chars: number; tokens: number } | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
+  /** The model offer bar is switching models. Sending waits: a question sent now
+   *  would carry the old tag while the config already names the new one. */
+  const [switchingModel, setSwitchingModel] = useState(false);
   /** Ollama's own count from the last reply — the honest number. */
   const [spent, setSpent] = useState(0);
 
@@ -482,8 +485,10 @@ function App() {
   /** Bumped by each send and by Stop. A request whose number is no longer the
    *  current one has been stopped, and anything it still receives is dropped. */
   const activeRequest = useRef(0);
-  /** Resolved by the Allow/Deny buttons; the tool loop awaits it. */
-  const pendingDecision = useRef<((ok: boolean) => void) | null>(null);
+  /** Resolved by the Allow/Deny buttons; the tool loop awaits it. Bound to its
+   *  card by `at`, the card's position in the thread: a button on any other card
+   *  does nothing, so an old card can never answer a later request's call. */
+  const pendingDecision = useRef<{ at: number; resolve: (ok: boolean) => void } | null>(null);
   /** The live thread, for saving after a turn completes.
    *
    *  persist() used to be called from inside a setEntries updater to read the
@@ -863,7 +868,9 @@ function App() {
               const args = call.function?.arguments ?? {};
               return {
                 kind: "tool",
-                name: call.function?.name ?? "read_file",
+                // Never a read card by default: `toWire` would replay it as a read
+                // the model never made.
+                name: call.function?.name ?? "unknown",
                 path: args.path ?? "",
                 state: args.undone ? "undone" : "ran",
                 result: m.content,
@@ -1035,6 +1042,9 @@ function App() {
       for (const e of slice) {
         if (e.kind === "tool") {
           if (e.state !== "ran" && e.state !== "undone") continue;
+          // A saved call with no name (see where the thread is reopened) is not
+          // replayed: the model would be shown a call it never made.
+          if (e.name === "unknown") continue;
           out.push({
             role: "assistant",
             content: "",
@@ -1267,10 +1277,18 @@ function App() {
         const update = (patch: Patch) =>
           threadGen.current === gen ? settle((prev) => patchAt(prev, patch)) : Promise.resolve(entriesRef.current);
 
+        // Stop pressed while the card was going up: `stop()` found no resolver to
+        // answer, so waiting here would leave a live card wired to the next request.
+        if (!live()) {
+          const all = await update({ state: "stopped" });
+          await saving.current;
+          if (threadGen.current === gen) await persist(all, convoIdRef.current);
+          return;
+        }
         const approved = await new Promise<boolean>((resolve) => {
-          pendingDecision.current = resolve;
+          pendingDecision.current = { at, resolve };
         });
-        pendingDecision.current = null;
+        if (pendingDecision.current?.at === at) pendingDecision.current = null;
 
         if (!approved) {
           await update({ state: "denied" });
@@ -1376,7 +1394,7 @@ function App() {
     // Attachments alone are a valid message - "what is this?" with a screenshot
     // is the common case. The Send button already allowed it while this bailed,
     // so the button simply did nothing.
-    if ((!text && staged.length === 0) || streaming) return;
+    if ((!text && staged.length === 0) || streaming || switchingModel) return;
 
     setError("");
     setStats("");
@@ -1502,7 +1520,7 @@ function App() {
       });
       await persist(out, convoId);
     }
-  }, [draft, streaming, entries, model, card, planSend, staged, persist, settle, convoId, toolsOn, askWithTools, toWire, disarm]);
+  }, [draft, streaming, entries, model, card, planSend, staged, persist, settle, convoId, toolsOn, askWithTools, toWire, disarm, switchingModel]);
 
   /**
    * Stop the answer being written, and keep what has arrived.
@@ -1517,7 +1535,7 @@ function App() {
     if (!streaming) return;
     activeRequest.current++;
     void invoke("stop").catch(() => {});
-    pendingDecision.current?.(false);
+    pendingDecision.current?.resolve(false);
 
     const cur = entriesRef.current;
     const out = [...cur];
@@ -1702,7 +1720,7 @@ function App() {
     }
     return -1;
   })();
-  const canSend = !streaming && (draft.trim().length > 0 || staged.length > 0);
+  const canSend = !streaming && !switchingModel && (draft.trim().length > 0 || staged.length > 0);
   const short = model ? splitName(model) : null;
 
   const turns = turnsOf(entries);
@@ -1740,8 +1758,8 @@ function App() {
         <ToolCard
           key={"t" + i}
           entry={entry}
-          onAllow={() => pendingDecision.current?.(true)}
-          onDeny={() => pendingDecision.current?.(false)}
+          onAllow={() => pendingDecision.current?.at === i && pendingDecision.current.resolve(true)}
+          onDeny={() => pendingDecision.current?.at === i && pendingDecision.current.resolve(false)}
           onUndo={() => entry.undo && void undoEdit(entry.undo)}
           disabled={streaming || undoing !== null}
         />
@@ -1958,6 +1976,7 @@ function App() {
                 }}
                 onHide={() => setOfferState(null)}
                 onSwitched={(tag) => setModel(tag)}
+                onSwitching={setSwitchingModel}
                 onRefresh={refreshModels}
               />
             )}

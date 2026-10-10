@@ -310,13 +310,13 @@ async fn unload_model(tag: String) -> Result<bool, String> {
 #[tauri::command]
 async fn set_model(tag: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut cfg = config::load();
-        cfg.model = tag;
-        // A pick made by hand ends any switch-back story outright: the user
-        // just chose a model on purpose, and clearing the folder afterwards
-        // must not second-guess that with an offer back to something else.
-        cfg.model_before_coding = None;
-        config::save(&cfg)
+        config::update(|cfg| {
+            cfg.model = tag;
+            // A pick made by hand ends any switch-back story outright: the user
+            // just chose a model on purpose, and clearing the folder afterwards
+            // must not second-guess that with an offer back to something else.
+            cfg.model_before_coding = None;
+        })
     })
     .await
     .map_err(|e| format!("saving the model choice failed: {e}"))?
@@ -410,26 +410,29 @@ async fn model_offer() -> Result<Option<ModelOffer>, String> {
 #[tauri::command]
 async fn accept_model_offer(kind: String) -> Result<f64, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut cfg = config::load();
+        // The network call comes first, with no config held: the config is read and
+        // written in one step afterwards, so a change made while Ollama answered
+        // is not written over.
         let installed: Vec<String> = ollama::tags()
             .map_err(|e| format!("could not reach Ollama: {e}"))?
             .into_iter()
             .map(|m| m.name)
             .collect();
-        let offer = offer_for(&cfg, &installed)
-            .filter(|o| o.kind == kind)
-            .ok_or_else(|| "That offer no longer applies.".to_string())?;
-
-        if offer.kind == "coding" {
-            cfg.model_before_coding = Some(offer.from.clone());
-        } else {
-            cfg.model_before_coding = None;
-        }
-        cfg.model = offer.to.clone();
-        config::save(&cfg)?;
+        let (offer, num_ctx) = config::update(|cfg| {
+            let offer = offer_for(cfg, &installed)
+                .filter(|o| o.kind == kind)
+                .ok_or_else(|| "That offer no longer applies.".to_string())?;
+            if offer.kind == "coding" {
+                cfg.model_before_coding = Some(offer.from.clone());
+            } else {
+                cfg.model_before_coding = None;
+            }
+            cfg.model = offer.to.clone();
+            Ok::<_, String>((offer, cfg.num_ctx))
+        })??;
 
         let _ = ollama::unload(&offer.from);
-        ollama::load(&offer.to, cfg.num_ctx).map(|d| d.as_secs_f64()).map_err(|e| {
+        ollama::load(&offer.to, num_ctx).map(|d| d.as_secs_f64()).map_err(|e| {
             format!("Switched to {}, but loading it failed: {e}. It will load with the next question.", offer.to)
         })
     })
@@ -1464,11 +1467,12 @@ async fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<Folder>, 
 
     tauri::async_runtime::spawn_blocking(move || {
         let ws = edit::Workspace::open(&dir)?;
-        let mut cfg = config::load();
         let root = ws.root_display();
-        remember(&mut cfg, &root);
-        cfg.workspace = Some(root);
-        config::save(&cfg)?;
+        let cfg = config::update(|cfg| {
+            remember(cfg, &root);
+            cfg.workspace = Some(root);
+            cfg.clone()
+        })?;
         Ok(Some(folder(&ws, &cfg)))
     })
     .await
@@ -1512,17 +1516,18 @@ async fn recent_folders() -> Result<Vec<Folder>, String> {
 #[tauri::command]
 async fn use_recent_folder(index: usize) -> Result<Folder, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut cfg = config::load();
-        let ws = cfg
-            .recent_workspaces
-            .iter()
-            .filter_map(|p| edit::Workspace::open(p).ok())
-            .nth(index)
-            .ok_or_else(|| "that folder is no longer in the recent list".to_string())?;
-        let root = ws.root_display();
-        remember(&mut cfg, &root);
-        cfg.workspace = Some(root);
-        config::save(&cfg)?;
+        let (ws, cfg) = config::update(|cfg| {
+            let ws = cfg
+                .recent_workspaces
+                .iter()
+                .filter_map(|p| edit::Workspace::open(p).ok())
+                .nth(index)
+                .ok_or_else(|| "that folder is no longer in the recent list".to_string())?;
+            let root = ws.root_display();
+            remember(cfg, &root);
+            cfg.workspace = Some(root);
+            Ok::<_, String>((ws, cfg.clone()))
+        })??;
         Ok(folder(&ws, &cfg))
     })
     .await
@@ -1555,15 +1560,16 @@ async fn check_options() -> Result<Vec<String>, String> {
 #[tauri::command]
 async fn set_check(index: usize, label: String) -> Result<Folder, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut cfg = config::load();
-        let ws = workspace(&cfg).ok_or("no project folder is chosen")?;
-        let argv = check::candidates(&ws)
-            .into_iter()
-            .nth(index)
-            .filter(|argv| check::label(argv) == label)
-            .ok_or("that check is no longer offered for this folder — choose again")?;
-        cfg.set_check(&ws.root_display(), Some(argv));
-        config::save(&cfg)?;
+        let (ws, cfg) = config::update(|cfg| {
+            let ws = workspace(cfg).ok_or("no project folder is chosen")?;
+            let argv = check::candidates(&ws)
+                .into_iter()
+                .nth(index)
+                .filter(|argv| check::label(argv) == label)
+                .ok_or("that check is no longer offered for this folder — choose again")?;
+            cfg.set_check(&ws.root_display(), Some(argv));
+            Ok::<_, String>((ws, cfg.clone()))
+        })??;
         Ok(folder(&ws, &cfg))
     })
     .await
@@ -1574,10 +1580,11 @@ async fn set_check(index: usize, label: String) -> Result<Folder, String> {
 #[tauri::command]
 async fn clear_check() -> Result<Folder, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let mut cfg = config::load();
-        let ws = workspace(&cfg).ok_or("no project folder is chosen")?;
-        cfg.set_check(&ws.root_display(), None);
-        config::save(&cfg)?;
+        let (ws, cfg) = config::update(|cfg| {
+            let ws = workspace(cfg).ok_or("no project folder is chosen")?;
+            cfg.set_check(&ws.root_display(), None);
+            Ok::<_, String>((ws, cfg.clone()))
+        })??;
         Ok(folder(&ws, &cfg))
     })
     .await
@@ -1592,10 +1599,11 @@ async fn clear_check() -> Result<Folder, String> {
 #[tauri::command]
 async fn set_notes(on: bool) -> Result<Folder, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut cfg = config::load();
-        let ws = workspace(&cfg).ok_or("no project folder is chosen")?;
-        cfg.set_instructions(&ws.root_display(), on);
-        config::save(&cfg)?;
+        let (ws, cfg) = config::update(|cfg| {
+            let ws = workspace(cfg).ok_or("no project folder is chosen")?;
+            cfg.set_instructions(&ws.root_display(), on);
+            Ok::<_, String>((ws, cfg.clone()))
+        })??;
         Ok(folder(&ws, &cfg))
     })
     .await
@@ -1606,9 +1614,7 @@ async fn set_notes(on: bool) -> Result<Folder, String> {
 #[tauri::command]
 async fn clear_project_folder() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let mut cfg = config::load();
-        cfg.workspace = None;
-        config::save(&cfg)
+        config::update(|cfg| cfg.workspace = None)
     })
     .await
     .map_err(|e| format!("clearing the project folder failed: {e}"))?

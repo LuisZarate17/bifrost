@@ -94,7 +94,8 @@ fn argv(parts: &[&str]) -> Vec<String> {
 
 fn npm_scripts(path: &Path) -> Option<serde_json::Map<String, serde_json::Value>> {
     let text = std::fs::read_to_string(path).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&text).ok()?;
+    // PowerShell 5.1 and some editors write a byte-order mark, which is not a typo.
+    let json: serde_json::Value = serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(&text)).ok()?;
     json.get("scripts")?.as_object().cloned()
 }
 
@@ -194,9 +195,24 @@ pub fn run(
     let job = Job::new();
 
     let started = Instant::now();
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("could not start `{}` in {}: {e}", label(argv), dir.display()))?;
+    let mut child = match cmd.spawn() {
+        Ok(child) => child,
+        // Windows refuses to even start a program Smart App Control has blocked, so
+        // there is no output to read the block from — the error is the evidence.
+        // Answered as a blocked run, so the model is told what happened to it, rather
+        // than as "could not start", which reads like a mistake in the command.
+        Err(e) if spawn_blocked(&e) => {
+            return Ok(Outcome {
+                ended: Ended::Exited(None),
+                elapsed: started.elapsed(),
+                output: format!("could not start `{}`: {e}", label(argv)),
+                bytes: 0,
+                complete: true,
+                blocked: Some(format!("the program `{program}`")),
+            });
+        }
+        Err(e) => return Err(format!("could not start `{}` in {}: {e}", label(argv), dir.display())),
+    };
     // The Command still holds this process's copies of the pipe's write end.
     // Until they are closed the reader never sees end-of-file.
     drop(cmd);
@@ -400,20 +416,30 @@ impl Capture {
         }
     }
 
+    /// **Decoded together when nothing was cut**, because the head/tail boundary is
+    /// then arbitrary and may fall inside a character. At a real cut, the head's
+    /// last character and the tail's first may be split by the cut itself; the
+    /// broken pieces are dropped rather than shown as U+FFFD beside the marker.
     fn render(&self) -> String {
-        let head = String::from_utf8_lossy(&self.head);
         let kept = (self.head.len() + self.tail.len()) as u64;
-        if self.tail.is_empty() {
-            return head.into_owned();
-        }
         let tail: Vec<u8> = self.tail.iter().copied().collect();
-        let tail = String::from_utf8_lossy(&tail);
         let cut = self.total - kept;
         if cut == 0 {
-            format!("{head}{tail}")
-        } else {
-            format!("{head}\n[… {cut} bytes cut …]\n{tail}")
+            let mut all = self.head.clone();
+            all.extend_from_slice(&tail);
+            return String::from_utf8_lossy(&all).into_owned();
         }
+        let mut head = &self.head[..];
+        if let Err(e) = std::str::from_utf8(head) {
+            // `error_len() == None` means the bytes end in the start of a character.
+            if e.error_len().is_none() {
+                head = &head[..e.valid_up_to()];
+            }
+        }
+        let skip = tail.iter().take(3).take_while(|b| (**b & 0xC0) == 0x80).count();
+        let head = String::from_utf8_lossy(head);
+        let tail = String::from_utf8_lossy(&tail[skip..]);
+        format!("{head}\n[… {cut} bytes cut …]\n{tail}")
     }
 }
 
@@ -455,6 +481,13 @@ pub fn for_model(argv: &[String], outcome: &Outcome) -> String {
     } else {
         format!("{head} Output:\n\n{output}")
     }
+}
+
+/// Whether a command that could not be started was refused by Smart App Control:
+/// Windows error 4551, "An Application Control policy has blocked this file".
+/// Pure, so it can be tested without a blocked file.
+fn spawn_blocked(e: &std::io::Error) -> bool {
+    e.raw_os_error() == Some(4551) || e.to_string().contains("Application Control policy has blocked")
 }
 
 /// The signs that Smart App Control, not the code, stopped a **failed** build
@@ -525,8 +558,17 @@ mod tests {
     }
 
     impl Drop for Folder {
+        /// **Retried, because a process that is a moment from ending can still have
+        /// the folder as its working directory** — `ping` after the "linger" test's
+        /// check — and Windows then refuses to remove it. One try, with the error
+        /// ignored, is how an `odin-check-linger-…` folder was left in `%TEMP%`.
         fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
+            for _ in 0..50 {
+                if std::fs::remove_dir_all(&self.0).is_ok() || !self.0.exists() {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
         }
     }
 
@@ -801,6 +843,46 @@ mod tests {
         assert!(out.passed());
         assert!(out.complete, "the background ping outlived the check");
         assert!(started.elapsed() < DRAIN, "took {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_character_on_the_head_boundary_survives_when_nothing_was_cut() {
+        let mut c = Capture::default();
+        let mut v = vec![b'a'; HEAD - 1];
+        v.extend_from_slice("\u{e9}".as_bytes());
+        v.extend_from_slice(&[b'b'; 100]);
+        c.push(&v);
+        let text = c.render();
+        assert!(text.contains('\u{e9}') && !text.contains('\u{fffd}') && !text.contains("bytes cut"));
+    }
+
+    #[test]
+    fn a_cut_drops_the_split_characters_at_both_ends_of_the_marker() {
+        let mut c = Capture::default();
+        let total = 20_000usize;
+        let mut v = vec![b'a'; total];
+        v[HEAD - 1..HEAD + 1].copy_from_slice("\u{e9}".as_bytes());
+        let tail_start = total - TAIL;
+        v[tail_start - 1..tail_start + 2].copy_from_slice("\u{2500}".as_bytes());
+        c.push(&v);
+        let text = c.render();
+        assert!(text.contains("bytes cut") && !text.contains('\u{fffd}'), "{}", text.matches('\u{fffd}').count());
+    }
+
+    #[test]
+    fn a_bom_in_package_json_does_not_hide_the_npm_checks() {
+        let f = Folder::new("npm-bom");
+        f.write("package.json", "\u{feff}{\"scripts\":{\"test\":\"vitest run\"}}");
+        assert_eq!(candidates(&f.ws()).len(), 1);
+    }
+
+    /// Windows error 4551 is Smart App Control refusing to start the file, however
+    /// the error text is worded; any other start failure is not.
+    #[test]
+    fn a_start_refused_by_smart_app_control_is_recognised() {
+        assert!(spawn_blocked(&std::io::Error::from_raw_os_error(4551)));
+        assert!(!spawn_blocked(&std::io::Error::from_raw_os_error(2)));
+        assert!(!spawn_blocked(&std::io::Error::other("nothing to do with it")));
     }
 
     #[test]

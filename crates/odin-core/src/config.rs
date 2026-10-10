@@ -29,6 +29,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 
@@ -411,6 +412,39 @@ pub fn save(config: &Config) -> Result<(), String> {
     save_to(&p, config)
 }
 
+/// Load the config, change it, save it — **as one step no other [`update`] can
+/// interleave with.** Every command that changes one setting used to `load`, edit
+/// and `save` on its own, so two that read before either wrote lost one of the two
+/// changes, and `accept_model_offer` held its copy across a network call. Callers
+/// give the change as `f`; whatever it returns is handed back once the save is done.
+///
+/// The lock is per process (Heimdall and the CLI only read), and `f` runs under it,
+/// so it must not wait on the network or on another `update`. A config loaded from a
+/// file that could not be read is still refused by [`save_to`], so `f`'s change is
+/// then reported as an error and the real file is left alone.
+pub fn update<T>(f: impl FnOnce(&mut Config) -> T) -> Result<T, String> {
+    let p = path().ok_or_else(|| "APPDATA is not set".to_string())?;
+    update_at(&p, f)
+}
+
+/// [`update`] for a given file, so tests need not touch `%APPDATA%`.
+pub fn update_at<T>(p: &Path, f: impl FnOnce(&mut Config) -> T) -> Result<T, String> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    // A panic inside another `f` leaves nothing half-written (the save is a rename),
+    // so a poisoned lock is still safe to take.
+    let _held = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut config = load_from(p);
+    let before = config.clone();
+    let out = f(&mut config);
+    // Nothing changed (an offer that no longer applies, a check already chosen):
+    // nothing is written, so the file is not rewritten for no reason — and a file
+    // that would not parse is left as the person wrote it.
+    if config != before {
+        save_to(p, &config)?;
+    }
+    Ok(out)
+}
+
 /// [`save`] for a given file. **Written to a temporary file beside it and renamed**, as
 /// `store::save` does, so a reader (Heimdall reads this on every summon) sees the
 /// old file or the new one, never a half-written one.
@@ -613,11 +647,38 @@ mod tests {
         }
     }
 
-    fn temp_file(name: &str) -> PathBuf {
+    /// A `config.json` path in a folder of its own, **removed when the test ends** —
+    /// passing or failing — so test runs do not leave folders in `%TEMP%` (they did:
+    /// 176 of them before this guard).
+    struct TempConfig {
+        dir: PathBuf,
+        path: PathBuf,
+    }
+
+    impl std::ops::Deref for TempConfig {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl AsRef<Path> for TempConfig {
+        fn as_ref(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TempConfig {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn temp_file(name: &str) -> TempConfig {
         let dir = std::env::temp_dir().join(format!("odin-config-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        dir.join("config.json")
+        TempConfig { path: dir.join("config.json"), dir }
     }
 
     /// **A file that does not parse fails towards asking, and is kept.** A typo in
@@ -727,6 +788,44 @@ mod tests {
         let again = load_from(&p);
         assert!(!again.unsaved);
         assert_eq!(again.model, "mine");
+    }
+
+    /// **Two changes made at once are both kept.** Each thread changes a different
+    /// field many times through `update_at`; without the lock one thread's save
+    /// would put back the other's old value.
+    #[test]
+    fn updates_from_two_threads_both_keep_their_changes() {
+        let p = temp_file("update");
+        std::thread::scope(|scope| {
+            let (p1, p2) = (&p, &p);
+            let a = scope.spawn(move || {
+                for i in 0..50 {
+                    update_at(p1, |c| c.num_ctx = 1000 + i).unwrap();
+                }
+            });
+            let b = scope.spawn(move || {
+                for i in 0..50 {
+                    update_at(p2, |c| c.model = format!("m{i}")).unwrap();
+                }
+            });
+            a.join().unwrap();
+            b.join().unwrap();
+        });
+        let c = load_from(&p);
+        assert_eq!((c.num_ctx, c.model.as_str()), (1049, "m49"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn an_update_of_an_unreadable_file_is_refused_and_returns_the_error() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let p = temp_file("update-locked");
+        std::fs::write(&p, r#"{"model":"mine"}"#).unwrap();
+        let guard = std::fs::OpenOptions::new().read(true).share_mode(0).open(&p).unwrap();
+        let err = update_at(&p, |c| c.num_ctx = 1).unwrap_err();
+        assert!(err.contains("could not be read"), "{err}");
+        drop(guard);
+        assert_eq!(load_from(&p).model, "mine");
     }
 
     #[test]

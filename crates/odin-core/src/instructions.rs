@@ -13,7 +13,8 @@
 //! - **Through the same door as every other read the model did not ask to be
 //!   approved:** [`Workspace::resolve_existing`] and [`edit::open_checked`], so a
 //!   link that points out, a file with a second name and a file outside the folder
-//!   are skipped, not read.
+//!   are skipped, not read. **And never through a link at all**, even one that stays
+//!   inside the folder: the real path must be the folder joined with the name.
 //! - **Bounded:** at most [`MAX_NOTES_BYTES`] are taken from the handle, so a 2 GB
 //!   `AGENTS.md` costs 4 KB of reading. Over the cap the text is cut at the last
 //!   whole line and says so, because half a sentence of a rule is worse than none.
@@ -60,8 +61,34 @@ pub fn find(ws: &Workspace) -> Option<Notes> {
     CANDIDATES.iter().find_map(|name| read(ws, name))
 }
 
+/// Where the notes file `name` must be for it to be read: the folder root joined with
+/// the name, with **no link on the way** — every part is looked at without following
+/// it, and a symlink or junction refuses the file.
+///
+/// `resolve_existing` only says the *target* is inside the folder, which is not the
+/// spec ("never through a link"): `.github` a junction to `ghdocs/` stays inside and
+/// was read, and an `AGENTS.md` symlinked to `.env` would have put the secret in the
+/// prompt. So the canonical path must also be exactly this one, compared without
+/// case like Windows does, and not a secret name.
+fn unlinked_path(ws: &Workspace, name: &str) -> Option<std::path::PathBuf> {
+    let mut path = ws.root().to_path_buf();
+    for part in name.split('/') {
+        path.push(part);
+        if std::fs::symlink_metadata(&path).ok()?.is_symlink() {
+            return None;
+        }
+    }
+    Some(path)
+}
+
 fn read(ws: &Workspace, name: &str) -> Option<Notes> {
+    let expected = unlinked_path(ws, name)?;
     let real = ws.resolve_existing(name).ok()?;
+    if real.to_string_lossy().to_lowercase() != expected.to_string_lossy().to_lowercase()
+        || crate::search::secret_name(&real)
+    {
+        return None;
+    }
     let file = edit::open_checked(&real)?;
     let mut bytes = Vec::new();
     // One past the cap, so "exactly 4 KB" and "longer" can be told apart.
@@ -208,21 +235,36 @@ mod tests {
         assert_eq!(find(&s.ws()).unwrap().name, "CLAUDE.md");
     }
 
+    /// A junction needs no privilege, so this always runs: `.github` points out of the
+    /// folder, and the notes behind it are not read.
     #[cfg(windows)]
     #[test]
-    fn a_notes_file_that_is_a_link_to_outside_is_refused() {
+    fn a_notes_file_reached_through_a_link_to_outside_is_refused() {
         let s = Sandbox::new("outside");
-        std::fs::write(s.dir.join("elsewhere.md"), "not yours").unwrap();
-        let made = std::process::Command::new("cmd")
-            .args(["/C", "mklink"])
-            .arg(edit::plain(&s.dir.join("project/AGENTS.md")))
-            .arg(edit::plain(&s.dir.join("elsewhere.md")))
-            .output();
-        if !matches!(made, Ok(ref o) if o.status.success()) {
-            eprintln!("could not create a symlink here; skipping");
-            return;
-        }
+        std::fs::create_dir_all(s.dir.join("elsewhere")).unwrap();
+        std::fs::write(s.dir.join("elsewhere").join("copilot-instructions.md"), "not yours").unwrap();
+        assert!(junction(&s.dir.join("project").join(".github"), &s.dir.join("elsewhere")), "mklink /J failed");
         assert_eq!(find(&s.ws()), None);
+    }
+
+    /// The spec is "never through a link", not "never out of the folder".
+    #[cfg(windows)]
+    #[test]
+    fn a_notes_file_reached_through_a_link_that_stays_inside_is_refused() {
+        let s = Sandbox::new("inside");
+        s.write("ghdocs/copilot-instructions.md", "found through a junction");
+        assert!(junction(&s.dir.join("project").join(".github"), &s.dir.join("project").join("ghdocs")), "mklink /J failed");
+        assert_eq!(find(&s.ws()), None);
+    }
+
+    #[cfg(windows)]
+    fn junction(link: &std::path::Path, target: &std::path::Path) -> bool {
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(edit::plain(link))
+            .arg(edit::plain(target))
+            .output();
+        matches!(made, Ok(ref o) if o.status.success())
     }
 
     #[test]

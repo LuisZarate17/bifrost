@@ -31,6 +31,7 @@ export function ModelOfferBar({
   onDismiss,
   onHide,
   onSwitched,
+  onSwitching,
   onRefresh,
 }: {
   offer: ModelOffer;
@@ -46,6 +47,10 @@ export function ModelOfferBar({
    *  for a refresh that would not override it anyway (the pill only follows
    *  the config once, the first time it loads). */
   onSwitched: (tag: string) => void;
+  /** A switch started (`true`) or ended (`false`, whatever came of it). The window
+   *  holds the composer's send while it runs: a question sent in between would go
+   *  out with the old tag, and Ollama would load that model beside the new one. */
+  onSwitching: (on: boolean) => void;
   /** Refresh everything else the Switchboard keeps — residency, the GPU meter. */
   onRefresh: () => void;
 }) {
@@ -57,6 +62,7 @@ export function ModelOfferBar({
 
   const accept = async () => {
     setState("working");
+    onSwitching(true);
     try {
       // The offer is recomputed in Rust from the config and what is
       // installed — only the direction is sent, never a model tag.
@@ -71,6 +77,15 @@ export function ModelOfferBar({
     } catch (e) {
       setState("error");
       setNote(String(e));
+      // The config was already switched when only the load failed (Rust says so
+      // with this wording, and the model loads with the next question). The window's
+      // model has to follow the config, or the next question goes out with the old tag.
+      if (String(e).startsWith(`Switched to ${offer.to}, but loading it failed`)) {
+        onSwitched(offer.to);
+        onRefresh();
+      }
+    } finally {
+      onSwitching(false);
     }
   };
 
