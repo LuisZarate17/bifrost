@@ -140,14 +140,16 @@ type Folder = {
 };
 
 /** Matches odin_core::tools::MAX_ROUNDS. G7 measured a two-file change taking
- *  five rounds, one more than G6's old bound of four allowed. */
+ *  five rounds, one more than G6's old bound of four allowed. A call that costs no
+ *  round (an accepted task-list update, an automatic read, listing or search that
+ *  succeeded) does not count toward it. */
 const MAX_ROUNDS = 10;
 
-/** Matches odin_core::tools::MAX_PLAN_UPDATES. A task-list update is not a round,
- *  so this is what bounds a model that re-plans instead of working: Rust rejects
- *  the 7th, and the loop below stops at MAX_ROUNDS + this many requests whatever
- *  Rust says. */
-const MAX_PLAN_UPDATES = 6;
+/** Matches odin_core::tools::MAX_FREE_CALLS. The calls that cost no round a turn
+ *  may make on top of MAX_ROUNDS: the loop below stops at MAX_ROUNDS + this many
+ *  requests whatever Rust says. Not a budget to use up but the ceiling that stops
+ *  a model reading in circles. */
+const MAX_FREE_CALLS = 20;
 
 /** The list as the model wrote it, one step to a line: what a replay sends. */
 export function planText(items: PlanItem[]): string {
@@ -1094,10 +1096,38 @@ function App() {
       // A bound, not a timeout. Without one, a model that keeps asking loops
       // forever and the only symptom is the app getting warm.
       //
-      // **A task-list update is not a round** (H10): it touches nothing, so the
-      // branch below gives its round back. `requests` still counts it, and stops
-      // the loop at MAX_ROUNDS + MAX_PLAN_UPDATES whatever Rust says.
-      for (let step = 0, requests = 0; step < MAX_ROUNDS && requests < MAX_ROUNDS + MAX_PLAN_UPDATES; step++, requests++) {
+      // **A call that cannot change anything is not a round** (H10, R-03): an
+      // accepted task-list update, and an automatic read, listing or search that
+      // succeeded, get their round back in the `auto` branch below. A failed
+      // automatic call, a rejected one and any call that asked still count.
+      // `requests` counts everything and stops the loop at MAX_ROUNDS +
+      // MAX_FREE_CALLS whatever Rust says.
+      //
+      // When the loop ends at either bound the model is asked once more with no
+      // tools, so the turn ends in its own words, and the banner says which bound
+      // it was and whether the last step ran.
+      let step = 0;
+      let requests = 0;
+      // Whether the last call actually ran: an automatic call that did, or an
+      // approved one that did. A check that found errors still ran.
+      let lastRan = false;
+      const addAnswer = (out: { content: string; promptEvalCount: number; evalCount: number }) => {
+        setEntries((prev) => {
+          const next: Entry[] = [
+            ...prev,
+            {
+              kind: "turn",
+              role: "assistant",
+              content: out.content,
+              ...(model ? { model } : {}),
+            },
+          ];
+          entriesRef.current = next;
+          return next;
+        });
+        setStats(`${out.promptEvalCount} in · ${out.evalCount} out · tool turn`);
+      };
+      for (; step < MAX_ROUNDS && requests < MAX_ROUNDS + MAX_FREE_CALLS; step++, requests++) {
         // Stopped: a tool round is not streamed, so it cannot be cut short, but
         // nothing after the stop is shown or acted on.
         if (!live()) return;
@@ -1127,20 +1157,7 @@ function App() {
         if (!live() && !(out.kind === "auto" && threadGen.current === gen)) return;
 
         if (out.kind === "answer") {
-          setEntries((prev) => {
-            const next: Entry[] = [
-              ...prev,
-              {
-                kind: "turn",
-                role: "assistant",
-                content: out.content,
-                ...(model ? { model } : {}),
-              },
-            ];
-            entriesRef.current = next;
-            return next;
-          });
-          setStats(`${out.promptEvalCount} in · ${out.evalCount} out · tool turn`);
+          addAnswer(out);
           return;
         }
 
@@ -1168,6 +1185,7 @@ function App() {
             { role: "assistant", content: "", tool_calls: [out.rawCall] },
             { role: "tool", content: out.error, tool_name: out.name },
           ];
+          lastRan = false;
           continue;
         }
 
@@ -1207,7 +1225,10 @@ function App() {
             { role: "assistant", content: "", tool_calls: [out.rawCall] },
             { role: "tool", content: result, tool_name: name },
           ];
-          if (name === "update_plan") step--;
+          // Free when it worked (a search with no matches worked). `ok` is Rust's own
+          // word for it, the same test the probe's `free_round` makes.
+          lastRan = ok;
+          if (ok) step--;
           continue;
         }
 
@@ -1261,6 +1282,7 @@ function App() {
               : { role: "assistant", content: "" },
             { role: "tool", content: refusalFor(name, path), tool_name: name },
           ];
+          lastRan = false;
           continue;
         }
 
@@ -1324,9 +1346,25 @@ function App() {
             : { role: "assistant", content: "" },
           { role: "tool", content: ran.result, tool_name: name },
         ];
+        lastRan = !failed;
       }
 
-      setError(`the model kept asking for tools; stopped after ${MAX_ROUNDS} rounds`);
+      // The loop ended at a bound. Say which, and not more than is true.
+      const banner =
+        (step >= MAX_ROUNDS ? `Stopped after ${MAX_ROUNDS} tool rounds.` : `Stopped after ${requests} tool calls.`) +
+        (lastRan ? " The last step ran — check the result." : "");
+      if (!live()) return;
+      // One more request with no tools, so the turn ends in the model's own words.
+      let why = "";
+      try {
+        const out = await invoke<ToolReply>("ask_with_tools", { messages: convo, model, calibration, closing: true });
+        if (!live()) return;
+        if (out.kind === "answer" && out.content.trim() && threadGen.current === gen) addAnswer(out);
+      } catch (e) {
+        why = ` The closing request failed: ${String(e)}`;
+      }
+      if (!live()) return;
+      setError(banner + why);
     },
     [model, settle, persist],
   );

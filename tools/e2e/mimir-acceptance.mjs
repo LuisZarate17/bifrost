@@ -267,6 +267,30 @@ function check(name, ok, detail = "") {
   console.log(`  ${ok ? "PASS" : "FAIL"}  ${name}${detail ? " — " + detail : ""}`);
   return ok;
 }
+/** Whether some `#[test]` function's body calls `name(`. For every `#[test]` attribute
+ *  the `fn` after it is found and its body taken by matching braces from its first
+ *  `{` — a test attribute followed by a body that never calls it is not enough. */
+function someTestCalls(text, name) {
+  const call = new RegExp(String.raw`\b${name}\s*\(`);
+  for (const m of text.matchAll(/#\[test\]/g)) {
+    const fn = /\bfn\s+\w+/.exec(text.slice(m.index));
+    if (!fn) continue;
+    const open = text.indexOf("{", m.index + fn.index);
+    if (open < 0) continue;
+    let depth = 0;
+    let end = text.length;
+    for (let i = open; i < text.length; i++) {
+      if (text[i] === "{") depth++;
+      else if (text[i] === "}" && --depth === 0) {
+        end = i;
+        break;
+      }
+    }
+    if (call.test(text.slice(open, end))) return true;
+  }
+  return false;
+}
+
 function skip(name, why) {
   results.push({ name, ok: true, skip: true });
   console.log(`  SKIP  ${name} — ${why}`);
@@ -274,6 +298,8 @@ function skip(name, why) {
 
 const configBefore = fs.existsSync(CONFIG) ? fs.readFileSync(CONFIG) : null;
 const cfgBase = configBefore ? JSON.parse(configBefore) : {};
+// odin_core::config::DEFAULT_MODEL, which is what the app uses when the config names none.
+console.log(`acceptance: ${RUNS} run(s), model ${cfgBase.model ?? "qwen3-vl:8b-instruct-q4_K_M (default)"}`);
 const backupNames = () => (fs.existsSync(BACKUPS) ? fs.readdirSync(BACKUPS) : []);
 const backupsBefore = new Set(backupNames());
 
@@ -369,8 +395,9 @@ try {
         .filter(([, text]) => /\bgreet\b/.test(text.replace(/\bmod\s+greet\b/g, "").replace(/\bgreet::/g, "")))
         .map(([file]) => file);
       const shoutDef = /\bfn\s+shout\s*\(\s*name\s*:\s*&str\s*\)\s*->\s*String/.test(all);
-      const shoutTest = /#\[test\][\s\S]*?\bshout\s*\(/.test(all);
+      const shoutTest = someTestCalls(all, "shout");
       const ok = [
+        check(`run ${run}: the turn ended in the model's answer, not at the cap`, !/stopped after/i.test(banner), banner),
         check(`run ${run}: cargo test passes${test.attempts > 1 ? ` (after ${test.attempts} tries; Smart App Control)` : ""}`, test.ok, test.ok ? "" : test.text.slice(-400)),
         check(`run ${run}: it has more tests than the fixture began with`, test.passed > TESTS_AT_START, `${test.passed} passed`),
         check(`run ${run}: no greet function is left`, offenders.length === 0, offenders.join(", ")),

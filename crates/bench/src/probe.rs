@@ -230,12 +230,18 @@ pub struct Run {
     /// Reads that named a line range. In taskprobe every file is under 64 KB, so
     /// one means the model chose to page a file it could have read whole.
     pub ranged_reads: usize,
-    /// Rounds that count against the bound: **an accepted `update_plan` round does
-    /// not**, as in the app (H10).
+    /// Rounds that count against the bound: **a free round does not**, as in the
+    /// app — an accepted `update_plan` (H10) and an automatic read, listing or
+    /// search that succeeded (R-03).
     pub rounds: usize,
     /// `update_plan` calls the loop accepted — the model's task list updates.
     pub plan_updates: usize,
-    /// Still calling tools when the bound ran out.
+    /// Automatic reads, listings and searches that succeeded and so cost no round.
+    /// Kept apart from `plan_updates`: this is the count that shows how much of a
+    /// task the free rule carries.
+    pub auto_calls: usize,
+    /// Still calling tools when the bound ran out. The model then got one more
+    /// request with no tools, and its words are in `answer`.
     pub hit_bound: bool,
     /// Ended by the app's loop-breaking: the same call failed three times.
     pub stopped: bool,
@@ -281,11 +287,14 @@ fn short(s: &str, n: usize) -> String {
     if one.chars().count() > n { format!("{}…", one.chars().take(n).collect::<String>()) } else { one }
 }
 
-/// Whether a round that ran this call is free of the round bound: an `update_plan`
-/// the loop accepted. A malformed one, or the 7th, costs a round like any call, so
-/// a model that cannot get the list right is still bounded.
-pub fn free_round(name: &str, failed: bool) -> bool {
-    name == "update_plan" && !failed
+/// Whether a round that ran this call is free of the round bound, as in the app
+/// (R-03): an `update_plan` the loop accepted, or a read, listing or search that
+/// the app runs without a card (`asked` is false) and that succeeded. A malformed
+/// plan, the 7th, a failed read, a rejected call and anything that would have asked
+/// costs a round like any call, so a model that cannot get a call right is still
+/// bounded. A search with no matches is a success.
+pub fn free_round(name: &str, failed: bool, asked: bool) -> bool {
+    !failed && (name == "update_plan" || (!asked && matches!(name, "read_file" | "list_files" | "search")))
 }
 
 /// Drive the conversation until the model answers, the bound runs out, the
@@ -295,10 +304,16 @@ pub fn free_round(name: &str, failed: bool) -> bool {
 /// run past it to record how many rounds a task really takes (H7 sets the app's
 /// bound from that).
 ///
-/// **A plan update is free** (H10): an accepted `update_plan` round is not counted
-/// against `bound` or in `Run::rounds`, and `tools::plan_updates` — the app's own
-/// rule — rejects the 7th in a turn, which does count. So the loop runs at most
-/// `bound + MAX_PLAN_UPDATES` requests.
+/// **A free call costs no round** (H10, R-03): an accepted `update_plan` and an
+/// automatic read, listing or search that succeeded are not counted against
+/// `bound` or in `Run::rounds` (see [`free_round`]), and `tools::plan_updates` — the
+/// app's own rule — rejects the 7th plan update in a turn, which does count. So the
+/// loop runs at most `bound + MAX_FREE_CALLS` requests.
+///
+/// **A turn that hits the bound gets one closing request with no tools** and
+/// `CLOSING_NOTE` after the conversation, as the app's does, so the model ends in
+/// its own words (`Run::answer`). `hit_bound` stays set. If that request fails it is
+/// only logged: the task's work is judged elsewhere.
 pub fn run_loop(
     model: &str,
     messages: &mut Vec<Message>,
@@ -315,7 +330,7 @@ pub fn run_loop(
     let mut deleted: Vec<String> = Vec::new();
 
     let mut requests = 0;
-    while run.rounds < bound && requests < bound + tools::MAX_PLAN_UPDATES {
+    while run.rounds < bound && requests < bound + tools::MAX_FREE_CALLS {
         requests += 1;
         run.rounds += 1;
         let mut aside_now = 0;
@@ -401,8 +416,12 @@ pub fn run_loop(
         } else {
             execute(&call, s)
         };
-        if free_round(&call.function.name, ran.failed) {
-            run.plan_updates += 1;
+        if free_round(&call.function.name, ran.failed, ran.asked) {
+            if call.function.name == "update_plan" {
+                run.plan_updates += 1;
+            } else {
+                run.auto_calls += 1;
+            }
             run.rounds -= 1;
         }
         run.undo_ids.extend(ran.undo.clone());
@@ -454,6 +473,26 @@ pub fn run_loop(
         }
         messages.push(Message::tool_result(call.function.name.clone(), result));
     }
+    if run.hit_bound && run.error.is_none() && !run.stopped {
+        // The closing request goes out on a copy, so `messages` stays as the loop
+        // left it. Compaction runs first and the note is added after it, as in the app.
+        let mut closing = messages.clone();
+        if s.compact {
+            let plan = compact::compact(&closing, &[], &compact::Budget::new(opts.num_ctx, calibration));
+            for &i in &plan.set_aside {
+                let call = i.checked_sub(1).and_then(|p| closing[p].tool_calls.as_deref()?.first().cloned());
+                compact::set_aside(&mut closing[i], call.as_ref());
+            }
+        }
+        closing.push(Message::user(tools::CLOSING_NOTE));
+        match chat::chat(model, &closing, &[], opts) {
+            Ok(r) => {
+                run.log.push(format!("closing answer: {}", short(&r.message.content, 300)));
+                run.answer = r.message.content;
+            }
+            Err(e) => run.log.push(format!("closing request failed: {e}")),
+        }
+    }
     run
 }
 
@@ -479,10 +518,9 @@ mod tests {
 
         let ran = execute(&call("update_plan", serde_json::json!({ "plan": "[x] a\n[ ] b" })), &setup);
         assert_eq!((ran.text.as_str(), ran.failed, ran.asked, ran.asked_every_call), ("Plan updated: 1 of 2 done.", false, false, false));
-        assert!(free_round("update_plan", ran.failed));
+        assert!(free_round("update_plan", ran.failed, ran.asked));
         let bad = execute(&call("update_plan", serde_json::json!({})), &setup);
-        assert!(bad.failed && !free_round("update_plan", bad.failed));
-        assert!(!free_round("read_file", false));
+        assert!(bad.failed && !free_round("update_plan", bad.failed, bad.asked));
         // The cap is the app's: the 7th in a turn is the first the shared count rejects.
         let plan = call("update_plan", serde_json::json!({ "plan": "[ ] a" }));
         let mut history = vec![Message::user("go")];
@@ -498,6 +536,22 @@ mod tests {
         }
         assert!(tools::plan_updates(&history) >= tools::MAX_PLAN_UPDATES);
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// **Which calls cost no round (R-03).** An automatic read that worked is free;
+    /// the same read when the app would have asked is not; a failed one is not; an
+    /// accepted plan update is free and a rejected one is not; an edit never is.
+    #[test]
+    fn only_a_successful_unasked_read_list_or_search_and_an_accepted_plan_are_free() {
+        assert!(free_round("read_file", false, false));
+        assert!(free_round("list_files", false, false));
+        assert!(free_round("search", false, false));
+        assert!(!free_round("read_file", false, true), "a read that asked");
+        assert!(!free_round("read_file", true, false), "a read that failed");
+        assert!(free_round("update_plan", false, false));
+        assert!(!free_round("update_plan", true, false), "a rejected plan");
+        assert!(!free_round("edit_file", false, false));
+        assert!(!free_round("run_check", false, true));
     }
 
     /// A failed read is told to change the range, not to copy text — and is not

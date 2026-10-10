@@ -28,9 +28,9 @@
 //! anywhere — inside the folder without asking, elsewhere one approved file at a
 //! time. `list_files`, `search`, `edit_file`, `create_file`, `delete_file`,
 //! `move_file` and `update_plan` (H10: a checklist the model keeps for a task with
-//! several steps — it touches nothing, so it never asks, and its updates do not use
-//! up [`MAX_ROUNDS`] but are capped at [`MAX_PLAN_UPDATES`] a turn) exist only once
-//! a project folder has been chosen, and
+//! several steps — it touches nothing, so it never asks, and its updates are capped
+//! at [`MAX_PLAN_UPDATES`] a turn) exist only once a project folder has been chosen,
+//! and
 //! cannot reach outside it — see [`crate::search`] and [`crate::edit`] for how
 //! that is enforced. `run_check` exists only once that folder also has a check
 //! command chosen for it, and runs exactly that command — see [`crate::check`].
@@ -83,7 +83,28 @@ pub const MAX_RANGED_SOURCE_BYTES: u64 = 1024 * 1024;
 /// in `evals/out/H5-2026-10-02/`), no task passed after round 10 under the
 /// probe's bound of 20 — each summary reads "0 only later" — so a higher bound
 /// would only let a lost model run longer.
+///
+/// **Not every call is a round (R-03).** An accepted `update_plan` and an automatic
+/// in-folder read, listing or search that succeeded cost no round: they touch
+/// nothing and change nothing, and the acceptance task (list, read three files,
+/// three edits, a failing check, a fix, a passing check) took ten calls with the
+/// old rule — so the tenth ran, its result never went back, and the turn ended
+/// without the model saying it was done. What does count: an edit, create, delete,
+/// move or check, any call that asked, and any call that failed or was rejected.
+/// [`MAX_FREE_CALLS`] bounds the rest, and a turn that still ends at the bound gets
+/// one last request with no tools ([`CLOSING_NOTE`]).
 pub const MAX_ROUNDS: usize = 10;
+
+/// The calls that cost no round a turn may make on top of [`MAX_ROUNDS`]: a turn
+/// runs at most `MAX_ROUNDS + MAX_FREE_CALLS` requests. **Not a budget to use up** —
+/// it is the ceiling that stops a model reading in circles, since a free call never
+/// moves the round count and so could otherwise go on for ever.
+pub const MAX_FREE_CALLS: usize = 20;
+
+/// The last line of a turn that hit its bound, sent in a request that offers no
+/// tools, so that every turn ends in the model's own words instead of a banner
+/// that says nothing about what was done.
+pub const CLOSING_NOTE: &str = "No more tool calls can run in this turn. Answer now without tools: say what was done, what is left, and what the user should check.";
 
 /// The sentence in `read_file`'s description that offers ranges. A constant so
 /// that the probes can offer the old read — the taskprobe's `--read whole` takes
@@ -923,8 +944,10 @@ pub struct PlanStep {
 pub const MAX_PLAN_STEPS: usize = 12;
 pub const MAX_PLAN_STEP_CHARS: usize = 120;
 
-/// How many times a turn may update the list. Plan updates do not use up
-/// [`MAX_ROUNDS`], so this is what stops a model that re-plans instead of working.
+/// How many times a turn may update the list. An accepted update does not use up
+/// [`MAX_ROUNDS`], so this is what stops a model that re-plans instead of working
+/// (the 7th is refused and costs a round); [`MAX_FREE_CALLS`] is the ceiling over
+/// every kind of free call together.
 pub const MAX_PLAN_UPDATES: usize = 6;
 
 /// What the 7th update in a turn is told.

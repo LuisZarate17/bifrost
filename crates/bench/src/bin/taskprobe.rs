@@ -901,6 +901,8 @@ struct Outcome {
     recreated: usize,
     /// H10: `update_plan` calls the loop accepted.
     plans: usize,
+    /// R-03: automatic reads, listings and searches that succeeded and cost no round.
+    autos: usize,
 }
 
 fn run(
@@ -950,6 +952,7 @@ fn run(
                 moves: 0,
                 recreated: 0,
                 plans: 0,
+                autos: 0,
             };
         }
     };
@@ -977,6 +980,7 @@ fn run(
                 moves: 0,
                 recreated: 0,
                 plans: 0,
+                autos: 0,
             };
         }
     };
@@ -1007,6 +1011,7 @@ fn run(
                 moves: 0,
                 recreated: 0,
                 plans: 0,
+                autos: 0,
             };
         }
     };
@@ -1079,6 +1084,7 @@ fn run(
         moves: r.move_calls,
         recreated: r.delete_then_create,
         plans: r.plan_updates,
+        autos: r.auto_calls,
     };
 
     if r.runaway {
@@ -1241,6 +1247,7 @@ fn main() {
         let mut ranged_reads = 0usize;
         let (mut deletes, mut moves, mut recreated) = (0usize, 0usize, 0usize);
         let mut plans = 0usize;
+        let mut autos = 0usize;
         println!("── {label} ──");
         for task in &tasks {
             let mut line = String::new();
@@ -1276,6 +1283,7 @@ fn main() {
                 moves += o.moves;
                 recreated += o.recreated;
                 plans += o.plans;
+                autos += o.autos;
                 cut_runs += (o.truncated > 0) as usize;
                 let shown = if o.verdict == Verdict::Pass && o.late { "LATE" } else { o.verdict.label() };
                 line.push_str(&format!("{shown:<5} "));
@@ -1291,7 +1299,7 @@ fn main() {
                     "checks": o.checks, "asks": o.asks, "asksEveryCall": o.asks_every_call, "calls": o.calls, "filesChanged": o.files, "log": o.log,
                     "promptTokens": o.prompt_tokens, "maxPrompt": o.max_prompt, "setAside": o.set_aside,
                     "truncated": o.truncated, "rangedReads": o.ranged_reads,
-                    "deletes": o.deletes, "moves": o.moves, "deleteThenCreate": o.recreated, "planUpdates": o.plans,
+                    "deletes": o.deletes, "moves": o.moves, "deleteThenCreate": o.recreated, "planUpdates": o.plans, "autoCalls": o.autos,
                     "secs": (o.secs * 10.0).round() / 10.0,
                 }));
             }
@@ -1319,10 +1327,11 @@ fn main() {
             secs / total.max(1) as f64,
         );
         rows.push(format!(
-            "| {label} | {pass}/{total} ({:.0}%) | {late} | {fail} | {error} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1}s | {max_prompt} | {cut_runs} | {ranged_reads} | {deletes} | {moves} | {recreated} |",
+            "| {label} | {pass}/{total} ({:.0}%) | {late} | {fail} | {error} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1} | {:.1}s | {max_prompt} | {cut_runs} | {ranged_reads} | {deletes} | {moves} | {recreated} |",
             100.0 * pass as f64 / total.max(1) as f64,
             rounds as f64 / total.max(1) as f64,
             plans as f64 / total.max(1) as f64,
+            autos as f64 / total.max(1) as f64,
             checks as f64 / total.max(1) as f64,
             asks as f64 / total.max(1) as f64,
             secs / total.max(1) as f64,
@@ -1330,8 +1339,8 @@ fn main() {
     }
 
     println!("─── {model} ───");
-    println!("| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | plans/run | checks/run | asks/run | time/run | max prompt | cut runs | ranged reads | deletes | moves | delete→create |", tools::MAX_ROUNDS);
-    println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
+    println!("| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | plans/run | autos/run | checks/run | asks/run | time/run | max prompt | cut runs | ranged reads | deletes | moves | delete→create |", tools::MAX_ROUNDS);
+    println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
     for r in &rows {
         println!("{r}");
     }

@@ -790,12 +790,22 @@ fn compact_for_send(
 /// is not in the file — a rejection, which goes straight back to the model so it
 /// can read the file again and retry without the user being asked about
 /// something impossible.
+///
+/// **`closing` is the last request of a turn that hit its bound (R-03).** It
+/// offers no tools, adds [`tools::CLOSING_NOTE`] as one last user message, runs
+/// nothing, and returns an `"answer"` whatever the reply holds — so the turn ends
+/// in the model's own words about what was done. Ollama is still started and the
+/// conversation still compacted, since it may be the largest request of the turn;
+/// the note is added **after** compaction, so it is never in `setAside` and the
+/// webview's copy stays a prefix of what was sent.
 #[tauri::command]
 async fn ask_with_tools(
     mut messages: Vec<Message>,
     model: Option<String>,
     calibration: Option<Calibration>,
+    closing: Option<bool>,
 ) -> Result<serde_json::Value, String> {
+    let closing = closing.unwrap_or(false);
     // Taken **before the model is asked**, for an automatic search or listing:
     // there is no card to take it at, and a Stop pressed while the model is
     // still answering must reach the walk that follows.
@@ -860,13 +870,31 @@ async fn ask_with_tools(
     // Kept for counting repeats: the history the model has already seen.
     let history = messages.clone();
     let num_ctx = cfg.num_ctx;
-    let offered = tools::available(ws.is_some(), check_label.as_deref());
+    // Nothing is offered to a closing request, and compaction counts what is sent.
+    let offered = if closing { Vec::new() } else { tools::available(ws.is_some(), check_label.as_deref()) };
 
     // Inside a turn the conversation only grows, and past `num_ctx` Ollama cuts
     // the middle of it without a word (H7). So old results are set aside here,
     // in the copy being sent, and the webview is told which so that its own copy
     // ends up identical — a prefix that changed would also cost the prompt cache.
     let sent = compact_for_send(&mut messages, &offered, num_ctx, calibration, usize::from(ws.is_some()));
+    if closing {
+        messages.push(Message::user(tools::CLOSING_NOTE));
+        // `chat`, not `chat_tools`: with no tools there is nothing for the recovery
+        // to turn text into, and a call the model writes anyway stays words.
+        let reply = tauri::async_runtime::spawn_blocking(move || {
+            chat::chat(&model, &messages, &[], Options::new(num_ctx))
+        })
+        .await
+        .map_err(|e| format!("closing request failed: {e}"))??;
+        let mut body = serde_json::Map::new();
+        body.insert("kind".into(), "answer".into());
+        body.insert("content".into(), reply.message.content.into());
+        body.insert("promptEvalCount".into(), reply.prompt_eval_count.into());
+        body.insert("evalCount".into(), reply.eval_count.into());
+        body.extend(sent.into_fields());
+        return Ok(serde_json::Value::Object(body));
+    }
     let reply = tauri::async_runtime::spawn_blocking(move || {
         chat::chat_tools(&model, &messages, &offered, Options::new(num_ctx))
     })

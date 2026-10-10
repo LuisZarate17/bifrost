@@ -384,7 +384,7 @@ try {
         `${cards[0]?.head} vs ${done} of ${last.length}`,
       );
       check("it lists the last update's steps", cards.length === 1 && cards[0].steps === last.length && cards[0].done === done, JSON.stringify(cards));
-      check("no round bound was hit by planning", !banner.includes("stopped after"), banner);
+      check("no round bound was hit by planning", !/stopped after/i.test(banner), banner);
     }
   }
 } catch (e) {
