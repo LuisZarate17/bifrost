@@ -117,6 +117,16 @@ struct Task {
     done: fn(&Files) -> Result<(), String>,
 }
 
+/// Whether main.rs has `let name = "world";`, however it is spaced and with or
+/// without a `: &str` on the binding. Whitespace is dropped before comparing, so
+/// only the tokens matter.
+fn has_let_name(main_rs: &str) -> bool {
+    main_rs.lines().any(|l| {
+        let l: String = l.split_whitespace().collect();
+        l == r#"letname="world";"# || l == r#"letname:&str="world";"#
+    })
+}
+
 fn file<'a>(f: &'a Files, name: &str) -> Result<&'a str, String> {
     f.get(name).map(String::as_str).ok_or_else(|| format!("{name} is gone"))
 }
@@ -190,9 +200,10 @@ fn tasks() -> Vec<Task> {
                 let m = file(f, "src/main.rs")?;
                 // The broken start already has `greet(name)`, so that alone says
                 // nothing (R-37). What the fix must add is the missing semicolon
-                // on the `let`; the `greet(name)` call is what keeps it from
+                // on the `let` (typed or not: `let name: &str = "world";` is as good);
+                // the `greet(name)` call is what keeps it from
                 // being "fixed" by rewriting what main does.
-                if !m.contains("let name = \"world\";") {
+                if !has_let_name(m) {
                     return Err("the `let name` line still has no semicolon".into());
                 }
                 if !m.contains("greet(name)") {
@@ -554,6 +565,17 @@ mod tests {
         for t in tasks() {
             assert!((t.done)(&project(t.start)).is_err(), "{} would pass with no change", t.id);
         }
+    }
+
+    /// The fix may type the binding; that is still the fix, not a model failure.
+    #[test]
+    fn the_broken_task_accepts_a_typed_let() {
+        let t = tasks().into_iter().find(|t| t.id == "f05-broken").unwrap();
+        for typed in [r#"let name: &str = "world";"#, r#"let  name :&str="world" ;"#, r#"let name = "world";"#] {
+            let fixed = MAIN_RS_BROKEN.replace(r#"let name = "world""#, typed);
+            assert!((t.done)(&project(&fixed)).is_ok(), "{typed}");
+        }
+        assert!((t.done)(&project(MAIN_RS_BROKEN)).is_err());
     }
 
     /// And the check for f05 is not a check that nothing can satisfy: the broken

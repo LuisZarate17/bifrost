@@ -14,10 +14,13 @@
 //!    disk no longer matches it. It checks at the start, and once more with the new
 //!    bytes already written beside the file, immediately before the rename that
 //!    replaces it ([`write_replacing`]); [`undo`] does the same. On Windows that last
-//!    read holds the file against writers until the rename is done, so there is no
-//!    gap: a save in that moment fails loudly instead of being replaced. Elsewhere
-//!    "compare, then replace" cannot be one step on a plain file, and a save landing
-//!    in the few microseconds between the read and the rename is still replaced.
+//!    read holds the file against *in-place* writers until the rename is done, so for
+//!    them there is no gap: a save in that moment fails loudly instead of being
+//!    replaced. An editor that saves by writing a temporary file and renaming it over
+//!    the target (JetBrains safe-write, Vim, Sublime) is not stopped by that hold, and
+//!    if its rename lands between our re-read and our rename, its save is replaced.
+//!    Elsewhere "compare, then replace" cannot be one step on a plain file, and a save
+//!    landing in the few microseconds between the read and the rename is still replaced.
 //! 4. **Every edit can be undone.** The original bytes are kept before anything
 //!    is written, and [`undo`] restores them — but only if the file is still
 //!    exactly what the edit left, so undo never throws away work done since.
@@ -1229,18 +1232,30 @@ pub fn backups_dir() -> Option<PathBuf> {
 /// On a mismatch the temporary file is removed and the file is left as the other
 /// writer made it.
 ///
-/// **On Windows the gap between that read and the rename is closed, not just
-/// narrowed.** The file is read through a handle that allows others to read and
-/// rename but not to write, and the handle stays open across the rename (which
-/// replaces by name, so it does not need the file closed). An editor saving in that
-/// moment gets a sharing error — it fails loudly and can retry — instead of its
-/// bytes being silently replaced. Elsewhere there is no such handle, and what is left
-/// is the few microseconds between the read and the rename.
+/// **On Windows the gap between that read and the rename is closed for writers
+/// that write in place, and only for them.** The file is read through a handle that
+/// allows others to read and rename but not to write, and the handle stays open
+/// across the rename (which replaces by name, so it does not need the file closed).
+/// A program writing into the file in that moment gets a sharing error — it fails
+/// loudly and can retry — instead of its bytes being silently replaced. An editor that
+/// saves by writing a temporary file and renaming it over the target (JetBrains
+/// safe-write, Vim, Sublime) is allowed to rename, so its save can still land between
+/// our read and our rename and be replaced. Elsewhere there is no such handle, and
+/// what is left is the few microseconds between the read and the rename.
+///
+/// The same no-write-sharing open fails when another program already has the file
+/// open for writing (a log tailer, a syncing tool). That is tried a few times, since
+/// such holds are usually brief, and then reported as what it is rather than as a
+/// failed read.
 fn write_replacing(path: &Path, bytes: &[u8], expect: u64) -> Result<(), String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let tmp = path.with_file_name(format!(".{name}.odin-tmp"));
-    std::fs::write(&tmp, bytes).map_err(|e| format!("writing {}: {e}", plain(path)))?;
-    let held = fingerprint_held(path);
+    if let Err(e) = std::fs::write(&tmp, bytes) {
+        // A write that failed part way (disk full) leaves a partial file behind.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("writing {}: {e}", plain(path)));
+    }
+    let held = fingerprint_held_retrying(path);
     match &held {
         Ok((h, _)) if *h == expect => {}
         Ok(_) => {
@@ -1249,6 +1264,9 @@ fn write_replacing(path: &Path, bytes: &[u8], expect: u64) -> Result<(), String>
         }
         Err(e) => {
             let _ = std::fs::remove_file(&tmp);
+            if is_sharing_violation(e) {
+                return Err(format!("{} is open for writing in another program; nothing was changed", plain(path)));
+            }
             return Err(format!("reading {}: {e}", plain(path)));
         }
     }
@@ -1258,6 +1276,28 @@ fn write_replacing(path: &Path, bytes: &[u8], expect: u64) -> Result<(), String>
     });
     drop(held);
     replaced
+}
+
+/// ERROR_SHARING_VIOLATION: the file is open in another program in a way that
+/// forbids ours. Only Windows has it.
+fn is_sharing_violation(e: &std::io::Error) -> bool {
+    cfg!(windows) && e.raw_os_error() == Some(32)
+}
+
+/// [`fingerprint_held`], tried up to three more times, 50 ms apart, while the only
+/// thing wrong is a sharing violation: a program that has the file open for writing
+/// usually lets go within a moment.
+fn fingerprint_held_retrying(path: &Path) -> std::io::Result<(u64, std::fs::File)> {
+    let mut tries = 0;
+    loop {
+        match fingerprint_held(path) {
+            Err(e) if is_sharing_violation(&e) && tries < 3 => {
+                tries += 1;
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            r => return r,
+        }
+    }
 }
 
 /// [`fingerprint_file`], keeping the file open so the caller can hold it: on
@@ -3820,6 +3860,55 @@ mod tests {
         assert!(!s.dir.join("project").join(".a.txt.odin-tmp").exists());
         write_replacing(&p, b"ours\n", fingerprint(b"theirs\n")).unwrap();
         assert_eq!(s.read("a.txt"), b"ours\n");
+    }
+
+    #[cfg(windows)]
+    fn hold_open_for_writing(path: &Path, for_ms: u64) -> std::thread::JoinHandle<()> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let path = path.to_path_buf();
+        let h = std::thread::spawn(move || {
+            // Write access, sharing read and write: what a log tailer or syncer holds.
+            let f = std::fs::OpenOptions::new().read(true).write(true).share_mode(1 | 2).open(&path).unwrap();
+            tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(for_ms));
+            drop(f);
+        });
+        rx.recv().unwrap();
+        h
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_brief_hold_on_the_file_by_another_program_is_waited_out() {
+        let s = Sandbox::new("held-brief");
+        let p = s.write("a.txt", b"one
+");
+        let h = hold_open_for_writing(&p, 120);
+        write_replacing(&p, b"two
+", fingerprint(b"one
+")).unwrap();
+        h.join().unwrap();
+        assert_eq!(s.read("a.txt"), b"two
+");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_file_held_open_for_writing_throughout_is_reported_plainly_and_left_alone() {
+        let s = Sandbox::new("held-long");
+        let p = s.write("a.txt", b"one
+");
+        let h = hold_open_for_writing(&p, 800);
+        let err = write_replacing(&p, b"two
+", fingerprint(b"one
+")).unwrap_err();
+        h.join().unwrap();
+        assert!(err.contains("is open for writing in another program; nothing was changed"), "{err}");
+        assert!(!err.contains("reading"), "{err}");
+        assert_eq!(s.read("a.txt"), b"one
+");
+        assert!(!s.dir.join("project").join(".a.txt.odin-tmp").exists());
     }
 
     #[test]

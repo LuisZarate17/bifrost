@@ -471,7 +471,7 @@ pub fn run_loop(
         run.asks_every_call += ran.asked_every_call as usize;
         if let Some(o) = &ran.check {
             run.checks.push(o.passed());
-            if never_finished(&o.ended) {
+            if never_finished(&o.ended) && o.blocked.is_none() {
                 run.check_timeouts += 1;
             }
             if o.blocked.is_some() {

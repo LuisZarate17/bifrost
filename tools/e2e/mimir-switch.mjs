@@ -166,6 +166,12 @@ const loadedBefore = await loadedNow().catch(() => null);
  *  one model, Ollama holds the other. So put each model back the way it was
  *  found, loaded or not. Best effort — a failure here is only a note. */
 async function restoreLoadedModels() {
+  // The context the app loads with is in the config this script restores.
+  let numCtx = 32768;
+  try {
+    const n = configBefore ? JSON.parse(configBefore).num_ctx : undefined;
+    if (Number.isInteger(n) && n > 0) numCtx = n;
+  } catch {}
   if (!loadedBefore) {
     console.log("  note: Ollama could not be asked at the start, so its loaded model was not put back.");
     return;
@@ -176,7 +182,13 @@ async function restoreLoadedModels() {
       if (now[tag] && !loadedBefore[tag]) {
         await fetch(`${OLLAMA}/api/generate`, { method: "POST", body: JSON.stringify({ model: tag, keep_alive: 0 }) });
       } else if (!now[tag] && loadedBefore[tag]) {
-        await fetch(`${OLLAMA}/api/generate`, { method: "POST", body: JSON.stringify({ model: tag }) });
+        // As the app loads it (odin-core's ollama::load): its num_ctx and keep_alive -1.
+        // Without them the model would come back at Ollama's default context and
+        // expire after five minutes, not the way it was found.
+        await fetch(`${OLLAMA}/api/generate`, {
+          method: "POST",
+          body: JSON.stringify({ model: tag, prompt: "", stream: false, keep_alive: -1, options: { num_ctx: numCtx } }),
+        });
       }
     }
   } catch (e) {

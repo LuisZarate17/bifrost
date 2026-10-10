@@ -234,7 +234,7 @@ pub fn compact(messages: &[Message], tools: &[Tool], budget: &Budget) -> Compact
         let last = messages.len().saturating_sub(1);
         let candidate = |i: usize, m: &Message| {
             let long = match m.role.as_str() {
-                "tool" => m.content.chars().count() > RESULT_LIMIT && !m.content.starts_with(STUB_MARKER),
+                "tool" => m.content.chars().count() > RESULT_LIMIT && !is_stub(&m.content),
                 "assistant" => has_long_argument(m),
                 _ => false,
             };
@@ -304,10 +304,24 @@ pub fn same_argument(kept: &serde_json::Value, sent: &serde_json::Value) -> bool
     }
 }
 
+/// Whether a tool result is already a stub from [`set_aside`]: it starts with
+/// [`STUB_MARKER`], after the `error: ` that a stubbed failure keeps.
+fn is_stub(content: &str) -> bool {
+    let c = content.trim_start();
+    c.strip_prefix(FAILED_PREFIX).map_or(c, str::trim_start).starts_with(STUB_MARKER)
+}
+
+/// How a failed tool result begins ([`tools`]'s contract), and so how its stub does.
+const FAILED_PREFIX: &str = "error:";
+
 /// Replace what `message` carries with a stub.
 ///
 /// A tool result becomes one line naming the tool and path (from `call`, the
-/// assistant call that produced it, when known). An assistant call keeps its name
+/// assistant call that produced it, when known). **A result that was a failure
+/// (`error: …`) keeps that prefix on its stub**: [`tools::prior_failures`] counts
+/// failures by it, and a failed edit's "closest text" error is long enough to be set
+/// aside along with its `old_text`, after which the repeat rule would otherwise stop
+/// seeing the failure and let the model resend the same impossible edit for longer. An assistant call keeps its name
 /// and every argument, but a long string argument becomes
 /// `"[N characters, already sent, #fingerprint]"`.
 pub fn set_aside(message: &mut Message, call: Option<&ToolCall>) {
@@ -328,8 +342,9 @@ pub fn set_aside(message: &mut Message, call: Option<&ToolCall>) {
             _ => "an earlier result".to_string(),
         };
         let again = if name.as_deref() == Some("read_file") { "Read it again" } else { "Run it again" };
+        let failed = if message.content.trim_start().starts_with(FAILED_PREFIX) { "error: " } else { "" };
         message.content = format!(
-            "{STUB_MARKER} the model's context: {what} ({lines} line{}). {again} if you still need it.]",
+            "{failed}{STUB_MARKER} the model's context: {what} ({lines} line{}). {again} if you still need it.]",
             if lines == 1 { "" } else { "s" }
         );
         return;
@@ -488,6 +503,26 @@ mod tests {
         let stub = args["content"].as_str().unwrap();
         assert!(stub.starts_with("[8000 characters, already sent, #"), "{stub}");
         assert_eq!(args["path"], "n.rs");
+    }
+
+    /// A failed edit whose error and long `old_text` have both been set aside is
+    /// still a failure to the repeat rule when the model resends it identically.
+    #[test]
+    fn a_set_aside_failure_is_still_counted_by_the_repeat_rule() {
+        let old = "x".repeat(3000);
+        let edit = call("edit_file", json!({ "path": "a.rs", "old_text": old, "new_text": "y" }));
+        let mut m = vec![
+            Message::user("change it"),
+            asks("edit_file", edit.function.arguments.clone()),
+            Message::tool_result("edit_file", format!("error: old_text was not found. Closest text: {}", "z".repeat(2000))),
+        ];
+        assert_eq!(tools::prior_failures(&m, &edit), 1);
+        let call = paired_call(&m, 2).cloned();
+        set_aside(&mut m[2], call.as_ref());
+        set_aside(&mut m[1], None);
+        assert!(m[2].content.starts_with("error: [Set aside"), "{}", m[2].content);
+        assert!(is_stub(&m[2].content));
+        assert_eq!(tools::prior_failures(&m, &edit), 1, "a stubbed failure stopped counting");
     }
 
     /// **A retry with one character changed is not the call that failed (R-21).**

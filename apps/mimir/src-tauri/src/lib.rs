@@ -1516,17 +1516,24 @@ async fn recent_folders() -> Result<Vec<Folder>, String> {
 #[tauri::command]
 async fn use_recent_folder(index: usize) -> Result<Folder, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (ws, cfg) = config::update(|cfg| {
-            let ws = cfg
-                .recent_workspaces
-                .iter()
-                .filter_map(|p| edit::Workspace::open(p).ok())
-                .nth(index)
-                .ok_or_else(|| "that folder is no longer in the recent list".to_string())?;
-            let root = ws.root_display();
+        // Opening the recent folders touches the disk, and a folder on a dead network
+        // share can take a long time to answer: do it before taking the config lock,
+        // which every other config write waits on.
+        let ws = config::load()
+            .recent_workspaces
+            .iter()
+            .filter_map(|p| edit::Workspace::open(p).ok())
+            .nth(index)
+            .ok_or_else(|| "that folder is no longer in the recent list".to_string())?;
+        let root = ws.root_display();
+        let cfg = config::update(|cfg| {
+            // The list may have changed while the folders were being opened.
+            if !cfg.recent_workspaces.iter().any(|p| p.eq_ignore_ascii_case(&root)) {
+                return Err("that folder is no longer in the recent list".to_string());
+            }
             remember(cfg, &root);
-            cfg.workspace = Some(root);
-            Ok::<_, String>((ws, cfg.clone()))
+            cfg.workspace = Some(root.clone());
+            Ok(cfg.clone())
         })??;
         Ok(folder(&ws, &cfg))
     })
@@ -1560,15 +1567,23 @@ async fn check_options() -> Result<Vec<String>, String> {
 #[tauri::command]
 async fn set_check(index: usize, label: String) -> Result<Folder, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let (ws, cfg) = config::update(|cfg| {
-            let ws = workspace(cfg).ok_or("no project folder is chosen")?;
-            let argv = check::candidates(&ws)
-                .into_iter()
-                .nth(index)
-                .filter(|argv| check::label(argv) == label)
-                .ok_or("that check is no longer offered for this folder — choose again")?;
-            cfg.set_check(&ws.root_display(), Some(argv));
-            Ok::<_, String>((ws, cfg.clone()))
+        // Finding the candidates reads the folder; do that before the config lock is
+        // taken, and take it only for the in-memory change.
+        let ws = workspace(&config::load()).ok_or("no project folder is chosen")?;
+        let argv = check::candidates(&ws)
+            .into_iter()
+            .nth(index)
+            .filter(|argv| check::label(argv) == label)
+            .ok_or("that check is no longer offered for this folder — choose again")?;
+        let root = ws.root_display();
+        let cfg = config::update(|cfg| {
+            // The folder may have been changed meanwhile; the check was found for
+            // another one then, and must not be saved against this one.
+            if !cfg.workspace.as_deref().is_some_and(|p| p.eq_ignore_ascii_case(&root)) {
+                return Err("the project folder changed — choose the check again".to_string());
+            }
+            cfg.set_check(&root, Some(argv));
+            Ok(cfg.clone())
         })??;
         Ok(folder(&ws, &cfg))
     })

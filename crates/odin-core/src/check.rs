@@ -429,18 +429,40 @@ impl Capture {
             all.extend_from_slice(&tail);
             return String::from_utf8_lossy(&all).into_owned();
         }
+        // Only a character left unfinished at the very end of the head is dropped —
+        // whatever invalid bytes came earlier (a program writing cp1252, say) stay
+        // as U+FFFD, which is honest, where trimming keyed on the *first* error
+        // would leave the split character behind whenever there was one.
         let mut head = &self.head[..];
-        if let Err(e) = std::str::from_utf8(head) {
-            // `error_len() == None` means the bytes end in the start of a character.
-            if e.error_len().is_none() {
-                head = &head[..e.valid_up_to()];
-            }
-        }
-        let skip = tail.iter().take(3).take_while(|b| (**b & 0xC0) == 0x80).count();
+        let tail_from = tail.iter().take(3).take_while(|b| (**b & 0xC0) == 0x80).count();
+        let unfinished = incomplete_tail(head);
+        head = &head[..head.len() - unfinished];
+        // The bytes dropped at the split were cut too, so they are counted.
+        let cut = cut + (unfinished + tail_from) as u64;
         let head = String::from_utf8_lossy(head);
-        let tail = String::from_utf8_lossy(&tail[skip..]);
+        let tail = String::from_utf8_lossy(&tail[tail_from..]);
         format!("{head}\n[… {cut} bytes cut …]\n{tail}")
     }
+}
+
+/// How many bytes at the end of `bytes` are the start of a UTF-8 character whose
+/// rest is missing (0 if it ends on a whole character or on bytes that are simply
+/// invalid). Looks back at most three bytes, the longest a start can be.
+fn incomplete_tail(bytes: &[u8]) -> usize {
+    for back in 1..=bytes.len().min(3) {
+        let b = bytes[bytes.len() - back];
+        if (b & 0xC0) == 0x80 {
+            continue; // a continuation byte: keep looking for its start
+        }
+        let needs = match b {
+            0xC2..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF4 => 4,
+            _ => return 0,
+        };
+        return if needs > back { back } else { 0 };
+    }
+    0
 }
 
 // ── telling the model ───────────────────────────────────────────────────────
@@ -867,6 +889,24 @@ mod tests {
         c.push(&v);
         let text = c.render();
         assert!(text.contains("bytes cut") && !text.contains('\u{fffd}'), "{}", text.matches('\u{fffd}').count());
+        // The one byte of the head's split character and the two of the tail's were
+        // cut too, and are in the count.
+        assert!(text.contains(&format!("[… {} bytes cut …]", total - HEAD - TAIL + 3)));
+    }
+
+    /// An invalid byte earlier in the head (cp1252 output) must not stop the split
+    /// character at its end from being trimmed; the earlier byte stays as U+FFFD.
+    #[test]
+    fn an_earlier_invalid_byte_does_not_keep_the_split_character_in_the_head() {
+        let mut c = Capture::default();
+        let total = 20_000usize;
+        let mut v = vec![b'a'; total];
+        v[10] = 0xE9;
+        v[HEAD - 1..HEAD + 1].copy_from_slice("\u{e9}".as_bytes());
+        c.push(&v);
+        let text = c.render();
+        assert_eq!(text.matches('\u{fffd}').count(), 1, "only the earlier byte");
+        assert!(text.contains(&format!("[… {} bytes cut …]", total - HEAD - TAIL + 1)));
     }
 
     #[test]
