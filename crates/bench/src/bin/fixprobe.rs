@@ -145,7 +145,10 @@ fn tasks() -> Vec<Task> {
             start: MAIN_RS,
             done: |f| {
                 let m = file(f, "src/main.rs")?;
-                if !m.contains("excited: bool") {
+                // On greet's own signature, not anywhere in the file: a comment or
+                // an unrelated function with that parameter is not the change.
+                let signature = m.lines().find(|l| l.contains("fn greet(")).unwrap_or("");
+                if !signature.contains("excited: bool") {
                     return Err("greet has no excited: bool parameter".into());
                 }
                 Ok(())
@@ -185,6 +188,13 @@ fn tasks() -> Vec<Task> {
             start: MAIN_RS_BROKEN,
             done: |f| {
                 let m = file(f, "src/main.rs")?;
+                // The broken start already has `greet(name)`, so that alone says
+                // nothing (R-37). What the fix must add is the missing semicolon
+                // on the `let`; the `greet(name)` call is what keeps it from
+                // being "fixed" by rewriting what main does.
+                if !m.contains("let name = \"world\";") {
+                    return Err("the `let name` line still has no semicolon".into());
+                }
                 if !m.contains("greet(name)") {
                     return Err("the fix changed what main does".into());
                 }
@@ -531,4 +541,27 @@ fn main() {
         println!("\nsaved {}", out.join("results.json").display());
     }
     let _ = std::fs::remove_dir_all(&scratch_root);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A task whose "change is there" check already holds for the project it
+    /// starts from would pass a run that did nothing (R-37: f05 did).
+    #[test]
+    fn each_task_is_not_already_done_by_the_untouched_fixture() {
+        for t in tasks() {
+            assert!((t.done)(&project(t.start)).is_err(), "{} would pass with no change", t.id);
+        }
+    }
+
+    /// And the check for f05 is not a check that nothing can satisfy: the broken
+    /// main with its semicolon put back is done.
+    #[test]
+    fn the_broken_task_is_done_once_the_semicolon_is_there() {
+        let t = tasks().into_iter().find(|t| t.id == "f05-broken").unwrap();
+        let fixed = MAIN_RS_BROKEN.replace("\"world\"\n", "\"world\";\n");
+        assert!((t.done)(&project(&fixed)).is_ok());
+    }
 }

@@ -449,6 +449,12 @@ fn main() {
         questions().into_iter().filter(|q| only.as_deref().is_none_or(|o| q.id.starts_with(o))).collect();
 
     let scratch = std::env::temp_dir().join(format!("odin-findprobe-{}", std::process::id()));
+    // Started if it is not running, as the apps and the CLI do, and before the
+    // worktree exists: a failure here then has nothing to clean up.
+    if let Err(e) = ollama::ensure_running() {
+        eprintln!("could not start Ollama: {e}");
+        std::process::exit(1);
+    }
     let tree = match Worktree::add(&scratch.join("odin")) {
         Ok(t) => t,
         Err(e) => {
@@ -475,6 +481,11 @@ fn main() {
         Ok(d) => println!("warmed in {:.1}s\n", d.as_secs_f64()),
         Err(e) => {
             eprintln!("could not load {model}: {e}");
+            // `exit` runs no destructors, so the worktree would be left behind
+            // (R-38): let it go first.
+            drop(ws);
+            drop(tree);
+            let _ = std::fs::remove_dir_all(&scratch);
             std::process::exit(1);
         }
     }

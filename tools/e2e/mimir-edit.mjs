@@ -188,6 +188,11 @@ function skip(name, why) {
 const BACKUPS = path.join(APPDATA, "odin", "backups");
 const backupNames = () => (fs.existsSync(BACKUPS) ? fs.readdirSync(BACKUPS) : []);
 
+// Connect first: a failed connection (the app is not running) then has no temp
+// folder to leave behind.
+const cdp = await connect();
+const { js } = cdp;
+
 const { root, proj } = makeProject();
 const configBefore = fs.existsSync(CONFIG) ? fs.readFileSync(CONFIG) : null;
 const backupsBefore = new Set(backupNames());
@@ -216,8 +221,6 @@ process.on("SIGINT", () => {
   fs.rmSync(root, { recursive: true, force: true });
   process.exit(130);
 });
-const cdp = await connect();
-const { js } = cdp;
 const convosBefore = new Set((await js(`window.__TAURI_INTERNALS__.invoke("conversations")`)).map((c) => c.id));
 
 try {
@@ -390,8 +393,10 @@ try {
   // Put everything back the way it was.
   if (configBefore) fs.writeFileSync(CONFIG, configBefore);
   else fs.rmSync(CONFIG, { force: true });
-  for (const c of await js(`window.__TAURI_INTERNALS__.invoke("conversations")`)) {
-    if (!convosBefore.has(c.id)) await js(`window.__TAURI_INTERNALS__.invoke("delete_conversation", { id: ${JSON.stringify(c.id)} })`);
+  // Guarded: if the app died, this must not throw before the project and the
+  // undo records below are removed.
+  for (const c of await js(`window.__TAURI_INTERNALS__.invoke("conversations")`).catch(() => [])) {
+    if (!convosBefore.has(c.id)) await js(`window.__TAURI_INTERNALS__.invoke("delete_conversation", { id: ${JSON.stringify(c.id)} })`).catch(() => {});
   }
   await js(`(location.href = location.origin + "/"), true`).catch(() => {});
   cdp.close();

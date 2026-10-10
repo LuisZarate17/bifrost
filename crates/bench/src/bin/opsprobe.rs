@@ -438,10 +438,12 @@ fn main() {
         Ok(o) if o.passed() => println!("fixture builds ({:.1}s)", o.elapsed.as_secs_f64()),
         Ok(o) => {
             eprintln!("the untouched fixture does not build:\n{}", o.output);
+            let _ = std::fs::remove_dir_all(&scratch_root);
             std::process::exit(1);
         }
         Err(e) => {
             eprintln!("could not run cargo: {e}");
+            let _ = std::fs::remove_dir_all(&scratch_root);
             std::process::exit(1);
         }
     }
@@ -450,6 +452,7 @@ fn main() {
         Ok(d) => println!("warmed in {:.1}s\n", d.as_secs_f64()),
         Err(e) => {
             eprintln!("could not load {model}: {e}");
+            let _ = std::fs::remove_dir_all(&scratch_root);
             std::process::exit(1);
         }
     }
@@ -557,6 +560,26 @@ fn main() {
 mod tests {
     use super::*;
 
+    /// A scratch folder that removes itself when the test ends, however it ends.
+    /// Both tests below used to call `remove_dir_all` as their last line, so any
+    /// `unwrap` or failed assertion before it skipped the cleanup and left
+    /// `odin-opsprobe-undo-…` in `%TEMP%` (R-41). A guard's `Drop` runs on a
+    /// panic too.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(label: &str) -> Scratch {
+            let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            Scratch(std::env::temp_dir().join(format!("odin-opsprobe-{label}-{}-{n}", std::process::id())))
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// The fixture builds nothing but itself: no dependencies, no build script.
     #[test]
     fn the_fixture_has_no_dependencies_and_no_build_script() {
@@ -571,8 +594,8 @@ mod tests {
     /// record: it must say what differs.
     #[test]
     fn the_restore_check_sees_a_changed_file_and_a_folder_left_behind() {
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let base = std::env::temp_dir().join(format!("odin-opsprobe-test-{}-{n}", std::process::id()));
+        let scratch = Scratch::new("test");
+        let base = scratch.0.clone();
         let dir = base.join("project");
         write_project(&dir, &project());
         let before = snapshot(&dir);
@@ -581,15 +604,14 @@ mod tests {
         std::fs::create_dir_all(dir.join("src/net")).unwrap();
         let err = restore_check(&dir, &base.join("backups"), &[], &before).unwrap_err();
         assert!(err.contains("changed src/util.rs") && err.contains("left behind src/net/"), "{err}");
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// And it passes when a real run is undone: a move into a new folder, an edit
     /// of the moved file and a delete, undone newest first.
     #[test]
     fn undo_all_over_a_runs_changes_gives_the_fixture_back() {
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let base = std::env::temp_dir().join(format!("odin-opsprobe-undo-{}-{n}", std::process::id()));
+        let scratch = Scratch::new("undo");
+        let base = scratch.0.clone();
         let dir = base.join("project");
         let backups = base.join("backups");
         write_project(&dir, &project());
@@ -609,7 +631,6 @@ mod tests {
         }
         assert!(snapshot(&dir) != before);
         restore_check(&dir, &backups, &ids, &before).unwrap();
-        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

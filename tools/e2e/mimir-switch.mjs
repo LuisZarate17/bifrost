@@ -143,14 +143,54 @@ const onlyAt = process.argv.indexOf("--only");
 const only = onlyAt > 0 ? Number(process.argv[onlyAt + 1]) : null;
 const runs = (n) => only === null || only === n;
 
+// Connect first: a failed connection (the app is not running) then has no temp
+// folders to leave behind.
+const cdp = await connect();
+const { js } = cdp;
+
 const A = makeFolder("a", "a.txt");
 const B = makeFolder("b", "b.txt");
 const configBefore = fs.existsSync(CONFIG) ? fs.readFileSync(CONFIG) : null;
+
+/** The two models this script moves in and out of memory, loaded or not, as
+ *  Ollama had them when the run began; `null` if Ollama could not be asked. */
+async function loadedNow() {
+  const { models = [] } = await (await fetch(`${OLLAMA}/api/ps`)).json();
+  const tags = models.map((m) => m.name ?? m.model);
+  return { [VISION]: tags.includes(VISION), [CODER]: tags.includes(CODER) };
+}
+const loadedBefore = await loadedNow().catch(() => null);
+
+/** The scenarios switch the app's model, and with it what Ollama has loaded.
+ *  Restoring the config alone would leave the two out of step: the config says
+ *  one model, Ollama holds the other. So put each model back the way it was
+ *  found, loaded or not. Best effort — a failure here is only a note. */
+async function restoreLoadedModels() {
+  if (!loadedBefore) {
+    console.log("  note: Ollama could not be asked at the start, so its loaded model was not put back.");
+    return;
+  }
+  try {
+    const now = await loadedNow();
+    for (const tag of [CODER, VISION]) {
+      if (now[tag] && !loadedBefore[tag]) {
+        await fetch(`${OLLAMA}/api/generate`, { method: "POST", body: JSON.stringify({ model: tag, keep_alive: 0 }) });
+      } else if (!now[tag] && loadedBefore[tag]) {
+        await fetch(`${OLLAMA}/api/generate`, { method: "POST", body: JSON.stringify({ model: tag }) });
+      }
+    }
+  } catch (e) {
+    console.log(`  note: Ollama's loaded model may differ from the restored config (${e.message ?? e}).`);
+  }
+}
 
 // Ctrl+C skips `finally`, so put the user's config back here as well.
 process.on("SIGINT", () => {
   if (configBefore) fs.writeFileSync(CONFIG, configBefore);
   else fs.rmSync(CONFIG, { force: true });
+  fs.rmSync(A, { recursive: true, force: true });
+  fs.rmSync(B, { recursive: true, force: true });
+  console.log("  note: interrupted — Ollama's loaded model was not put back.");
   process.exit(130);
 });
 const cfgBase = configBefore ? JSON.parse(configBefore) : {};
@@ -171,8 +211,6 @@ function readConfig() {
   return JSON.parse(fs.readFileSync(CONFIG, "utf8"));
 }
 
-const cdp = await connect();
-const { js } = cdp;
 const convosBefore = new Set((await js(`window.__TAURI_INTERNALS__.invoke("conversations")`)).map((c) => c.id));
 
 try {
@@ -269,13 +307,17 @@ try {
   if (configBefore) fs.writeFileSync(CONFIG, configBefore);
   else fs.rmSync(CONFIG, { force: true });
   // Scenario 3's conversation is a test artifact, not the user's.
-  for (const c of await js(`window.__TAURI_INTERNALS__.invoke("conversations")`)) {
-    if (!convosBefore.has(c.id)) await js(`window.__TAURI_INTERNALS__.invoke("delete_conversation", { id: ${JSON.stringify(c.id)} })`);
+  // Guarded: if the app died, this must not throw before the folders below are
+  // removed.
+  for (const c of await js(`window.__TAURI_INTERNALS__.invoke("conversations")`).catch(() => [])) {
+    if (!convosBefore.has(c.id)) await js(`window.__TAURI_INTERNALS__.invoke("delete_conversation", { id: ${JSON.stringify(c.id)} })`).catch(() => {});
   }
   await js(`(location.href = location.origin + "/"), true`).catch(() => {});
   cdp.close();
   fs.rmSync(A, { recursive: true, force: true });
   fs.rmSync(B, { recursive: true, force: true });
+  // Last: loading a model can take a while, and the cleanup above must not wait.
+  await restoreLoadedModels();
 }
 
 const skipped = results.filter((r) => r.skip).length;

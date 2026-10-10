@@ -1239,8 +1239,7 @@ use b;
 ");
         s.write("target/debug/build.rs", "// build
 ");
-        s.write("bin.rs", "// a b
-");
+        s.write("bin.rs", "// a\0b\n");
         assert_eq!(mapped(&s, 10_000), ["src/main.rs — kept"]);
     }
 

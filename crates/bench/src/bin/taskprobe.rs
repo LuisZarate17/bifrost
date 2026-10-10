@@ -876,7 +876,10 @@ fn selfcheck(tasks: &[Task], scratch_root: &Path, target_dir: &Path, keep: bool)
                         let scored = restore(Some(&stripped), &solution_text);
                         let _ = std::fs::write(tree.path.join(&path), &scored);
                         let (v, why) = score(&tree.path, task.module, target_dir, &appdata);
-                        (v != Verdict::Pass, why)
+                        // Only a real FAIL counts (R-35): an ERROR (blocked build,
+                        // timeout, no exit code) says nothing about the stripped
+                        // state, and "not a pass" used to accept it as proof.
+                        (v == Verdict::Fail, why)
                     }
                 }
             }
