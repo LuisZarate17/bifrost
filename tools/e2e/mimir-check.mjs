@@ -25,6 +25,10 @@
 // Leaves nothing behind: the project is a temporary one, the config is restored
 // byte for byte (or removed), and every conversation the run created is deleted.
 //
+// Exit code: 1 on any FAIL, or when nothing was counted (a --only that matches no
+// scenario); otherwise 2 if anything was skipped; 0 only when everything counted
+// passed and nothing was skipped.
+//
 // The model is real, so the rename can fail for model reasons. A failure prints
 // what the thread showed, so it can be read.
 
@@ -470,6 +474,14 @@ try {
   fs.rmSync(root, { recursive: true, force: true });
 }
 
-const failed = results.filter((r) => !r.ok).length;
-console.log(`\n${results.length - failed}/${results.length} checks passed`);
-process.exit(failed ? 1 : 0);
+const skipped = results.filter((r) => r.skip).length;
+const counted = results.filter((r) => !r.skip);
+const failed = counted.filter((r) => !r.ok).length;
+console.log(`\n${counted.length - failed}/${counted.length} checks passed (${skipped} skipped)`);
+// A run in which nothing was counted proved nothing — `--only` with a number no
+// scenario has, for one. That is not a pass, whatever the zero failures say.
+if (counted.length === 0) {
+  console.log("Nothing was checked: no scenario ran. Not a pass.");
+  process.exit(1);
+}
+process.exit(failed ? 1 : skipped ? 2 : 0);

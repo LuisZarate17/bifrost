@@ -250,6 +250,11 @@ pub struct Run {
     pub recovered: usize,
     /// Each `run_check`, passed or not, in order.
     pub checks: Vec<bool>,
+    /// How many of those never finished by themselves with an exit code — they
+    /// timed out, were stopped, or ended with none (R-10). The model's check
+    /// then told it nothing about its code, so the environment failed, not the
+    /// model; a probe books a run that would fail with one of these as ERROR.
+    pub check_timeouts: usize,
     /// Calls that would have shown a card under the app's default policy, and
     /// under the one before H5 (every call). Neither counts an edit rejected
     /// before its card, an invalid call, or one the loop-breaking stopped. A
@@ -276,6 +281,12 @@ pub struct Run {
     /// means Ollama cut it to fit `num_ctx` — measured at H7 to keep the system
     /// message and the tail and lose the user's request.
     pub truncated: usize,
+}
+
+/// Did a command end without an exit code of its own: timed out, stopped, or
+/// exited with none? Its output then says nothing about the code it checked.
+pub fn never_finished(ended: &check::Ended) -> bool {
+    matches!(ended, check::Ended::TimedOut | check::Ended::Stopped | check::Ended::Exited(None))
 }
 
 /// A request that failed this close to `chat`'s five-minute limit was cut off
@@ -453,6 +464,9 @@ pub fn run_loop(
         run.asks_every_call += ran.asked_every_call as usize;
         if let Some(o) = &ran.check {
             run.checks.push(o.passed());
+            if never_finished(&o.ended) {
+                run.check_timeouts += 1;
+            }
             if o.blocked.is_some() {
                 run.blocked = true;
             }

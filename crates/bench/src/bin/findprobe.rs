@@ -22,6 +22,15 @@
 //!
 //! A question passes when the answer names the right file **and** states the
 //! fact. Reading the file is not required: a search hit can be the whole answer.
+//! Only `read_file`, `list_files` and `search` are offered (R-09). Every run
+//! shares one worktree, so a model that edited, created or deleted a file would
+//! change what every later run reads — which happened when the edit tools were
+//! on. A "no tool needed" question is still scored by whether the model called
+//! any tool at all, so offering fewer tools does not change that test. As a
+//! second guard the worktree is reset after every run (`git checkout -- .` and
+//! `git clean -fdq`); if that fails the run is booked ERROR with git's message,
+//! never as the model's verdict.
+//!
 //! Each runs **with** list_files and search, and **without** — the tools the app
 //! offered before H2 — at the app's sampling and once at temperature 0.
 
@@ -49,6 +58,12 @@ const PROBE_ROUNDS: usize = 20;
 /// that does not have them. Checked, so a change of wording cannot slip past.
 const FIND_SENTENCE: &str =
     " To find where something is, use search or list_files rather than guessing a path.";
+
+/// The only tools findprobe offers: what a find question needs. The edit, create,
+/// delete and move tools were offered once, and models used them — in
+/// `H2-find-1791487078` q12 run 2 edited `lib.rs`, and the runs after it read the
+/// edited file (R-09).
+const FIND_TOOLS: [&str; 3] = ["read_file", "list_files", "search"];
 
 // ── the questions ───────────────────────────────────────────────────────────
 
@@ -270,6 +285,7 @@ impl Variant {
 
     fn tools(self) -> Vec<Tool> {
         let mut t = tools::available(true, None);
+        t.retain(|t| FIND_TOOLS.contains(&t.function.name.as_str()));
         if self == Variant::ReadOnly {
             t.retain(|t| t.function.name != "list_files" && t.function.name != "search");
         }
@@ -323,12 +339,25 @@ struct Outcome {
     log: Vec<String>,
 }
 
-fn run(model: &str, q: &Question, variant: Variant, opts: Options, ws: &Workspace, backups: &Path) -> Outcome {
+fn run(
+    model: &str,
+    q: &Question,
+    variant: Variant,
+    opts: Options,
+    ws: &Workspace,
+    tree: &Worktree,
+    backups: &Path,
+) -> Outcome {
     let started = Instant::now();
     let mut messages = vec![Message::system(variant.system(ws)), Message::user(q.ask)];
     let setup = Setup { ws, backups, check: None, confine_reads: false, compact: true };
     let r = probe::run_loop(model, &mut messages, &variant.tools(), opts, Transport::Recover, PROBE_ROUNDS, &setup);
-    let (verdict, why) = if let Some(e) = r.error {
+    // Whatever happened, the next run must read the pinned tree. A reset that
+    // fails means this run, and maybe the next, measured nothing.
+    let reset = tree.reset();
+    let (verdict, why) = if let Err(e) = reset {
+        (Verdict::Error, format!("could not reset the worktree after the run: {e}"))
+    } else if let Some(e) = r.error {
         (Verdict::Error, e)
     } else if r.hit_bound {
         (Verdict::Fail, format!("still calling tools after {PROBE_ROUNDS} rounds"))
@@ -371,6 +400,23 @@ impl Worktree {
             return Err(String::from_utf8_lossy(&out.stderr).into_owned());
         }
         Ok(Self { path: at.to_path_buf() })
+    }
+
+    /// Put the tree back exactly as the pinned commit has it: undo changes to
+    /// tracked files, then remove anything untracked.
+    fn reset(&self) -> Result<(), String> {
+        for args in [&["checkout", "--", "."][..], &["clean", "-fdq"][..]] {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(&self.path)
+                .args(args)
+                .output()
+                .map_err(|e| format!("could not run git: {e}"))?;
+            if !out.status.success() {
+                return Err(format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -455,7 +501,7 @@ fn main() {
                 let k = kinds.iter().position(|&k| k == q.kind).unwrap();
                 let mut line = String::new();
                 for i in 0..*n {
-                    let o = run(&model, q, variant, *opts, &ws, &backups);
+                    let o = run(&model, q, variant, *opts, &ws, &tree, &backups);
                     tally[k].1 += 1;
                     match o.verdict {
                         Verdict::Pass => tally[k].0 += 1,
@@ -532,6 +578,16 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// R-09: no variant offers a tool that changes the shared worktree.
+    #[test]
+    fn no_variant_offers_a_tool_that_changes_files() {
+        for v in [Variant::Search, Variant::ReadOnly, Variant::Map] {
+            let names: Vec<String> = v.tools().into_iter().map(|t| t.function.name).collect();
+            assert!(names.iter().all(|n| FIND_TOOLS.contains(&n.as_str())), "{names:?}");
+            assert!(names.contains(&"read_file".to_string()));
+        }
+    }
 
     #[test]
     fn a_fact_counts_only_as_a_whole_word() {

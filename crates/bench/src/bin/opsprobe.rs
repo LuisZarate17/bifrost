@@ -362,6 +362,11 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, cargo: &Check) -
                 out.verdict = Verdict::Error;
                 out.why = "Smart App Control blocked the final check".into();
             }
+            Ok(o) if probe::never_finished(&o.ended) => {
+                // R-10: a check that timed out or was stopped says nothing about the code.
+                out.verdict = Verdict::Error;
+                out.why = format!("the final check did not finish ({:?}) — environment", o.ended);
+            }
             Ok(o) if !o.passed() => {
                 let first = o.output.lines().find(|l| l.starts_with("error")).unwrap_or("").to_string();
                 out.why = format!("does not build: {first}");
@@ -372,6 +377,11 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, cargo: &Check) -
                 Err(e) => out.why = format!("builds, but {e}"),
             },
         }
+    }
+    // R-10: a run that would fail after its own `run_check` timed out is the environment's.
+    if out.verdict == Verdict::Fail && r.check_timeouts > 0 {
+        out.verdict = Verdict::Error;
+        out.why = format!("the model's check timed out — environment ({})", out.why);
     }
     if r.stopped && out.verdict != Verdict::Pass {
         out.why = format!("stopped after repeating a failing call — {}", out.why);

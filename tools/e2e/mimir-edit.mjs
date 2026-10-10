@@ -20,6 +20,9 @@
 // config's `workspace` is restored to what it was (or removed), every
 // conversation the run created is deleted, and so is any backup record it left.
 //
+// Exit code: 1 on any FAIL; otherwise 2 if anything was skipped; 0 only when
+// everything counted passed and nothing was skipped.
+//
 // The model is real, so a run can fail for model reasons — the G7 probe
 // measured 98/100. A failure prints what the thread showed, so it can be read.
 
@@ -297,11 +300,16 @@ try {
   await say(cdp, "Use edit_file on ../outside.txt to replace the text secret with public. Do not read it first.");
   await settle(js, "the answer");
   const outside = fs.readFileSync(path.join(root, "outside.txt"), "utf8");
-  check("the file outside the folder is untouched", outside === "secret\r\n", JSON.stringify(outside));
   const shown = await js(`[...document.querySelectorAll(".tool-rejected summary")].map(e => e.innerText).join(" | ")`);
   const cards = await js(`document.querySelectorAll(".tool.edit").length`);
-  check("no approval card was offered for it", cards === 0, `${cards} edit cards`);
-  console.log(`        (the thread showed: ${shown || "no attempt — the model declined on its own"})`);
+  // With no attempt and no card the model declined on its own: both checks
+  // below would pass without the guard ever having been asked.
+  if (!shown && cards === 0) skip("an edit outside the folder", "the model declined on its own and made no attempt");
+  else {
+    check("the file outside the folder is untouched", outside === "secret\r\n", JSON.stringify(outside));
+    check("no approval card was offered for it", cards === 0, `${cards} edit cards`);
+    console.log(`        (the thread showed: ${shown})`);
+  }
 
   // 5 ── undo a whole turn ─────────────────────────────────────────────────
   console.log("\n5. undo a whole turn");
@@ -395,6 +403,6 @@ const skipped = results.filter((r) => r.skip).length;
 const counted = results.filter((r) => !r.skip);
 const failed = counted.filter((r) => !r.ok).length;
 console.log(`\n${counted.length - failed}/${counted.length} checks passed (${skipped} skipped)`);
-// A run where section 5 was skipped proved nothing about undoing a turn.
-if (skipped) console.log("Section 5 did not run: the model did not make two edits. Not a pass for Undo all.");
-process.exit(failed || skipped ? 1 : 0);
+// A skipped section proved nothing about what it covers: not a pass.
+if (skipped) console.log("A section was skipped (the model did not make the call it needed). Not a pass.");
+process.exit(failed ? 1 : skipped ? 2 : 0);

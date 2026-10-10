@@ -29,6 +29,12 @@
 //! back (the model's file, cut at *its own* `#[cfg(test)]`, plus the solution
 //! commit's test tail) and run `cargo test -p odin-core --lib -- <module>::tests::`.
 //!
+//! It builds in the repo's own `target/` (`CARGO_TARGET_DIR` is `<cwd>/target`),
+//! so no other cargo command may run beside it: a wait on cargo's lock counts
+//! against the timeouts. A scoring run that times out, is stopped or ends with
+//! no exit code is an ERROR, never the model's FAIL (R-10); so is a run that
+//! would fail after its own `run_check` timed out.
+//!
 //! **A fresh `CARGO_TARGET_DIR` rebuilds proc-macros from nothing**, and this
 //! machine has refused a freshly linked one before (Smart App Control, PLAN.md
 //! §3) — so every run shares the repo's own target directory, and `os error
@@ -758,6 +764,31 @@ impl Verdict {
     }
 }
 
+/// Why a scoring run says nothing about the model's code, if it does not: it
+/// hit its timeout, was stopped, or ended with no exit code (R-10). Waiting on
+/// cargo's lock for the shared `target/`, a locked output file or a full disk
+/// all look like this, and none of them is the model's doing. `None` means the
+/// run finished by itself and its output can be judged.
+fn unfinished(o: &check::Outcome) -> Option<String> {
+    match &o.ended {
+        check::Ended::TimedOut => Some(format!("the scoring test run timed out after {:.0}s — environment", o.elapsed.as_secs_f64())),
+        check::Ended::Stopped => Some("the scoring test run was stopped — environment".to_string()),
+        check::Ended::Exited(None) => Some("the scoring test run ended with no exit code — environment".to_string()),
+        check::Ended::Exited(Some(_)) => None,
+    }
+}
+
+/// A run that would be a FAIL, but whose own `run_check` never finished, is an
+/// ERROR: the model was working with a check that told it nothing, and that is
+/// the environment's failure. A PASS stays a PASS — it got there anyway.
+fn book_with_check_timeouts(verdict: Verdict, why: String, check_timeouts: usize) -> (Verdict, String) {
+    if verdict == Verdict::Fail && check_timeouts > 0 {
+        (Verdict::Error, format!("the model's check timed out — environment ({why})"))
+    } else {
+        (verdict, why)
+    }
+}
+
 /// Run the scoring test command in `worktree`, retrying past a Smart App
 /// Control block up to twice more by touching a source file.
 fn score(worktree: &Path, module: &str, target_dir: &Path, appdata: &Path) -> (Verdict, String) {
@@ -779,6 +810,9 @@ fn score(worktree: &Path, module: &str, target_dir: &Path, appdata: &Path) -> (V
                 return (Verdict::Error, "blocked by Smart App Control".to_string());
             }
             Ok(o) => {
+                if let Some(why) = unfinished(&o) {
+                    return (Verdict::Error, why);
+                }
                 return match judge_tests(&o.output) {
                     TestOutcome::Pass(n) => (Verdict::Pass, format!("{n} passed")),
                     TestOutcome::ZeroRan => (Verdict::Fail, "zero tests ran".to_string()),
@@ -1063,6 +1097,7 @@ fn run(
         })
         .unwrap_or_default();
 
+    let check_timeouts = r.check_timeouts;
     let mut out = Outcome {
         verdict: Verdict::Fail,
         why: String::new(),
@@ -1116,6 +1151,7 @@ fn run(
         out.verdict = v;
         out.why = why;
     }
+    (out.verdict, out.why) = book_with_check_timeouts(out.verdict, std::mem::take(&mut out.why), check_timeouts);
     if r.stopped && out.verdict != Verdict::Pass {
         out.why = format!("stopped after repeating a failing call — {}", out.why);
     }
@@ -1361,6 +1397,37 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ended(how: check::Ended) -> check::Outcome {
+        check::Outcome {
+            ended: how,
+            elapsed: std::time::Duration::from_secs(600),
+            output: String::new(),
+            bytes: 0,
+            complete: true,
+            blocked: None,
+        }
+    }
+
+    /// R-10: only a run that finished with an exit code may be judged by its output.
+    #[test]
+    fn a_scoring_run_that_never_finished_is_not_judged() {
+        assert!(unfinished(&ended(check::Ended::TimedOut)).unwrap().contains("timed out"));
+        assert!(unfinished(&ended(check::Ended::Stopped)).unwrap().contains("stopped"));
+        assert!(unfinished(&ended(check::Ended::Exited(None))).unwrap().contains("no exit code"));
+        assert!(unfinished(&ended(check::Ended::Exited(Some(0)))).is_none());
+        assert!(unfinished(&ended(check::Ended::Exited(Some(101)))).is_none());
+    }
+
+    /// R-10: a check that timed out turns a would-be FAIL into an ERROR, and nothing else.
+    #[test]
+    fn a_check_timeout_excuses_a_fail_but_not_a_pass() {
+        let (v, why) = book_with_check_timeouts(Verdict::Fail, "zero tests ran".into(), 1);
+        assert!(v == Verdict::Error && why.contains("environment") && why.contains("zero tests ran"));
+        assert!(book_with_check_timeouts(Verdict::Fail, "x".into(), 0).0 == Verdict::Fail);
+        assert!(book_with_check_timeouts(Verdict::Pass, "3 passed".into(), 2).0 == Verdict::Pass);
+        assert!(book_with_check_timeouts(Verdict::Error, "x".into(), 2).0 == Verdict::Error);
+    }
 
     /// `--read whole` is the read as shipped before H8, word for word.
     #[test]

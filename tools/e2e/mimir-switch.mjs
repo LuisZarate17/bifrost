@@ -20,6 +20,10 @@
 // Leaves nothing behind: the config is restored byte for byte (or removed),
 // and the vision model is left loaded, the way the machine is normally found.
 
+// Exit code: 1 on any FAIL, or when nothing was counted (a --only that matches no
+// scenario); otherwise 2 if anything was skipped; 0 only when everything counted
+// passed and nothing was skipped.
+//
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -274,6 +278,14 @@ try {
   fs.rmSync(B, { recursive: true, force: true });
 }
 
-const failed = results.filter((r) => !r.ok).length;
-console.log(`\n${results.length - failed}/${results.length} checks passed`);
-process.exit(failed ? 1 : 0);
+const skipped = results.filter((r) => r.skip).length;
+const counted = results.filter((r) => !r.skip);
+const failed = counted.filter((r) => !r.ok).length;
+console.log(`\n${counted.length - failed}/${counted.length} checks passed (${skipped} skipped)`);
+// A run in which nothing was counted proved nothing — `--only` with a number no
+// scenario has, for one. That is not a pass, whatever the zero failures say.
+if (counted.length === 0) {
+  console.log("Nothing was checked: no scenario ran. Not a pass.");
+  process.exit(1);
+}
+process.exit(failed ? 1 : skipped ? 2 : 0);

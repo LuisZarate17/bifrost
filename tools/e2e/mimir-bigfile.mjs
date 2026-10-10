@@ -23,6 +23,8 @@
 // **Three results, not two**, as in mimir-policy.mjs. The model is real: when it
 // never sends a range, nothing about ranges was exercised, and that prints SKIP —
 // not a pass and not a failure.
+// Exit code: 1 on any FAIL, or when nothing was counted; otherwise 2 if anything
+// was skipped; 0 only when everything counted passed and nothing was skipped.
 //
 // It types into the real textarea and clicks the real buttons over CDP, and
 // writes the folder straight into the config file. Leaves nothing behind: the
@@ -401,8 +403,7 @@ try {
       const edit = t.asked.find((c) => c.kind === "edit");
       if (!edit) skip("the edit", "the model read the lines but made no edit");
       else {
-        check("an edit card asked", true);
-        check("the edit card names big.rs", edit.shown.toLowerCase().includes("big.rs"), edit.shown);
+        check("an edit card for big.rs asked", edit.shown.toLowerCase().includes("big.rs"), edit.shown);
         const want = Buffer.from(bigBytes.toString("utf8").replace(OLD_LINE, NEW_LINE));
         const got = fs.readFileSync(bigPath);
         check(
@@ -473,4 +474,4 @@ if (counted.length === 0) {
   console.log("Nothing was checked: the model made none of the calls. Not a pass.");
   process.exit(1);
 }
-process.exit(failed ? 1 : 0);
+process.exit(failed ? 1 : skipped ? 2 : 0);
