@@ -6,8 +6,9 @@ tests, the probes, the end-to-end scripts and the docs. HEAD was `897f38b` throu
 
 **Who this is for:** the AI agent that will apply these corrections in this repo. Luis reads it too.
 
-**Status (2026-10-09): round 1 is done — R-01 to R-11 fixed and committed locally; see
-[H-review-round1.md](results/H-review-round1.md). The lows (R-12 to R-42) and the rest of §7 are round 2.**
+**Status: round 1 (2026-10-09) is done and pushed — R-01 to R-11; see
+[H-review-round1.md](results/H-review-round1.md). Round 2 (2026-10-09) fixed the lows R-12 to R-42 except R-34, deferred, and the rest of §7; see
+[H-review-round2.md](results/H-review-round2.md).**
 
 ## How to use this
 
@@ -326,17 +327,17 @@ R-03's final answer at the cap, they should land before Stage H is called trustw
 Grouped by file. Each has a failing test unless it says "trace".
 
 **`edit.rs` (changes and undo)**
-- **R-12** Single Undo does not check the backup is the original. `edit.rs:1599-1602` writes
+- **R-12** *(done in round 2: `3ce0d30`)* Single Undo does not check the backup is the original. `edit.rs:1599-1602` writes
   `{id}.bak` over the file without comparing it to `Record.before`; Undo all does (`:1713`). A
   truncated or swapped `.bak` replaces the user's file and retires the record.
   `defect_single_undo_restores_a_backup_that_is_not_the_original`. Fix: compare the fingerprint
   before writing.
-- **R-13** A record that cannot be read counts as "already undone". `edit.rs:1780-1783`
+- **R-13** *(done in round 2: `3ce0d30`)* A record that cannot be read counts as "already undone". `edit.rs:1780-1783`
   (`undo_turn`) and `:1591` (`undo`) treat any read error, not only NotFound, as gone; the window
   then marks the card Undone with the change still on disk (`App.tsx:1568`).
   `defect_an_unreadable_record_is_reported_as_already_undone_by_undo_all`, `..._by_single_undo`.
   Fix: only `ErrorKind::NotFound` means undone; anything else is an error naming the record.
-- **R-14** An edit, and the undo of one, has no last-moment re-check. The staleness check runs at
+- **R-14** *(done in round 2: `3ce0d30`)* An edit, and the undo of one, has no last-moment re-check. The staleness check runs at
   the start of `apply` (`:1288-1330`), before the backups are written and the replacing rename
   (`:1442`); `undo` likewise (`:1595-1601`). A save landing in that window is lost — 17/60 and
   16/60 in the race tests (timing-dependent). Delete and move do re-check (`:1435-1440`). This
@@ -344,124 +345,124 @@ Grouped by file. Each has a failing test unless it says "trace".
   `defect_an_edit_replaces_a_save_that_landed_after_its_staleness_check`,
   `defect_undo_of_an_edit_replaces_a_save_that_landed_after_its_check`. Fix: write the temp file,
   re-read and compare the target, then rename; the same in `undo`.
-- **R-15** `Applied.folders` reports the plan's folders, not the ones made (`edit.rs:1342`), so
+- **R-15** *(done in round 2: `3ce0d30`)* `Applied.folders` reports the plan's folders, not the ones made (`edit.rs:1342`), so
   the model is told "Made the folders n/, n/m/" when `n/` already existed.
   `defect_applied_folders_names_folders_this_apply_did_not_make`. Fix: build it from `made`.
-- **R-16** Applying a move reads the whole file into memory for its re-check (`edit.rs:1435-1437`
+- **R-16** *(done in round 2: `3ce0d30`)* Applying a move reads the whole file into memory for its re-check (`edit.rs:1435-1437`
   uses `std::fs::read` for Move too), though planning hashes in 64 KiB chunks so moves have no size
   limit; a 128 MiB move held 128 MiB. `defect_applying_a_move_reads_the_whole_file_into_memory`.
   Fix: `fingerprint_file` for Move.
 
 **`xmlcall.rs`, `chat.rs`, `compact.rs`, `tools.rs` (model I/O)**
-- **R-17** The recovery deletes `<tool_call>` tags from prose that holds no call (`xmlcall.rs:579`,
+- **R-17** *(done in round 2: `d58807c`)* The recovery deletes `<tool_call>` tags from prose that holds no call (`xmlcall.rs:579`,
   reached through `chat.rs:470-482`): the user reads *"Each call is wrapped in  and  tags."*
   `xml_prose_mentioning_the_wrapper_tags_comes_back_unchanged`. Fix: strip only around parsed
   calls, and return the original content when nothing was parsed.
-- **R-18** Any `<function=NAME>` ends a call's region, not just an offered name (`xmlcall.rs:564`).
+- **R-18** *(done in round 2: `d58807c`)* Any `<function=NAME>` ends a call's region, not just an offered name (`xmlcall.rs:564`).
   `<function=example_function_name>` — the example in Qwen3-Coder's own prompt — quoted in a value
   breaks the call. `xml_a_quoted_example_function_tag_inside_a_value_is_not_a_call_boundary`. Fix:
   pass the offered names in, as `find_form_b` does.
-- **R-19** A reply cut off before a required parameter is accepted as a call
+- **R-19** *(done in round 2: `d58807c`)* A reply cut off before a required parameter is accepted as a call
   (`xmlcall.rs:483-486`, `:510-517`): cut after `old_text`, it becomes `Edit { new_text: "" }`, a
   deletion card. `xml_a_reply_cut_off_before_a_required_parameter_is_not_accepted_as_a_call`. Fix:
   without a closing `</function>` or `</tool_call>`, require every name in the schema's `required`.
-- **R-20** The repeat rule misses bare refusals. `tools::prior_failures` (`tools.rs:978-996`) counts
+- **R-20** *(done in round 2: `d58807c`)* The repeat rule misses bare refusals. `tools::prior_failures` (`tools.rs:978-996`) counts
   only results starting `error:`, but `lib.rs` sends the refusals of `interpret`, unreadable calls
   and the 7th-plan note without it (`lib.rs:895-902`, `:919-921`), while `probe.rs:133,136`
   prefixes `error:`. So a model resending `start_line: "abc"` burns all ten rounds instead of
   stopping at three, and the probes measure a stop rule the app doesn't have.
   `repeat_rule_counts_a_bad_range_refused_by_interpret`, `repeat_rule_counts_the_seventh_plan_update_refusal`.
   Fix: prefix `error: ` for every rejected kind in `lib.rs`.
-- **R-21** H7's stubbing hides a repeated failing call from the repeat rule (`compact.rs:273-307`
+- **R-21** *(done in round 2: `d58807c`, `1bb0c1c`)* H7's stubbing hides a repeated failing call from the repeat rule (`compact.rs:273-307`
   against `tools.rs:978-996`): once a long argument is set aside, an identical resend no longer
   matches. `repeat_rule_survives_an_old_long_argument_being_set_aside`. Fix: compare long arguments
   by length and hash, or never set aside the arguments of a call whose result was an error.
-- **R-22** A refused read demotes the good read of the same file (`compact.rs:171-177`: `read_key`
+- **R-22** *(done in round 2: `d58807c`)* A refused read demotes the good read of the same file (`compact.rs:171-177`: `read_key`
   falls back to the whole-file key when the range is refused; `:212-225`), so the only copy of the
   file is set aside first. `compact_a_refused_read_does_not_demote_the_good_read_of_the_same_file`.
   Fix: register as "newest read" only results that returned content.
-- **R-23** `update_plan` cuts a long list without saying so (`tools.rs:871-912`): 20 steps keep 12,
+- **R-23** *(done in round 2: `d58807c`)* `update_plan` cuts a long list without saying so (`tools.rs:871-912`): 20 steps keep 12,
   and the reply is "Plan updated: 0 of 12 done." `plan_a_list_cut_to_the_caps_is_not_silently_cut`.
   Fix: "Kept the first 12 of 20 steps", or refuse. Same rule as "do not truncate a read silently".
-- **R-24** `read_text` panics on a range `read_range` never produces (`tools.rs:730`): start 0
+- **R-24** *(done in round 2: `d58807c`)* `read_text` panics on a range `read_range` never produces (`tools.rs:730`): start 0
   overflows; start past end panics on the slice; end before start answers with a size error. Public
   API, unreachable from the app today.
   `read_text_does_not_panic_or_lie_on_lines_that_read_range_would_never_make`. Fix: clamp the
   start; error on end < start.
-- **R-25** A file whose text begins with `error:` reads as a failed call (`lib.rs:1164-1174`
+- **R-25** *(done in round 2: `d58807c`)* A file whose text begins with `error:` reads as a failed call (`lib.rs:1164-1174`
   infers `ok` from the prefix; `:958-960`; `tools.rs:978-997`): it shows Failed, gets the "you
   already sent this and it failed" note, and the third read ends the turn as stuck.
   `defect_a_file_that_starts_with_error_colon_reads_like_a_failed_call`,
   `defect_three_successful_reads_of_such_a_file_end_the_turn_as_stuck`. Fix: carry `ok` explicitly.
 
 **`check.rs`, `config.rs`, `lib.rs`, the window**
-- **R-26** Check output: a multi-byte character on the 6 KB head boundary, or at a cut, becomes
+- **R-26** *(done in round 2: `9de3d1f`, `1bb0c1c`)* Check output: a multi-byte character on the 6 KB head boundary, or at a cut, becomes
   U+FFFD (`check.rs:403-417` decodes head and tail separately).
   `defect_a_character_on_the_head_boundary_is_garbled_even_when_nothing_was_cut`,
   `defect_a_cut_leaves_replacement_characters_at_both_ends_of_the_marker`. Fix: decode them
   together when nothing was cut; otherwise trim incomplete sequences at the edges.
-- **R-27** A BOM in `package.json` hides every npm check (`check.rs:95-99`).
+- **R-27** *(done in round 2: `9de3d1f`)* A BOM in `package.json` hides every npm check (`check.rs:95-99`).
   `defect_a_utf8_bom_in_package_json_hides_every_npm_check`. Fix: strip U+FEFF, as in R-02.
-- **R-28** A check that cannot start never gets the Smart App Control wording (`check.rs:197-199`
+- **R-28** *(done in round 2: `9de3d1f`)* A check that cannot start never gets the Smart App Control wording (`check.rs:197-199`
   returns before the SAC test; `lib.rs:1276`). Trace. Fix: test the spawn error for the 4551
   signature too.
-- **R-29** Config read-change-write has no lock (`lib.rs:291-297`, `:391-407` — `accept_model_offer`
+- **R-29** *(done in round 2: `9de3d1f`, `9e28a65`)* Config read-change-write has no lock (`lib.rs:291-297`, `:391-407` — `accept_model_offer`
   holds a stale config across `/api/tags` — and `:1403-1407`, `:1451-1461`, `:1494-1502`,
   `:1513-1516`, `:1531-1534`, `:1545-1547`). H6-results.md deferred a lock until commands got
   slower; H10 added `set_notes`, and the offer waits on the network.
   `defect_two_config_commands_that_read_before_either_writes_lose_one_update`. Fix: one mutex around
   every load-change-save, or `config::update(|c| …)`.
-- **R-30** Stop in the moment a card is being added leaves a live pending card wired to the next
+- **R-30** *(done in round 2: `9de3d1f`)* Stop in the moment a card is being added leaves a live pending card wired to the next
   request. `App.tsx:1233-1243` installs the resolver with no `live()` check; `stop()`
   (`:1467-1489`) resolves only an installed one; every card's Allow/Deny calls one shared ref
   (`:1693-1694`). Later, that old card's Allow approves the new call. Trace; narrow window. Fix:
   check `live()` after the insert; bind each resolver to its own card.
-- **R-31** Model-switch races (`ModelOfferBar.tsx:58-75`, `App.tsx:1097`, `lib.rs:388-416`, `:784`):
+- **R-31** *(done in round 2: `9de3d1f`)* Model-switch races (`ModelOfferBar.tsx:58-75`, `App.tsx:1097`, `lib.rs:388-416`, `:784`):
   a question sent during a switch goes out with the old tag, so Ollama loads the vision model
   beside the half-loaded coder; and when the load fails, the window keeps the old tag while the
   config says coder. Trace. Fix: disable the composer while switching; on "Switched to …, but
   loading it failed" still call `onSwitched`.
-- **R-32** Reopening a thread falls back to a read card (`App.tsx:864`, `?? "read_file"`, then
+- **R-32** *(done in round 2: `9de3d1f`)* Reopening a thread falls back to a read card (`App.tsx:864`, `?? "read_file"`, then
   replayed by `toWire`, `:1030-1054`), against H9's "never a read card". Trace. Fix: an explicit
   unknown name, and leave such entries out of `toWire`.
-- **R-33** Project notes are read through a link that stays inside the folder
+- **R-33** *(done in round 2: `9de3d1f`)* Project notes are read through a link that stays inside the folder
   (`instructions.rs:63-66`: `resolve_existing` returns the target, and `open_checked` checks the
   already-resolved path). With `.github` a junction to `ghdocs/`, the notes were read; a
   symlinked `AGENTS.md → .env` would put `.env` into the prompt (a symlink could not be made here).
   The spec says never through a link. `defect_notes_are_read_through_a_link_that_points_back_inside`.
   Fix: refuse unless the canonical path equals the root joined with the name (case-insensitive),
   refuse `symlink_metadata().is_symlink()`, and refuse secret names.
-- **R-34** Only the first call of a reply runs (`lib.rs:856-858`: "because each one needs its own
+- **R-34** *(deferred in round 2: latent while the model asks for one call per reply — see the round-2 results)* Only the first call of a reply runs (`lib.rs:856-858`: "because each one needs its own
   approval"); the rest are dropped, and the turn is replayed as if only one was asked. Since H5 the
   automatic ones need no approval. Latent today — Qwen3-Coder asked one call per reply in 10 of 10
   samples. Fix, when a model batches: run consecutive automatic calls of one reply in the same
   round.
 
 **`crates/bench`, `tools/e2e`, hygiene**
-- **R-35** `taskprobe --selfcheck` cannot tell a blocked build from a failing stripped state
+- **R-35** *(done in round 2: `2e682d0`)* `taskprobe --selfcheck` cannot tell a blocked build from a failing stripped state
   (`taskprobe.rs:845`). Fix: require `TestOutcome::Failed` for a removal; an Error fails the
   selfcheck.
-- **R-36** The probe answers a folder read, a missing file and an unavailable `run_check` in
+- **R-36** *(done in round 2: `d58807c`)* The probe answers a folder read, a missing file and an unavailable `run_check` in
   different words than the app (`probe.rs:150-161`, `:189` against `tools.rs:603-612`,
   `lib.rs:1014-1016`). Fix: call `tools::approval` in the probe; share the strings as consts.
-- **R-37** fixprobe's "the change is there" is substring containment, f05's is already true at the
+- **R-37** *(done in round 2: `2e682d0`, `1bb0c1c`)* fixprobe's "the change is there" is substring containment, f05's is already true at the
   start, and fixprobe has no unit tests (`fixprobe.rs:130-237`, `:183-193`). Fix: copy opsprobe's
   `each_task_is_not_already_done_by_the_untouched_fixture`.
-- **R-38** findprobe never starts Ollama and leaks its worktree when the model can't load
+- **R-38** *(done in round 2: `2e682d0`)* findprobe never starts Ollama and leaks its worktree when the model can't load
   (`findprobe.rs:406`, `:428-434`). Fix: `ollama::ensure_running()` before `Worktree::add`; drop
   the tree before `exit`.
-- **R-39** e2e cleanup order: check, edit and switch make their temp folders before `connect()`;
+- **R-39** *(done in round 2: `2e682d0`, `1bb0c1c`)* e2e cleanup order: check, edit and switch make their temp folders before `connect()`;
   their `finally` runs an unguarded CDP call before removing the project and the backup records;
   mimir-check's SIGINT handler leaves the project; mimir-switch can leave Ollama's loaded model out
   of step with the restored config. Fix: connect first; `.catch(() => [])`.
-- **R-40** A test passes without testing: `instructions.rs:212-226`
+- **R-40** *(done in round 2: `9de3d1f`)* A test passes without testing: `instructions.rs:212-226`
   (`a_notes_file_that_is_a_link_to_outside_is_refused`) prints "skipping" when it can't make a
   symlink, and reports ok. Fix: reach the notes through a junction (no privilege needed), or
   `#[ignore = "needs symlink privilege"]`.
-- **R-41** Leftovers in `%TEMP%` from earlier runs: `odin-check-linger-47596-…` (2026-09-29, a
+- **R-41** *(done in round 2: `2e682d0`, `9de3d1f`)* Leftovers in `%TEMP%` from earlier runs: `odin-check-linger-47596-…` (2026-09-29, a
   `check.rs` test) and `odin-opsprobe-undo-32896-…` (2026-10-03, opsprobe). Find what leaks them,
   then delete the folders.
-- **R-42** `search.rs:1174` writes a test fixture with a raw NUL byte in the source. Mímir still
+- **R-42** *(done in round 2: `2e682d0`)* `search.rs:1174` writes a test fixture with a raw NUL byte in the source. Mímir still
   reads and searches the file (checked), but grep and ripgrep treat it as binary. Fix: `"\0"`.
 
 ---
