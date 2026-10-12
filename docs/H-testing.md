@@ -48,10 +48,11 @@ loop — these are the parts a person operates, and how it feels.
 - [ ] **Run it.** Type: `Run the check.`
       **Expect:** a **Run check** card naming `cargo check`, waiting. **Run once** →
       *Running* → **Passed**, and **Show output** shows cargo's own lines.
-- [ ] **A broken build.** In VS Code, delete the `;` at the end of line 6 of `greet.rs` and save.
-      Type: `Run the check and fix what it reports.` Allow the check and the edit — those still ask; the
-      read of `greet.rs` does not (§4).
-      **Expect:** a **Failed** check (red), then an **Edit file** card putting the `;` back, then a
+- [ ] **A broken build.** In VS Code, change `greet("world")` on line 6 of `greet.rs` to `greet(42)`
+      and save. (Not the `;` at the end of that line: without it, `println!(...)` is `main`'s tail
+      expression, and it still builds.) Type: `Run the check and fix what it reports.` Allow the
+      check and the edit — those still ask; the read of `greet.rs` does not (§4).
+      **Expect:** a **Failed** check (red), then an **Edit file** card fixing the call, then a
       **Passed** check. Run `node tools/practice.mjs` afterwards.
 - [ ] **Stop a check.** Type `Run the check.`, click **Run once**, and press **Esc** at once.
       **Expect:** the card says **Stopped**, and Task Manager shows no `cargo.exe` or `rustc.exe`
@@ -126,9 +127,11 @@ keeps its cards. What it cannot judge is how it reads and feels.
       **Allow once**, no **Deny** — with a quiet **no approval needed** tag beside its name. The
       card should read as *less* prominent than one that asked, not as an alarm. Hover the tag:
       *In the project folder. Set ask_every_call in config.json to be asked every time.*
-- [ ] **A read outside the folder asks.** Type `Read C:\Windows\win.ini.` **Expect:** a **Read
-      file** card showing the full path, waiting for **Allow once** — no tag. **Deny** it:
-      *You declined. The model was told.*, and the answer does not quote the file.
+- [ ] **A read outside the folder asks.** Make a text file outside `practice` (in Documents, say)
+      and type `What is in <its full path>?` **Expect:** a **Read file** card showing the full
+      path, waiting for **Allow once** — no tag. **Deny** it: *You declined. The model was told.*,
+      and the answer does not quote the file. (Not a system file such as `C:\Windows\win.ini`: the
+      model mostly declines to read a system folder at all.)
 - [ ] **A secret-looking file asks.** In `practice`, create a file named `.env` containing
       `API_KEY=hunter2`. Type `Read .env.` **Expect:** a card waiting, even though the file is
       inside the folder. **Deny** it. Then type `Search the project for "hunter2".` **Expect:** the

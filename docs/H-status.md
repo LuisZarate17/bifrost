@@ -40,5 +40,6 @@ every chunk**, alongside its results doc. Last updated 2026-10-11, after the re-
   as `edit.rs` says.
 - **A suggestion, not changed:** offer `cargo check --all-targets`, so a check also builds test code
   (the one acceptance miss on 2026-10-11 was a test that did not compile behind a passing `cargo check`).
-- **Checks by hand waiting** in [PENDING-CHECKS.md](PENDING-CHECKS.md): H1, H2, H4b, H5, H6, H7, H8, H9 and H10, with
-  the steps in [H-testing.md](H-testing.md).
+- **Checks by hand, run 2026-10-12** ([PENDING-CHECKS.md](PENDING-CHECKS.md)): all 38 pass after the same day's
+  polish (the composer bar, outside reads, short read paths, delete/move cards, the held-file message) —
+  [polish](results/H-review-round2.md#polish-2026-10-12).

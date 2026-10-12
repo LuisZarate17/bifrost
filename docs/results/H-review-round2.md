@@ -228,3 +228,27 @@ Also: `PLAN.md` no longer says round 2 is under way, and the comment on the firs
 `lib.rs` says why it stays (R-34). Acceptance was 2/3: in the miss, the model's new test did not
 compile and its check, `cargo check`, never builds test code — a model miss, but a reason to
 consider offering `cargo check --all-targets`. Not changed here.
+
+## Polish, 2026-10-12
+
+From the hand checks (PENDING-CHECKS.md), five fixes:
+
+- **The composer bar wraps.** With the folder, check and notes chips showing, Send was pushed past
+  the composer's edge. The row now wraps, and the model and Send move together to a row of their
+  own on the right; nothing is cut. Measured at 1440–560 px in both themes, and in the app.
+- **The model may read outside the folder.** The system prompt now says a file outside can be read
+  by its full path, with the user asked. Outside reads tried: 1 in 15 before, 11 in 15 after (5 in
+  5 for an ordinary file; `C:\Windows` the model still mostly declines).
+- **Read cards inside the folder show the short path** (`greet.rs`), as edit cards do; a read
+  outside shows its whole resolved path.
+- **Delete and move cards** no longer show `+0 −0` or an empty "Show changes".
+- **A file held by an editor** is reported as *open in another program that won't let it be
+  replaced*, not *Access is denied (os error 5)*, without its full path in Undo all's line; and the
+  banner goes once a later Undo all works.
+
+Checked with a scratch build of the app (the shipped exe untouched): 18/18 on the fixes, all nine
+e2e scripts green, odin-core 407 tests, the review's 173.
+
+**taskprobe** at the new wording, same flags as round 2: **27/48** at the app's sampling (29
+before), **9/16** at temperature 0 (9 before), 0 errors, 3.0 asks a run. Inside the 25–32 spread.
+Saved in `evals/out/H3-task-1791830328/`.

@@ -7,7 +7,18 @@ machine.
 **[G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
-## Open — H10, project notes and a task list, 2026-10-08
+## Stage H's checks, run 2026-10-12
+
+Every item below for H1–H10 was run against the real app and model, driven over CDP (the way
+`tools/e2e/` does) from a throwaway copy of the practice folder, with screenshots in both themes
+and at narrow widths judged by eye. Heimdall's hotkey was sent as a real keypress. 36 items passed
+at first; the two that did not — the composer bar overflowing, and the model never trying a read
+outside the folder — were fixed the same day, with what was seen kept beside each. Also found,
+and not a Mímir defect: [H-testing.md](H-testing.md)
+§1's "broken build" (deleting the `;` after `println!`) does not break the build — it is `main`'s
+tail expression — so that step now uses `greet(42)`.
+
+## Checked 2026-10-12 — H10, project notes and a task list, 2026-10-08
 
 **Already proven mechanically.** Unit tests on `odin_core::instructions`: each of the four file
 names found under its own name and the first of them winning, an empty or binary (NUL, UTF-16) file
@@ -23,19 +34,24 @@ for word; on the probe loop: a plan update costing no round and a malformed one 
 cut, the plan card and the finish line. **What needs a person** is how the chip and the checklist
 look and read, and whether turning notes on feels like a decision.
 
-- [ ] **No file, no chip; a file, a dashed chip** naming it, solid once pressed, and disabled while
+- [x] **No file, no chip; a file, a dashed chip** naming it, solid once pressed, and disabled while
       an answer is being written. [H-testing.md §9](H-testing.md)
-- [ ] **The tooltip** says the text is the project's, not yours, and mentions the 4 KB cut when
+- [x] **The tooltip** says the text is the project's, not yours, and mentions the 4 KB cut when
       there is one.
-- [ ] **The setting is per folder** and survives a restart.
-- [ ] **Notes never loosen approval:** with `Always edit without asking` in the file, every edit,
+- [x] **The setting is per folder** and survives a restart.
+- [x] **Notes never loosen approval:** with `Always edit without asking` in the file, every edit,
       delete, move and check still shows a card.
-- [ ] **One Plan card per turn** that updates in place, with a ring for the step under way and a
+- [x] **One Plan card per turn** that updates in place, with a ring for the step under way and a
       tick for each done, and no buttons.
-- [ ] **Reopening the conversation** brings back the last Plan card.
-- [ ] **Light and dark, narrow and wide:** the chips fit and the model name stays on one line.
+- [x] **Reopening the conversation** brings back the last Plan card.
+- [x] **Light and dark, narrow and wide:** the chips fit and the model name stays on one line.
+      *2026-10-12: failed, then fixed the same day.* With Tools, the folder, a check and a notes chip
+      all showing, the bar overflowed the composer — Send past its edge at the normal width, and
+      off-screen at 900 px and below. The row now wraps, and the model and Send move together to a
+      row of their own on the right; nothing is cut. Measured at 1440–560 px in both themes, and in
+      the app.
 
-## Open — H9, file operations, 2026-10-03
+## Checked 2026-10-12 — H9, file operations, 2026-10-03
 
 **Already proven mechanically.** Unit tests on `odin_core::edit`: resolving a new path (a `..` in
 the part that does not exist, a junction out, a dangling link, a file where a folder should be, a
@@ -53,17 +69,17 @@ ticket as an edit. `opsprobe` undoes every run it makes and compares the project
 `tools/e2e/mimir-ops.mjs` drives the cards, undo and the refusals. **What needs a person** is how
 the new cards read, and that a delete cannot be mistaken for a read.
 
-- [ ] **A create in new folders** shows *Makes the folders* on its card, and Undo takes them away.
+- [x] **A create in new folders** shows *Makes the folders* on its card, and Undo takes them away.
       [H-testing.md §8](H-testing.md)
-- [ ] **A delete** shows a **Delete file** card with the size, and Undo brings the file back.
-- [ ] **A move** shows *from → to* and the folders it makes, and Undo moves it back.
-- [ ] **A rewrite request** produces an **Edit file** card, not a delete and a create.
-- [ ] **`.git` and outside the folder** are refused with no card.
-- [ ] **Undo all over a mixed turn** reads *N changes in this turn* and refuses, naming the file, when
+- [x] **A delete** shows a **Delete file** card with the size, and Undo brings the file back.
+- [x] **A move** shows *from → to* and the folders it makes, and Undo moves it back.
+- [x] **A rewrite request** produces an **Edit file** card, not a delete and a create.
+- [x] **`.git` and outside the folder** are refused with no card.
+- [x] **Undo all over a mixed turn** reads *N changes in this turn* and refuses, naming the file, when
       one has been changed by hand.
-- [ ] **Reopening the conversation** keeps *Deleted* and *Moved* cards, with *from → to*.
+- [x] **Reopening the conversation** keeps *Deleted* and *Moved* cards, with *from → to*.
 
-## Open — H8, partial reads, 2026-10-03
+## Checked 2026-10-12 — H8, partial reads, 2026-10-03
 
 **Already proven mechanically.** Unit tests on `odin_core::tools`: the line arguments (a number, a
 string of one, a float with no fraction, null, blank; negative, fractional and non-numeric refused;
@@ -79,13 +95,13 @@ kept apart in `compact`, and `cargo test -p mimir` redeeming a read ticket with 
 person** is how the **lines …** tag reads on a card, and that the answer quotes the part that was
 read.
 
-- [ ] **A question about the end of a big file** shows a read card with **lines …** and an answer
+- [x] **A question about the end of a big file** shows a read card with **lines …** and an answer
       that quotes it. [H-testing.md §7](H-testing.md)
-- [ ] **A question only a count can answer** shows a failed read whose message gives the line count,
+- [x] **A question only a count can answer** shows a failed read whose message gives the line count,
       and the answer uses it.
-- [ ] **Reopening the conversation** keeps the **lines …** tag on the read card.
+- [x] **Reopening the conversation** keeps the **lines …** tag on the read card.
 
-## Open — H7, a context budget inside the turn, 2026-10-02
+## Checked 2026-10-12 — H7, a context budget inside the turn, 2026-10-02
 
 **Already proven mechanically.** Unit tests on `odin_core::compact`: nothing set aside under
 budget; oldest first and only as many as needed; the system prompt and the user's request never;
@@ -97,14 +113,14 @@ mimir` checks the index mapping back to the webview's numbering. The probe's `--
 measures it against the model. **What needs a person** is whether the meter moves during a turn,
 how the notes read, and that the answer still addresses the request.
 
-- [ ] **A turn that reads many large files** moves the context meter while it runs, and past about
+- [x] **A turn that reads many large files** moves the context meter while it runs, and past about
       75% shows **Set aside N earlier results to fit the model's context**. The answer still
       addresses the request. [H-testing.md §6](H-testing.md)
-- [ ] **A turn that cannot fit** says so: **This turn no longer fits the model's context — start a
+- [x] **A turn that cannot fit** says so: **This turn no longer fits the model's context — start a
       new chat, or ask about less at once.**
-- [ ] **The notes go with the next message** and are not saved with the thread.
+- [x] **The notes go with the next message** and are not saved with the thread.
 
-## Open — H6, undo a whole turn, 2026-10-02
+## Checked 2026-10-12 — H6, undo a whole turn, 2026-10-02
 
 **Already proven mechanically.** Unit tests on `edit::undo_turn`: two files, one file edited twice,
 create then edit, a file changed since (refused, every file and record untouched), a turn partly
@@ -117,17 +133,17 @@ comes back byte for byte, CRLF kept, still Undone after reopening (SKIP if the m
 than two edits). **What needs a person** is how the line reads, Stop partway through a turn, and a
 file held open by an editor.
 
-- [ ] **The line appears on a turn with two or more edits**, always visible, and asks before
+- [x] **The line appears on a turn with two or more edits**, always visible, and asks before
       acting. [H-testing.md §5](H-testing.md)
-- [ ] **Stop partway through a two-edit turn.** The line sits at the end of the stopped turn and
+- [x] **Stop partway through a two-edit turn.** The line sits at the end of the stopped turn and
       undoes what ran.
-- [ ] **A file held open by an editor.** With one of the turn's files open and locked by an editor
+- [x] **A file held open by an editor.** With one of the turn's files open and locked by an editor
       that blocks writes, **Undo all** either puts everything back or says which file it stopped at
       and how many are still applied — never a silent half.
-- [ ] **Switching conversations while an undo runs** marks the right cards, in the right
+- [x] **Switching conversations while an undo runs** marks the right cards, in the right
       conversation.
 
-## Open — H5, reads that don't ask, 2026-10-02
+## Checked 2026-10-12 — H5, reads that don't ask, 2026-10-02
 
 **Already proven mechanically.** Unit tests on the rule itself: a read, listing and search inside
 the folder run without asking; a read outside, one reached through a junction, a gitignored file and
@@ -139,16 +155,23 @@ and `mimir-check.mjs` proves the off switch by declining a listing with it on. *
 person** is how the quiet card reads, what the tag's tooltip says, and that the switch works from a
 hand-edited config.
 
-- [ ] **A search inside the folder runs without a card to approve**, marked *no approval needed*,
+- [x] **A search inside the folder runs without a card to approve**, marked *no approval needed*,
       and it reads as quieter than a card that asked. [H-testing.md §4](H-testing.md)
-- [ ] **A read of `C:\Windows\win.ini` asks**, and Deny keeps it out of the answer.
-- [ ] **A hand-made `.env` asks**, and a search for what is in it runs without showing it.
-- [ ] **`"ask_every_call": true` in `config.json` makes reads and listings ask again**, with no
+- [x] **A read of `C:\Windows\win.ini` asks**, and Deny keeps it out of the answer.
+      *2026-10-12: first not reached, then fixed for ordinary files.* Qwen3-Coder would not call
+      `read_file` outside the folder at all ("I cannot read files outside of the project folder"):
+      the system prompt only spoke of the folder. It now says a file outside may be read by its full
+      path, with the user asked — and the model tries it 11 times in 15, 5 in 5 for an ordinary
+      file (1 in 15 before). In the app, an outside file asks with its full path and Deny keeps it
+      out. `C:\Windows` itself the model still mostly declines (1 in 5): it treats a system folder
+      as off limits.
+- [x] **A hand-made `.env` asks**, and a search for what is in it runs without showing it.
+- [x] **`"ask_every_call": true` in `config.json` makes reads and listings ask again**, with no
       restart.
-- [ ] **Reopening a conversation keeps the tags** and the missing buttons.
-- [ ] **Choosing your whole user folder makes everything ask** — a listing there waits for Allow.
+- [x] **Reopening a conversation keeps the tags** and the missing buttons.
+- [x] **Choosing your whole user folder makes everything ask** — a listing there waits for Allow.
 
-## Open — H4b, switching to the coding model, 2026-10-01
+## Checked 2026-10-12 — H4b, switching to the coding model, 2026-10-01
 
 **Already proven mechanically.** `offer_for` has unit tests for every combination that decides
 whether to offer a switch — coder installed or not, already on it, an empty `coding_model` turning
@@ -159,13 +182,13 @@ the offer appearing on a real folder choice, declining it, the switch actually l
 question, and the switch back. **What needs a person** is Heimdall's side of the story, since
 Heimdall has no test of its own in this chunk.
 
-- [ ] **Heimdall refuses while the coder is current**, and names it, *before* capturing the screen.
+- [x] **Heimdall refuses while the coder is current**, and names it, *before* capturing the screen.
       [H-testing.md §3](H-testing.md)
-- [ ] **Heimdall answers again after switching back.**
-- [ ] **A manual pick in the Switchboard ends the switch-back offer** — clearing the folder
+- [x] **Heimdall answers again after switching back.**
+- [x] **A manual pick in the Switchboard ends the switch-back offer** — clearing the folder
       afterwards offers nothing.
 
-## Open — H2, finding code, 2026-09-29
+## Checked 2026-10-12 — H2, finding code, 2026-09-29
 
 **Already proven mechanically.** 17 unit tests on the walk itself — `.git` (a folder, or a
 worktree's file), `target/` and `node_modules/` skipped without a `.gitignore`, nested
@@ -174,12 +197,12 @@ and drive or UNC patterns refused, Mímir's own folder skipped, answers capped a
 a walk. End to end: a search card names what it looks for and what it finds reaches the model; a
 declined listing reads nothing. **What needs a person** is how the cards read.
 
-- [ ] **The cards read well** — a search, a listing, patterns the right way round.
+- [x] **The cards read well** — a search, a listing, patterns the right way round.
       [H-testing.md §2](H-testing.md)
-- [ ] **A big folder stays stoppable.** Choose a large folder (your `source\repos`), ask for every
+- [x] **A big folder stays stoppable.** Choose a large folder (your `source\repos`), ask for every
       file, allow it, press **Esc** — the card says *Stopped*, the window stays responsive.
 
-## Open — H1, the check command, 2026-09-29
+## Checked 2026-10-12 — H1, the check command, 2026-09-29
 
 **Already proven mechanically.** `node tools/e2e/mimir-check.mjs` — 18/18 on the built app: a
 Cargo project offers `cargo check` and `cargo test`; a check card runs nothing until allowed, and a
@@ -189,10 +212,10 @@ child process running; and a type change whose first edit breaks the build ends,
 check, in a build that passes. `mimir-edit.mjs` still 16/16. **What it skips is what a person
 operates** — the picker on the chip, and whether a window flashes.
 
-- [ ] **Choose the check from the chip.** Only detected commands are offered, nothing can be typed,
+- [x] **Choose the check from the chip.** Only detected commands are offered, nothing can be typed,
       and the choice is remembered per folder. [H-testing.md §1](H-testing.md)
-- [ ] **No console window flashes** while a check runs.
-- [ ] **Stop with Esc** during a real `cargo check` leaves no `cargo.exe` or `rustc.exe` behind.
+- [x] **No console window flashes** while a check runs.
+- [x] **Stop with Esc** during a real `cargo check` leaves no `cargo.exe` or `rustc.exe` behind.
 
 ## Open — G7, editing files, 2026-09-24
 

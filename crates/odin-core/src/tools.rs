@@ -353,7 +353,9 @@ pub fn available(editing: bool, check: Option<&str>) -> Vec<Tool> {
 pub fn system_prompt(ws: &Workspace, check: bool) -> String {
     let mut s = format!(
         "You can read and change files in the user's project folder: {}\n\
-         Use paths relative to that folder. To find where something is, use search or list_files \
+         Use paths relative to that folder. You may also read a file outside that folder: call \
+         read_file with its full path, and the user is asked to approve it. To find where \
+         something is, use search or list_files \
          rather than guessing a path. To answer a question about a file, read it — never \
          guess what it says. To change a file, read it with read_file first, then use edit_file \
          with text copied exactly from what you read. Only change what the user asked for. When \
@@ -774,7 +776,12 @@ pub fn read_target(path: &str, ws: Option<&Workspace>) -> (PathBuf, String) {
     }
     let open = std::path::absolute(&joined).unwrap_or(joined);
     let open = std::fs::canonicalize(&open).unwrap_or(open);
-    let shown = edit::plain(&open);
+    // Inside the folder, relative, as edit cards show a path; anywhere else the
+    // whole resolved path, since where it really is is what the card asks about.
+    let shown = match ws {
+        Some(ws) => ws.relative(&open),
+        None => edit::plain(&open),
+    };
     (open, shown)
 }
 
@@ -1577,7 +1584,8 @@ mod tests {
         s.write("src/main.rs", "x");
         let (open, shown) = read_target("src/main.rs", Some(&ws));
         assert_eq!(open, std::fs::canonicalize(ws.root().join("src/main.rs")).unwrap());
-        assert!(shown.ends_with(r"src\main.rs"), "{shown}");
+        // Inside the folder: relative, the way an edit card shows a path.
+        assert_eq!(shown, "src/main.rs");
         assert!(!shown.starts_with(r"\\?\"), "shown to a person, so no verbatim prefix: {shown}");
         // Absolute paths are left alone; with no folder, nothing is joined.
         assert_eq!(read_target(r"C:\x\y.txt", Some(&ws)).1, r"C:\x\y.txt");
@@ -1594,9 +1602,10 @@ mod tests {
         assert_eq!(open, std::fs::canonicalize(s.dir.join("outside.txt")).unwrap());
         assert_eq!(shown, edit::plain(&open));
         assert!(!shown.contains("..") && !shown.starts_with(r"\\?\"), "{shown}");
-        // A file that is not there yet is still shown resolved.
+        // A file that is not there yet is still shown resolved — and, being inside
+        // the folder, relative to it.
         let (_, shown) = read_target("src/../nope.txt", Some(&ws));
-        assert!(!shown.contains("..") && shown.ends_with(r"project\nope.txt"), "{shown}");
+        assert_eq!(shown, "nope.txt");
     }
 
     /// The `\\?\UNC\…` form of a share, shown the way a person writes it.

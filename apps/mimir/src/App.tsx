@@ -1568,6 +1568,9 @@ function App() {
    * thread that is open alone. The save waits behind any save in flight, so two
    * cannot race into two files.
    */
+  // The banner an undo last put up, so a later undo that succeeds can take it
+  // down again — and only it, not an unrelated error that has replaced it since.
+  const undoBanner = useRef("");
   const undoWith = useCallback(
     async (key: string, call: () => Promise<{ done: string[]; note?: string }>) => {
       if (undoingRef.current) return;
@@ -1582,7 +1585,8 @@ function App() {
         try {
           out = await call();
         } catch (err) {
-          setError(String(err));
+          undoBanner.current = String(err);
+          setError(undoBanner.current);
           return;
         }
         if (out.done.length) {
@@ -1597,7 +1601,15 @@ function App() {
             if (id) await persist(markUndone(snapshot, out.done), id, false);
           }
         }
-        if (out.note) setError(out.note);
+        if (out.note) {
+          undoBanner.current = out.note;
+          setError(out.note);
+        } else if (undoBanner.current) {
+          // It worked this time: the earlier "stopped at …" no longer holds.
+          const stale = undoBanner.current;
+          undoBanner.current = "";
+          setError((e) => (e === stale ? "" : e));
+        }
       } finally {
         undoingRef.current = false;
         setUndoing(null);
@@ -2160,38 +2172,42 @@ function App() {
 
                 <span className="spacer" />
 
-                <button
-                  className="model-pill"
-                  onClick={() => setShowModels(true)}
-                  title={model ?? "Choose a model"}
-                >
-                  <span className={"dot" + (current?.isResident ? " on" : "")} />
-                  {short ? (
-                    <>
-                      <span className="mp-family">{short.family}</span>
-                      <span className="mp-size">{short.size}</span>
-                    </>
-                  ) : (
-                    <span>Choose a model</span>
-                  )}
-                  <I.Chevron width={14} height={14} />
-                </button>
-                {/* While an answer is being written, the same place stops it. */}
-                {streaming ? (
-                  <button className="send stop" onClick={stop} title="Stop (Esc)" aria-label="Stop">
-                    <I.Stop />
-                  </button>
-                ) : (
+                {/* The model and Send move as one: when the chips fill the row,
+                    they wrap to a row of their own, on the right, together. */}
+                <span className="bar-end">
                   <button
-                    className="send"
-                    onClick={() => void send()}
-                    disabled={!canSend}
-                    title="Send (Enter)"
-                    aria-label="Send"
+                    className="model-pill"
+                    onClick={() => setShowModels(true)}
+                    title={model ?? "Choose a model"}
                   >
-                    <I.ArrowUp />
+                    <span className={"dot" + (current?.isResident ? " on" : "")} />
+                    {short ? (
+                      <>
+                        <span className="mp-family">{short.family}</span>
+                        <span className="mp-size">{short.size}</span>
+                      </>
+                    ) : (
+                      <span>Choose a model</span>
+                    )}
+                    <I.Chevron width={14} height={14} />
                   </button>
-                )}
+                  {/* While an answer is being written, the same place stops it. */}
+                  {streaming ? (
+                    <button className="send stop" onClick={stop} title="Stop (Esc)" aria-label="Stop">
+                      <I.Stop />
+                    </button>
+                  ) : (
+                    <button
+                      className="send"
+                      onClick={() => void send()}
+                      disabled={!canSend}
+                      title="Send (Enter)"
+                      aria-label="Send"
+                    >
+                      <I.ArrowUp />
+                    </button>
+                  )}
+                </span>
               </div>
             </div>
 

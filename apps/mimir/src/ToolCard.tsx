@@ -454,6 +454,9 @@ export function ToolCard({
   const del = name === "delete_file";
   const move = name === "move_file";
   const folders = entry.folders ?? [];
+  // A delete or a move carries no text change: its card shows the size, not a
+  // "+0 −0" and an empty "Show changes" (seen 2026-10-12).
+  const lines = entry.diff && !del && !move ? entry.diff : undefined;
   const label =
     state === "pending"
       ? "Review"
@@ -486,10 +489,10 @@ export function ToolCard({
           <bdi dir="ltr">{move && entry.to ? `${path} → ${entry.to}` : path}</bdi>
         </code>
         {(del || move) && entry.size != null && <span className="tool-range">{sizeOf(entry.size)}</span>}
-        {entry.diff && (
-          <span className="counts" aria-label={`${entry.diff.added} lines added, ${entry.diff.removed} removed`}>
-            <span className="plus">+{entry.diff.added}</span>
-            <span className="minus">−{entry.diff.removed}</span>
+        {lines && (
+          <span className="counts" aria-label={`${lines.added} lines added, ${lines.removed} removed`}>
+            <span className="plus">+{lines.added}</span>
+            <span className="minus">−{lines.removed}</span>
           </span>
         )}
         <span className="tool-state">{label}</span>
@@ -516,7 +519,7 @@ export function ToolCard({
       {state === "pending" && (
         <>
           {folders.length > 0 && <FolderNote folders={folders} />}
-          {entry.diff && <Diff diff={entry.diff} />}
+          {lines && <Diff diff={lines} />}
           <div className="tool-ask">
             <p>
               {del
@@ -537,10 +540,10 @@ export function ToolCard({
         </>
       )}
 
-      {(state === "ran" || state === "undone") && entry.diff && (
+      {(state === "ran" || state === "undone") && lines && (
         <details className="tool-result">
           <summary>{state === "undone" ? "Show what was undone" : "Show changes"}</summary>
-          <Diff diff={entry.diff} />
+          <Diff diff={lines} />
         </details>
       )}
       {state === "ran" && folders.length > 0 && <FolderNote folders={folders} made />}

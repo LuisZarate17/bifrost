@@ -1276,7 +1276,8 @@ fn run_auto(
     match auto {
         tools::Auto::Read { real, range } => {
             let text = tools::read_unasked(&real, range)?;
-            Some(("read_file", edit::plain(&real), range, Ran::text(text)))
+            // Always inside the folder, so shown the way edit cards show a path.
+            Some(("read_file", ws.relative(&real), range, Ran::text(text)))
         }
         tools::Auto::List { pattern } => {
             let shown = search::describe_list(pattern.as_deref());

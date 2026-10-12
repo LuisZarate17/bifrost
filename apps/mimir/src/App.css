@@ -1613,15 +1613,26 @@ kbd {
   opacity: 0.6;
 }
 
+/* With the folder, its check and the notes chip all showing, the row is wider than
+   the composer (seen 2026-10-12: Send pushed past the edge, and off-screen in a
+   narrow window). So the row wraps, and the model and Send — one group, .bar-end —
+   move to a row of their own on the right, rather than any chip's name being cut. */
 .composer-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 4px;
+  gap: 6px 4px;
   margin-left: -6px;
   cursor: default;
 }
 .composer-bar .spacer {
   flex: 1;
+}
+.bar-end {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
 }
 .composer-bar label.icon-btn {
   cursor: pointer;
@@ -1681,6 +1692,7 @@ kbd {
 }
 
 .send {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;

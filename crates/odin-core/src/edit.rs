@@ -1272,7 +1272,18 @@ fn write_replacing(path: &Path, bytes: &[u8], expect: u64) -> Result<(), String>
     }
     let replaced = std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        format!("replacing {}: {e}", plain(path))
+        // What an editor that holds the file open without letting others replace
+        // it looks like here: "Access is denied (os error 5)", which reads as a
+        // permissions fault. Said as what it almost always is (seen 2026-10-12).
+        if blocked_by_another_program(&e) {
+            format!(
+                "{} is open in another program that won't let it be replaced (or it is read-only); \
+                 nothing was changed",
+                plain(path)
+            )
+        } else {
+            format!("replacing {}: {e}", plain(path))
+        }
     });
     drop(held);
     replaced
@@ -1282,6 +1293,12 @@ fn write_replacing(path: &Path, bytes: &[u8], expect: u64) -> Result<(), String>
 /// forbids ours. Only Windows has it.
 fn is_sharing_violation(e: &std::io::Error) -> bool {
     cfg!(windows) && e.raw_os_error() == Some(32)
+}
+
+/// A replace refused because the file is held elsewhere: a sharing or lock
+/// violation, or the access-denied that a handle without delete sharing gives.
+fn blocked_by_another_program(e: &std::io::Error) -> bool {
+    cfg!(windows) && matches!(e.raw_os_error(), Some(5 | 32 | 33))
 }
 
 /// [`fingerprint_held`], tried up to three more times, 50 ms apart, while the only
@@ -2026,6 +2043,13 @@ pub fn undo_turn(ids: &[String], backups: &Path) -> Result<TurnUndo, String> {
         match undo(id, backups) {
             Ok(_) => restored.push(id.clone()),
             Err(error) => {
+                // The window says "stopped at {display}: {error}", so the file's full
+                // path again inside the error only makes the line longer.
+                let full = plain(&record.path);
+                let error = match error.strip_prefix(&full) {
+                    Some(rest) => format!("it{rest}"),
+                    None => error.replace(&full, &record.display),
+                };
                 let failed = TurnFailure { id: id.clone(), display: record.display.clone(), error };
                 return Ok(TurnUndo { restored, already, failed: Some(failed) });
             }
@@ -3909,6 +3933,27 @@ mod tests {
         assert_eq!(s.read("a.txt"), b"one
 ");
         assert!(!s.dir.join("project").join(".a.txt.odin-tmp").exists());
+    }
+
+    /// An editor that holds the file open for reading only, and shares nothing but
+    /// reading: the check passes, then the replacing rename is refused with
+    /// "Access is denied" — said as what it is, not as a permissions fault.
+    #[cfg(windows)]
+    #[test]
+    fn a_file_held_by_an_editor_that_shares_only_reading_is_reported_plainly() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let s = Sandbox::new("held-reader");
+        let p = s.write("a.txt", b"one\n");
+        let editor = std::fs::OpenOptions::new().read(true).share_mode(1).open(&p).unwrap();
+        let err = write_replacing(&p, b"two\n", fingerprint(b"one\n")).unwrap_err();
+        drop(editor);
+        assert!(err.contains("is open in another program that won't let it be replaced"), "{err}");
+        assert!(!err.contains("os error"), "{err}");
+        assert_eq!(s.read("a.txt"), b"one\n");
+        assert!(!s.dir.join("project").join(".a.txt.odin-tmp").exists());
+        // Once the editor lets go, the same write goes through.
+        write_replacing(&p, b"two\n", fingerprint(b"one\n")).unwrap();
+        assert_eq!(s.read("a.txt"), b"two\n");
     }
 
     #[test]
