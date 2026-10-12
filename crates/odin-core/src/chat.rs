@@ -779,6 +779,16 @@ mod tests {
         for (i, messages) in conversations.into_iter().enumerate() {
             let tools = odin_tools_for_live_test();
             let native = chat(model, &messages, &tools, options).expect("native chat");
+            // Read the native reply the way `chat_tools` does. Qwen3-Coder sometimes
+            // writes its call without the `<tool_call>` opener, Ollama passes it
+            // through as text, and the app reads it out of the content (H4 case 4).
+            // Compared before that step, a reply the app handles fine failed here —
+            // conversation 0, 2026-10-11, with the prompt token counts equal.
+            let native = if native.tool_calls().is_empty() && native.message.content.contains("<function=") {
+                passed_through(native, &tools)
+            } else {
+                native
+            };
             let recovered = recover(model, &messages, &tools, options, Layout::Qwen3Coder).expect("raw recover");
 
             let names = |r: &ChatReply| r.tool_calls().iter().map(|c| c.function.name.clone()).collect::<Vec<_>>();

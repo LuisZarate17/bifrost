@@ -342,15 +342,21 @@ fn is_identifier(name: &str) -> bool {
 /// format (a doc sample with a `<parameter=mode>` block followed by ordinary
 /// prose) fails it, so those tags stay inside the value instead of silently
 /// cutting it short.
+///
+/// "The rest" stops at the call's own end, its last `</tool_call>` (or, for a
+/// call without the wrapper, its last `</function>`): a sentence the model writes
+/// after the call is not part of it, and must not make a real trailing parameter
+/// look like quoted text.
 fn only_parameter_blocks_follow(region: &str, from: usize) -> bool {
     const CLOSE: &str = "</parameter>";
+    let end = call_end(region);
     let mut pos = from;
     loop {
-        let Some(rel) = region[pos..].find(CLOSE) else {
+        let Some(rel) = region.get(pos..end).and_then(|s| s.find(CLOSE)) else {
             return false;
         };
         pos = skip_ws(region, pos + rel + CLOSE.len());
-        if let Some(rest) = region[pos..].strip_prefix("<parameter=")
+        if let Some(rest) = region.get(pos..end).and_then(|s| s.strip_prefix("<parameter="))
             && let Some(gt) = rest.find('>')
             && is_identifier(&rest[..gt])
         {
@@ -362,8 +368,22 @@ fn only_parameter_blocks_follow(region: &str, from: usize) -> bool {
                 pos = skip_ws(region, pos + tail.len());
             }
         }
-        return pos >= region.len();
+        return pos >= end;
     }
+}
+
+/// Where a call's region stops being the call: just after its last
+/// `</tool_call>`, or its last `</function>` when it has no wrapper — but only
+/// when no `</parameter>` follows it, since one that does means the tag was
+/// quoted inside a value of a call that never closed. Otherwise the region's end.
+fn call_end(region: &str) -> usize {
+    for tag in ["</tool_call>", "</function>"] {
+        if let Some(at) = region.rfind(tag) {
+            let after = at + tag.len();
+            return if region[after..].contains("</parameter>") { region.len() } else { after };
+        }
+    }
+    region.len()
 }
 
 struct ValueEnd {
@@ -1075,6 +1095,52 @@ null
         let content = "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=path>\nb.rs\n</parameter>\n</function>\n</tool_call>";
         let (_, calls, _) = extract_calls(content, &small_tools());
         assert_eq!(calls[0].function.arguments["path"], json!("b.rs"));
+    }
+
+    /// A sentence after the call is not part of it (re-check of R-05, 2026-10-11):
+    /// before, any text there made the trailing parameter look quoted, and the
+    /// value before it swallowed it again.
+    #[test]
+    fn prose_after_the_call_does_not_undo_the_split() {
+        let read = "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=range>\n1-50\n</parameter>\n</function>\n</tool_call>";
+        let edit = "<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\nx\n</parameter>\n<parameter=new_text>\ny\n</parameter>\n<parameter=replace_all>\ntrue\n</parameter>\n</function>\n</tool_call>";
+        let twice = "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=path>\nb.rs\n</parameter>\n</function>\n</tool_call>";
+        let bare = "<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\nx\n</parameter>\n<parameter=new_text>\ny\n</parameter>\n<parameter=replace_all>\ntrue\n</parameter>\n</function>";
+        for after in ["\nDone.", "\n\nI replaced x with y in a.rs.", " Let me know."] {
+            let (_, calls, _) = extract_calls(&format!("{read}{after}"), &small_tools());
+            assert_eq!(calls[0].function.arguments["path"], json!("a.rs"), "read + {after:?}");
+            let (_, calls, _) = extract_calls(&format!("{edit}{after}"), &small_tools());
+            assert_eq!(calls[0].function.arguments["new_text"], json!("y"), "edit + {after:?}");
+            let (_, calls, _) = extract_calls(&format!("{twice}{after}"), &small_tools());
+            assert_eq!(calls[0].function.arguments["path"], json!("b.rs"), "repeated + {after:?}");
+            let (_, calls, _) = extract_calls(&format!("{bare}{after}"), &small_tools());
+            assert_eq!(calls[0].function.arguments["new_text"], json!("y"), "no wrapper + {after:?}");
+        }
+    }
+
+    /// The other side of the same rule: a value that quotes the format still comes
+    /// back whole when prose follows the call, and when a cut-off call quotes
+    /// `</function>` inside a value.
+    #[test]
+    fn a_quoted_format_stays_in_its_value_with_prose_after_and_in_a_cut_off_call() {
+        let v = "Example:\n<parameter=path>\nsrc/a.rs\n</parameter>\n<parameter=mode>\nfast\n</parameter>\nEnd";
+        let content = format!(
+            "<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\no\n</parameter>\n<parameter=new_text>\n{v}\n</parameter>\n</function>\n</tool_call>\nDone."
+        );
+        let (_, calls, failures) = extract_calls(&content, &small_tools());
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(calls[0].function.arguments["new_text"], json!(v));
+
+        // The last value quotes a parameter block and `</function>`, and the reply
+        // stops after the value's real close. The quoted `</function>` is not the
+        // call's end, so the quoted block is not taken for a real parameter.
+        let quoted = "x\n</parameter>\n<parameter=mode>\nfast\n</parameter>\n</function>\nmore";
+        let cut = format!(
+            "<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\no\n</parameter>\n<parameter=new_text>\n{quoted}\n</parameter>\n"
+        );
+        let (_, calls, failures) = extract_calls(&cut, &small_tools());
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(calls[0].function.arguments["new_text"], json!(quoted));
     }
 
     #[test]

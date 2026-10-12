@@ -445,4 +445,5 @@ if (counted.length === 0) {
   console.log("Nothing was checked: the model made no edit in any run. Not a pass.");
   process.exit(1);
 }
-process.exit(failed ? 1 : 0);
+// 1 for a fail, 2 when a scenario was skipped: a skip proved nothing, so it must not read as a pass.
+process.exit(failed ? 1 : skipped ? 2 : 0);

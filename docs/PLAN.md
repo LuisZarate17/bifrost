@@ -9,7 +9,7 @@ captures the screen and streams an answer into the popup. Model chosen at A2:
 (BUILD.md D1/D2), not a feature.
 
 **Now: Stage H is complete and pushed** — Mímir finds code, checks its work and runs longer.
-The independent review's round 1 is done and round 2 is under way; see [`H-status.md`](H-status.md)
+The independent review's two rounds of fixes are done, and re-checked 2026-10-11; see [`H-status.md`](H-status.md)
 and [`../stages/STAGE-H.md`](../stages/STAGE-H.md). The checks by hand for Stages G and H still wait in
 [`PENDING-CHECKS.md`](PENDING-CHECKS.md).
 

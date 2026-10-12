@@ -912,8 +912,10 @@ async fn ask_with_tools(
     // auto, rejected, stuck — leaves through the one place that adds the prompt's
     // numbers, instead of each of a dozen returns remembering to.
     let mut outcome: Result<serde_json::Value, String> = async {
-        // The first call only. A model that asks for several at once is handled one
-        // at a time, because each one needs its own approval.
+        // The first call only; a model that asks for several at once gets the rest
+        // dropped and asks again. That was because each needed its own approval;
+        // since H5 an automatic one does not, so several could run in one round.
+        // Left as it is (review R-34): Qwen3-Coder asks for one call per reply.
         let Some(call) = reply.tool_calls().first().cloned() else {
             return Ok(serde_json::json!({
                 "kind": "answer",

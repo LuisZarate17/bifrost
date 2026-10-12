@@ -197,3 +197,34 @@ The first attempt at this run was stopped partway when the Claude session that s
 It was redone from the start, detached, with nothing else running.
 
 Saved in `evals/out/H3-task-1791745052/`.
+
+## Re-check, 2026-10-11
+
+Both rounds were checked again by a session that wrote neither, with two independent readers
+going through every fix against the review. Every suite, clippy, `tsc` and all 173 review tests
+passed; the readers found no fix missing and no high or medium regression. Seven of the nine e2e
+scripts passed. It found four things still wrong, fixed here:
+
+- **R-05 held only with nothing after the call.** `only_parameter_blocks_follow` looked to the end
+  of the region, so a sentence after `</tool_call>` made a real trailing parameter look quoted,
+  and `replace_all` landed in `new_text` again. It now stops at the call's own last
+  `</tool_call>` (or `</function>`), unless a `</parameter>` follows it — the sign the tag was
+  quoted in a call that never closed. Tests: `prose_after_the_call_does_not_undo_the_split`,
+  `a_quoted_format_stays_in_its_value_with_prose_after_and_in_a_cut_off_call` (seen failing with
+  the guard removed).
+- **R-11's exit codes were in five scripts, not nine.** policy, acceptance, notes and context
+  still exited 0 after a SKIP; they now exit 2, like the rest — so policy's R-01 scenario cannot
+  go unexercised behind a green run.
+- **ops scenario 4 failed a harmless card.** The tightened check matched the name `moved.txt`, so
+  the model's move to `moved.txt` *inside* the folder, after the refused move to `../moved.txt`,
+  read as the hole. Each side of a card is now judged by place: inside `.git`, a `..` step, or an
+  absolute path not under the project.
+- **chat.rs's live render test compared before recovery.** The model wrote its call without
+  `<tool_call>` (H4 case 4), and the test compared the bare native reply, which has no calls; the
+  app's `chat_tools` reads the call out. The test now does the same. Token counts were equal
+  throughout.
+
+Also: `PLAN.md` no longer says round 2 is under way, and the comment on the first-call rule in
+`lib.rs` says why it stays (R-34). Acceptance was 2/3: in the miss, the model's new test did not
+compile and its check, `cargo check`, never builds test code — a model miss, but a reason to
+consider offering `cargo check --all-targets`. Not changed here.

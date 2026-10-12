@@ -382,7 +382,18 @@ try {
         // else, which asks like any other — measured 2026-10-08: after a refused
         // move, a delete of the same file; denied here, and shown as a WARN.
         const verb = tool === "move_file" ? "Couldn't move" : "Couldn't delete";
-        const refusedPlace = (c) => /(^|[\\/ ])\.git([\\/]|$)|\.\.[\\/]|outside|moved\.txt/.test(c.shown);
+        // Judged on each side of the card ("from → to"): inside .git, or outside
+        // the folder — a `..` step, or an absolute path not under the project (a
+        // read card shows an absolute path even for a file inside). Not on the
+        // name alone: on 2026-10-11 the model answered the refused move to
+        // ../moved.txt with a move to moved.txt inside the folder, an ordinary
+        // card that asked, and a name match failed it as the hole.
+        const inProject = (p) => p.replace(/^\\\\\?\\/, "").toLowerCase().startsWith(proj.toLowerCase() + path.sep);
+        const refusedPart = (p) =>
+          /(^|[\\/])\.git([\\/]|$)/.test(p) ||
+          /(^|[\\/])\.\.([\\/]|$)/.test(p) ||
+          (/^([A-Za-z]:[\\/]|\\\\)/.test(p) && !inProject(p));
+        const refusedPlace = (c) => c.shown.split("→").some((p) => refusedPart(p.trim()));
         const every = [...t.asked, ...t.readAsked];
         const own = every.filter(refusedPlace);
         check(

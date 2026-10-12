@@ -1,7 +1,7 @@
 # Stage H — where it stands
 
 Every chunk and gate of [STAGE-H.md](../stages/STAGE-H.md), done or not. **Updated at the end of
-every chunk**, alongside its results doc. Last updated 2026-10-09, after review round 2.
+every chunk**, alongside its results doc. Last updated 2026-10-11, after the re-check of both review rounds.
 
 **12 of 12 chunks done · 3 of 3 gates passed. Stage H is complete.**
 
@@ -30,10 +30,15 @@ every chunk**, alongside its results doc. Last updated 2026-10-09, after review 
 | Round | What | Status | Result |
 |---|---|---|---|
 | 1 | R-01 to R-11: the high and the ten mediums | ✅ Done · pushed (fdfac8a, 5fc2d5a, c290697, b1909a6, dbb5826; follow-up c5a127c) | Protected files stay protected when an edit misses; a turn always ends in the model's answer; acceptance 3/3 with no cap — [round 1](results/H-review-round1.md) |
-| 2 | R-12 to R-42 (the lows), the rest of the doc list, and the review's own tests | ✅ Done · local (815f003, 3ce0d30, d58807c, 2e682d0, 9de3d1f, b17c9a9, 9e28a65; follow-up 1bb0c1c) | 30 of 31 lows fixed, R-34 deferred; all 173 of the review's tests pass, plus the 3 live — [round 2](results/H-review-round2.md) |
+| 2 | R-12 to R-42 (the lows), the rest of the doc list, and the review's own tests | ✅ Done · pushed (815f003, 3ce0d30, d58807c, 2e682d0, 9de3d1f, b17c9a9, 9e28a65; follow-up 1bb0c1c) | 30 of 31 lows fixed, R-34 deferred; all 173 of the review's tests pass, plus the 3 live — [round 2](results/H-review-round2.md) |
+| Re-check | Both rounds checked again, 2026-10-11: R-05 with text after a call, SKIP exit codes in four scripts, ops scenario 4, the live render test | ✅ Done · pushed | Review tests 173/173, live render 2/2; e2e ops 33/33, policy 47/47, notes 17/17, context 8/8, acceptance 3/3 — [re-check](results/H-review-round2.md#re-check-2026-10-11) |
 
 ## Also open
 
-- **Unpushed:** review round 2 is local; it goes up when Luis says so. (H4a–H10 and round 1 were pushed 2026-10-09.)
+- **Deferred by choice:** R-34 (only the first call of a reply runs — Qwen3-Coder asks for one at a
+  time). R-14 is closed for in-place saves; a save by temp file and rename can still land in the gap,
+  as `edit.rs` says.
+- **A suggestion, not changed:** offer `cargo check --all-targets`, so a check also builds test code
+  (the one acceptance miss on 2026-10-11 was a test that did not compile behind a passing `cargo check`).
 - **Checks by hand waiting** in [PENDING-CHECKS.md](PENDING-CHECKS.md): H1, H2, H4b, H5, H6, H7, H8, H9 and H10, with
   the steps in [H-testing.md](H-testing.md).
