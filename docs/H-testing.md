@@ -291,7 +291,8 @@ Use `practice` (`node tools/practice.mjs`) as the folder, with Tools on and a ch
 ---
 
 *H3 and H4 are benchmarks, run from the command line — nothing to check by hand. Stage H is
-complete with H10; Stage I's sections will go here.*
+complete with H10. Stage I's checks have their own worksheet, `I-testing.md`, started with
+chunk I0.*
 
 ## After this
 

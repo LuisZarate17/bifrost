@@ -11,7 +11,8 @@ know what you want but not where it lives, it is on this page.
 - **Why was this decided?** → [PLAN.md](PLAN.md)
 - **How do I build and run it?** → [../README.md](../README.md)
   `npm run app`, never a plain `cargo build`.
-- **What's next?** → [../stages/STAGE-G.md](../stages/STAGE-G.md)
+- **What's next?** → [../stages/STAGE-I.md](../stages/STAGE-I.md), and where it stands in
+  [I-status.md](I-status.md)
 - **Where is that function?** → [Where things live in code](#where-things-live-in-code)
 - **What was actually measured?** → [Results](#results)
 
@@ -42,6 +43,8 @@ something you can press.
 **[H-status.md](H-status.md)** — every Stage H chunk and gate, done or not, with its commit and
 one-line result. Updated at the end of each chunk.
 
+**[I-status.md](I-status.md)** — the same chart for Stage I.
+
 **[PENDING-CHECKS.md](PENDING-CHECKS.md)** — things no tool call can verify, because they need a
 keypress, a hover, or a second machine. Where "built but never actually pressed" is tracked.
 
@@ -58,6 +61,10 @@ records of what happened.
   longer: twelve chunks (H1–H10, plus H4a and H4b) in four phases, each gated on a measurement. H1 (the check command), H2
   (finding code) and H3 (the benchmark of real work) built; H4 measured three coding models;
   Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5 and H6 built. H7 built. H8 built. H9 built. H10 built — Stage H complete.
+- **[STAGE-I.md](../stages/STAGE-I.md)** — the rename to **Bifrost** (Heimdall becomes **Vidar**,
+  Mímir becomes **Mimir**), the turn loop moved into the shared crate, and **Hugin**, a terminal
+  agent on it that works with Claude Code both ways. Eight chunks in four phases, each gated; where
+  it stands is [I-status.md](I-status.md). Set 2026-10-12.
 
 ---
 

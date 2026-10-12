@@ -8,10 +8,14 @@ captures the screen and streams an answer into the popup. Model chosen at A2:
 `qwen3-vl:8b-instruct-q4_K_M`. What is left of the original plan is one deferred testing round
 (BUILD.md D1/D2), not a feature.
 
-**Now: Stage H is complete and pushed** — Mímir finds code, checks its work and runs longer.
+**Stage H is complete and pushed** — Mímir finds code, checks its work and runs longer.
 The independent review's two rounds of fixes are done, and re-checked 2026-10-11; see [`H-status.md`](H-status.md)
-and [`../stages/STAGE-H.md`](../stages/STAGE-H.md). The checks by hand for Stages G and H still wait in
-[`PENDING-CHECKS.md`](PENDING-CHECKS.md).
+and [`../stages/STAGE-H.md`](../stages/STAGE-H.md).
+
+**Now: Stage I, set 2026-10-12** — the rename to **Bifrost** (Heimdall becomes **Vidar**, Mímir
+becomes **Mimir**), the turn loop moved into the shared crate, and **Hugin**, a terminal agent on
+it. See [`../stages/STAGE-I.md`](../stages/STAGE-I.md) and [`I-status.md`](I-status.md). The
+checks by hand for Stage G still wait in [`PENDING-CHECKS.md`](PENDING-CHECKS.md).
 
 **Repo root:** `C:\Users\you\source\repos\odin` *(renamed from `warden` on 2026-09-25, the same
 day the GitHub repo became `LuisZarate17/odin`)*
