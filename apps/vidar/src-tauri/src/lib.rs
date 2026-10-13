@@ -28,20 +28,20 @@ use windows::Win32::Foundation::{HWND, RECT};
 /// only a history can hold more than one screenshot plus what was already said
 /// about them.
 const OLLAMA_URL: &str = "http://127.0.0.1:11434/api/chat";
-// DEFAULT_MODEL and NUM_CTX moved to odin_core::config at Before-G0 step 3, so
+// DEFAULT_MODEL and NUM_CTX moved to bifrost_core::config at Before-G0 step 3, so
 // the CLI and the popup finally agree. They had drifted on num_ctx - 8192 there
 // against 32768 here - and Ollama keys a runner by model AND context, so every
 // `odin warm` was thrown away by the next hotkey press. Measured 2026-09-19:
 // a 3.09s reload each way. The VRAM ladder that chose 32768 moved with it.
 
 // The reasoning that picked 32768 - the image-token measurements and the VRAM
-// ladder showing 65536 spills to system RAM - moved to odin_core::config with
+// ladder showing 65536 spills to system RAM - moved to bifrost_core::config with
 // the constant itself.
-use odin_core::config::DEFAULT_NUM_CTX as NUM_CTX;
+use bifrost_core::config::DEFAULT_NUM_CTX as NUM_CTX;
 
 /// The shared settings, read off the async worker.
 ///
-/// odin_core is blocking by design and this crate’s rule is that every call into
+/// bifrost_core is blocking by design and this crate’s rule is that every call into
 /// it goes through spawn_blocking - a rule worth following even for a file read
 /// this small, because the exception is what people remember rather than the
 /// reason for it. A missing or corrupt file yields the built-in defaults, so
@@ -50,8 +50,8 @@ use odin_core::config::DEFAULT_NUM_CTX as NUM_CTX;
 /// Read per request for now. G3 is what makes that *matter*: re-reading on every
 /// summon is how switching the model in Mímir reaches the popup without a
 /// restart.
-async fn defaults() -> odin_core::config::Config {
-    tauri::async_runtime::spawn_blocking(odin_core::config::load)
+async fn defaults() -> bifrost_core::config::Config {
+    tauri::async_runtime::spawn_blocking(bifrost_core::config::load)
         .await
         .unwrap_or_default()
 }
@@ -263,7 +263,7 @@ async fn ask_about_screen(
     // worse failure than the one it is guarding against.
     let tag = model.clone();
     if let Ok(Ok(detail)) =
-        tauri::async_runtime::spawn_blocking(move || odin_core::ollama::show_cached(&tag)).await
+        tauri::async_runtime::spawn_blocking(move || bifrost_core::ollama::show_cached(&tag)).await
     {
         if !detail.has("vision") {
             let _ = on_event.send(StreamEvent::NoVision { model: model.clone() });
@@ -275,12 +275,12 @@ async fn ask_about_screen(
     // waits - 12.6s measured on a busy card - and reporting it second meant the
     // popup said "Reading your screen..." while it was actually waiting on a
     // server that had not started yet.
-    if !tauri::async_runtime::spawn_blocking(odin_core::ollama::is_running)
+    if !tauri::async_runtime::spawn_blocking(bifrost_core::ollama::is_running)
         .await
         .unwrap_or(false)
     {
         let _ = on_event.send(StreamEvent::StartingOllama);
-        let started = tauri::async_runtime::spawn_blocking(odin_core::ollama::ensure_running)
+        let started = tauri::async_runtime::spawn_blocking(bifrost_core::ollama::ensure_running)
             .await
             .map_err(|e| format!("start thread panicked: {e}"))?;
         match started {
@@ -486,18 +486,18 @@ async fn ask_with_turns(
     // Cold? Say so before the wait, not after. Checked rather than assumed: the
     // model may have been warmed from the tray, from the CLI, or by Ollama's own
     // timeout not having expired yet.
-    // odin_core is blocking by design - both its other callers drive it from a
+    // bifrost_core is blocking by design - both its other callers drive it from a
     // thread of their own. Calling it straight from this async command spins up a
     // second tokio runtime inside reqwest and then drops it in an async context,
     // which panics the worker and kills the request: "Cannot drop a runtime in a
     // context where blocking is not allowed". So it goes off-thread, like the tray
     // already does.
-    // Off the async worker, like every other odin_core call — it is blocking by
+    // Off the async worker, like every other bifrost_core call — it is blocking by
     // design, and dropping its runtime in an async context panics.
     let model_for_check = model.clone();
     let resident = tauri::async_runtime::spawn_blocking(move || {
-        odin_core::ollama::ps()
-            .map(|m| odin_core::ollama::find(&m, &model_for_check).is_some())
+        bifrost_core::ollama::ps()
+            .map(|m| bifrost_core::ollama::find(&m, &model_for_check).is_some())
             .unwrap_or(false)
     })
     .await
@@ -1946,7 +1946,7 @@ pub fn run() {
             // **This is also what makes the tray's warm useful again.** It loads
             // at the same num_ctx the popup asks with, so the two no longer evict
             // each other — measured 2026-09-19 at a 3.09s reload every switch.
-            let cfg = odin_core::config::load();
+            let cfg = bifrost_core::config::load();
             let power = std::sync::Arc::new(tray::Power::new(cfg.num_ctx));
             app.manage(power.clone());
             if let Err(e) = tray::install(app.handle(), power) {

@@ -7,10 +7,10 @@
 // application dies with the console that launched it. Closing a terminal took
 // Heimdall down with it.
 //
-// The logs are not lost — `heimdall_lib::run` redirects them to a file. See
+// The logs are not lost — `vidar_lib::run` redirects them to a file. See
 // `redirect_log_to_file`.
 #![windows_subsystem = "windows"]
 
 fn main() {
-    heimdall_lib::run()
+    vidar_lib::run()
 }

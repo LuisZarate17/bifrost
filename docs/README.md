@@ -10,7 +10,7 @@ know what you want but not where it lives, it is on this page.
 - **Where does the project stand?** → [BUILD.md](BUILD.md)
 - **Why was this decided?** → [PLAN.md](PLAN.md)
 - **How do I build and run it?** → [../README.md](../README.md)
-  `npm run app`, never a plain `cargo build`.
+  `npm run app:vidar`, never a plain `cargo build`.
 - **What's next?** → [../stages/STAGE-I.md](../stages/STAGE-I.md), and where it stands in
   [I-status.md](I-status.md)
 - **Where is that function?** → [Where things live in code](#where-things-live-in-code)

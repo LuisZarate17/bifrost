@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Mímir",
+  "productName": "Mimir",
   "version": "0.1.0",
-  "identifier": "com.odin.mimir",
+  "identifier": "com.bifrost.mimir",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1430",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Mímir",
+        "title": "Mimir",
         "width": 1180,
         "height": 800,
         "minWidth": 480,

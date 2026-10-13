@@ -20,7 +20,7 @@ use tauri::Manager;
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Runtime};
 
-use odin_core::{ollama, vram};
+use bifrost_core::{ollama, vram};
 
 /// How often the poller asks the card and Ollama what is going on.
 ///
@@ -137,7 +137,7 @@ impl Power {
     /// A `stat` is far cheaper than a read-and-parse, and the config changes
     /// when someone picks a model - rarely, and never behind your back.
     pub fn model(&self) -> String {
-        let stamp = odin_core::config::path()
+        let stamp = bifrost_core::config::path()
             .and_then(|p| std::fs::metadata(p).ok())
             .and_then(|m| m.modified().ok());
 
@@ -149,7 +149,7 @@ impl Power {
             }
         }
 
-        let tag = odin_core::config::load().model;
+        let tag = bifrost_core::config::load().model;
         if let Ok(mut cache) = self.model_cache.lock() {
             *cache = Some((stamp, tag.clone()));
         }

@@ -53,9 +53,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use odin_core::chat::{Message, Options, Tool};
-use odin_core::edit::Workspace;
-use odin_core::{check, config, ollama, tools};
+use bifrost_core::chat::{Message, Options, Tool};
+use bifrost_core::edit::Workspace;
+use bifrost_core::{check, config, ollama, tools};
 
 use probe::{Check, Setup, Transport};
 
@@ -1519,9 +1519,9 @@ mod tests {
         let backups = base.join("backups");
         let setup = Setup { ws: &ws, backups: &backups, check: None, confine_reads: true, compact: true };
         let read = |path: &str| {
-            let call = odin_core::chat::ToolCall {
+            let call = bifrost_core::chat::ToolCall {
                 id: None,
-                function: odin_core::chat::FunctionCall {
+                function: bifrost_core::chat::FunctionCall {
                     name: "read_file".into(),
                     arguments: serde_json::json!({ "path": path }),
                 },

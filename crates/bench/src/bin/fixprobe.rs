@@ -33,9 +33,9 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use odin_core::chat::{Message, Options};
-use odin_core::edit::Workspace;
-use odin_core::{check, config, ollama, tools};
+use bifrost_core::chat::{Message, Options};
+use bifrost_core::edit::Workspace;
+use bifrost_core::{check, config, ollama, tools};
 
 use probe::{Check, Setup, Transport};
 

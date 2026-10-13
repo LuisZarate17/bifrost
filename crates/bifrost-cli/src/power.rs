@@ -11,8 +11,8 @@
 //! `warm` and `off` therefore each measure their own before/after delta, which
 //! makes them immune to whatever else is holding video memory.
 
-use odin_core::ollama::{self, LoadedModel};
-use odin_core::vram::Card;
+use bifrost_core::ollama::{self, LoadedModel};
+use bifrost_core::vram::Card;
 
 /// Formats a signed MiB delta the way a human reads it.
 fn delta(before: u64, after: u64) -> String {

@@ -18,7 +18,7 @@ to edit files in a folder you pick, and what is left is the testing round in
 ## The apps
 
 ```
-npm run app                    # build Heimdall
+npm run app:vidar              # build Heimdall
 npm run app:mimir            # build Mímir
 target/debug/heimdall.exe        # or the Desktop / Start Menu shortcuts
 target/debug/mimir.exe
@@ -26,7 +26,7 @@ target/debug/mimir.exe
 
 **Build the apps with `npm run`, not `cargo build`.** Cargo alone bakes `devUrl` into the binary,
 so the window loads from `localhost:1420` and shows WebView2's "can't reach this" page unless a Vite
-dev server happens to be running. `npm run app` is `tauri build --debug --no-bundle`: same debug
+dev server happens to be running. `npm run app:vidar` is `tauri build --debug --no-bundle`: same debug
 profile, but the frontend is embedded, so the app opens and works on its own. A bare `cargo build`
 at the root now skips both apps for exactly this reason (`default-members` in `Cargo.toml`) —
 `cargo build -p mimir` would still do it, so don't.

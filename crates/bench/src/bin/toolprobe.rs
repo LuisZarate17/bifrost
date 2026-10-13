@@ -17,8 +17,8 @@
 //! tell you which you have — a spurious call is a perfectly well-formed reply.
 //! Four of the ten cases below must produce no call at all.
 
-use odin_core::chat::{self, Message, Options, Tool};
-use odin_core::config;
+use bifrost_core::chat::{self, Message, Options, Tool};
+use bifrost_core::config;
 
 /// What the model is offered. Small, unambiguous, and covering the three shapes
 /// that matter: no arguments, one string argument, two numeric arguments.

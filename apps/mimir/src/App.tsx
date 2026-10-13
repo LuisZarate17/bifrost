@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
-import { Answer } from "@odin/ui";
+import { Answer } from "@bifrost/ui";
 import { Switchboard, GpuMeter, splitName, type ModelInfo, type CardState } from "./Switchboard";
 import { ModelOfferBar, type ModelOffer } from "./ModelOfferBar";
 import { Conversations, type Summary } from "./Conversations";
@@ -16,7 +16,7 @@ import { Appearance, syncWindowsAccent } from "./Appearance";
 import { Badge } from "./Badge";
 // The renderer's styles. @odin/ui does not import them itself, so that
 // `npm run check:inert` can SSR-build Answer and run it under plain node.
-import "@odin/ui/answer.css";
+import "@bifrost/ui/answer.css";
 import "./App.css";
 
 type StreamEvent =

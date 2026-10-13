@@ -9,7 +9,7 @@ is the short version, in the order that is quickest to work through.
 
 **Before you start**
 
-- `npm run app` and `npm run app:mimir` if anything changed since the last build, then open both
+- `npm run app:vidar` and `npm run app:mimir` if anything changed since the last build, then open both
   from their shortcuts
 - `node tools/practice.mjs` — builds `practice\` in the repo (gitignored) with a few small files
   whose contents are known, so every check below has an exact right answer. **Run it again to

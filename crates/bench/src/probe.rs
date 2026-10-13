@@ -11,7 +11,7 @@
 //! - only the first call in a reply runs
 //! - the asking turn goes back before its result, or the model asks again
 //! - three identical failures end the turn, and a repeat carries the app's note
-//! - the tool words and the system prompt are `odin_core::tools`' own
+//! - the tool words and the system prompt are `bifrost_core::tools`' own
 //!
 //! What it leaves out is the person: every call is approved. It does count the
 //! calls the app would have stopped to ask about (`Run::asks`).
@@ -22,10 +22,10 @@
 
 use std::path::Path;
 
-use odin_core::chat::{self, Message, Options, Tool, ToolCall};
-use odin_core::edit::{self, Workspace};
-use odin_core::{check, compact, search};
-use odin_core::tools::{self, Request};
+use bifrost_core::chat::{self, Message, Options, Tool, ToolCall};
+use bifrost_core::edit::{self, Workspace};
+use bifrost_core::{check, compact, search};
+use bifrost_core::tools::{self, Request};
 
 /// How tool calls travel. **native**: Ollama parses them, and a call it cannot
 /// parse fails the turn (G6, round 1). **recover**: `chat::chat_tools` — native
@@ -65,7 +65,7 @@ pub struct Setup<'a> {
     /// the repo holding the reference solution — a read must not reach it.
     pub confine_reads: bool,
     /// Set earlier results aside before each request, as the app does from H7
-    /// (`odin_core::compact`). Off measures the loop as it was: the whole
+    /// (`bifrost_core::compact`). Off measures the loop as it was: the whole
     /// conversation sent every round, and Ollama's cut when it overflows.
     pub compact: bool,
 }

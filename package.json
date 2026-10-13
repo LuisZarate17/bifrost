@@ -1,5 +1,5 @@
 {
-  "name": "odin",
+  "name": "bifrost",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -8,9 +8,9 @@
     "packages/*"
   ],
   "scripts": {
-    "app": "npm run app -w apps/heimdall",
-    "dev": "npm run dev -w apps/heimdall",
-    "build": "npm run build -w apps/heimdall",
+    "app:vidar": "npm run app -w apps/vidar",
+    "dev:vidar": "npm run dev -w apps/vidar",
+    "build:vidar": "npm run build -w apps/vidar",
     "check:inert": "npm run check:inert -w packages/ui",
     "check:fixes": "node evals/fixcheck.mjs",
     "app:mimir": "npm run app -w apps/mimir",

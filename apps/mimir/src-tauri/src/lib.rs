@@ -21,8 +21,8 @@ use base64::prelude::*;
 use serde::Serialize;
 use tauri::ipc::Channel;
 
-use odin_core::chat::{self, Message, Options, StreamChunk};
-use odin_core::{check, compact, config, edit, instructions, ollama, search, store, tools, vram};
+use bifrost_core::chat::{self, Message, Options, StreamChunk};
+use bifrost_core::{check, compact, config, edit, instructions, ollama, search, store, tools, vram};
 
 /// One message pushed up to the UI.
 ///
@@ -103,7 +103,7 @@ async fn send(
 ) -> Result<(), String> {
     let id = STREAMS_STARTED.fetch_add(1, Ordering::SeqCst) + 1;
 
-    // Every odin_core call goes off the async worker. It is blocking by design,
+    // Every bifrost_core call goes off the async worker. It is blocking by design,
     // and calling it from an async command drops a tokio runtime inside an async
     // context and kills the worker — which already cost Heimdall a request that
     // hung forever on "Reading your screen…".
@@ -136,7 +136,7 @@ async fn send(
 
     // The stream itself is blocking, so the whole loop runs off-thread and sends
     // into the Channel from there. A Channel is Send, so this is fine — and it is
-    // why odin_core::chat::stream takes a callback rather than being async.
+    // why bifrost_core::chat::stream takes a callback rather than being async.
     let num_ctx = cfg.num_ctx;
     let channel = on_event.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -476,7 +476,7 @@ async fn card() -> Result<CardState, String> {
 
 // ── conversations ───────────────────────────────────────────────────────────
 //
-// Storage lives in odin_core::store, one JSON file per conversation beside
+// Storage lives in bifrost_core::store, one JSON file per conversation beside
 // config.json. These commands are a thin pass-through: the frontend still owns
 // the thread while it is being written, and hands the whole thing back to be
 // saved. That keeps the trimming decision in one place, which is the same
@@ -827,7 +827,7 @@ async fn ask_with_tools(
     // Offering tools to a model that cannot carry them wastes a round trip and
     // produces a confusing prose answer instead of a call. Better to say so.
     let tag = model.clone();
-    let can = tauri::async_runtime::spawn_blocking(move || odin_core::ollama::show_cached(&tag))
+    let can = tauri::async_runtime::spawn_blocking(move || bifrost_core::ollama::show_cached(&tag))
         .await
         .map_err(|e| format!("capability check failed: {e}"))?;
     if let Ok(detail) = can {

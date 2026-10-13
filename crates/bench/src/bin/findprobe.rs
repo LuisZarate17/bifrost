@@ -41,9 +41,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use odin_core::chat::{Message, Options, Tool};
-use odin_core::edit::Workspace;
-use odin_core::{config, ollama, search, tools};
+use bifrost_core::chat::{Message, Options, Tool};
+use bifrost_core::edit::Workspace;
+use bifrost_core::{config, ollama, search, tools};
 
 use probe::{Setup, Transport};
 

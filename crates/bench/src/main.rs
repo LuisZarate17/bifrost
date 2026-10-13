@@ -26,7 +26,7 @@ use std::io::Write;
 use std::time::Duration;
 
 use base64::prelude::*;
-use odin_core::{config, ollama, vram};
+use bifrost_core::{config, ollama, vram};
 
 mod report;
 

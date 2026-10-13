@@ -17,7 +17,7 @@ use windows_capture::settings::{
 
 mod power;
 
-use odin_core::{config, ollama};
+use bifrost_core::{config, ollama};
 
 // DEFAULT_MODEL and NUM_CTX moved to odin-core::config at Before-G0 step 3.
 // They were duplicated here and in Heimdall, and the num_ctx copies had already

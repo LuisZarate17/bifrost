@@ -90,7 +90,7 @@ const locations = [
 let missingExe = false;
 for (const app of APPS) {
   if (!fs.existsSync(app.exe)) {
-    console.log(`!  ${app.name}: ${app.exe} does not exist — build it first (npm run app)`);
+    console.log(`!  ${app.name}: ${app.exe} does not exist — build it first (npm run app:vidar)`);
     missingExe = true;
   }
   for (const [label, dir] of locations) {

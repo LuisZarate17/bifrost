@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 base64 = "0.23"
-odin-core = { path = "../odin-core" }
+bifrost-core = { path = "../bifrost-core" }
 # For the G0 tool probe: tool schemas are JSON Schema, and tool-call arguments
 # come back as a serde_json::Value rather than a string.
 serde_json = "1.0.151"

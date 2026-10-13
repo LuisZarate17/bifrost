@@ -12,7 +12,7 @@
 //!
 //! - **replace** — `read_file`, `edit_file` (one exact piece of text, which must
 //!   occur once) and `create_file`. **What the app ships**, with the exact tool
-//!   descriptions and system prompt it uses, from `odin_core::tools`.
+//!   descriptions and system prompt it uses, from `bifrost_core::tools`.
 //! - **rewrite** — `read_file`, `write_file` (send back the whole file) and
 //!   `create_file`. The obvious alternative, measured so the choice is evidence.
 //!
@@ -38,10 +38,10 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use odin_core::chat::{Message, Options, Tool};
-use odin_core::edit::Workspace;
-use odin_core::tools;
-use odin_core::{config, ollama};
+use bifrost_core::chat::{Message, Options, Tool};
+use bifrost_core::edit::Workspace;
+use bifrost_core::tools;
+use bifrost_core::{config, ollama};
 
 use probe::{Setup, Transport};
 
