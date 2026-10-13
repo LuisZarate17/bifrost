@@ -1,4 +1,4 @@
-/* Mímir's interface.
+/* Mimir's interface.
 
    Structure borrowed from Claude's desktop app — a sidebar of conversations
    grouped by recency, a centred reading column, a composer that sits in the
@@ -7,13 +7,13 @@
    translucent white rather than solid greys, no shadow on anything that does not
    float, and round shapes — pill buttons, a 28px composer, 22px bubbles. Picked
    from four mocked directions, over Claude's warm charcoal, Linear's layered
-   slate and the cool grey Mímir started with.
+   slate and the cool grey Mimir started with.
 
    The accent is used sparingly. Primary buttons are ivory on black and ink on
    white, so "Allow once" never reads as a destructive action; the accent marks
    only what is yours to act on or notice — sending, focus, the badge, the GPU
    meter, the Tools toggle, a request waiting for approval. It is whichever
-   colour the user picked, sea by default (Mímir's own badge color): src/accent.ts derives every shade
+   colour the user picked, sea by default (Mimir's own badge color): src/accent.ts derives every shade
    from one seed with its contrast checked and writes them as --u-* properties,
    which the tokens below read with the default sea as fallback. Errors are
    orange-red, so an error and the default accent never share a colour.
@@ -22,14 +22,14 @@
    public/theme-boot.js from the user's choice, or from Windows under "system".
    Dark is the base; light overrides it.
 
-   Every font is a Windows system font. Mímir's rule is that nothing leaves
+   Every font is a Windows system font. Mimir's rule is that nothing leaves
    the machine, so nothing is fetched to draw it either: Segoe UI Variable for
    the interface, Sitka Text — Matthew Carter's screen-reading serif — for
    answers, Cascadia Code for code.
 
-   The renderer's own styles come from @odin/ui and are shared with Heimdall's
-   popup. Mímir overrides them further down, always under .app, so nothing
-   here reaches Heimdall. */
+   The renderer's own styles come from @bifrost/ui and are shared with Vidar's
+   popup. Mimir overrides them further down, always under .app, so nothing
+   here reaches Vidar. */
 
 :root {
   color-scheme: dark;
@@ -2283,12 +2283,12 @@ kbd {
   color: var(--text-strong);
 }
 
-/* ── the answer, as Mímir reads it ────────────────────────────────────── */
+/* ── the answer, as Mimir reads it ────────────────────────────────────── */
 
-/* @odin/ui sizes these for Heimdall's 480px popup — 12.5px text, dark only. In a
+/* @bifrost/ui sizes these for Vidar's 480px popup — 12.5px text, dark only. In a
    reading column they want to be larger and set in the serif, and in the light
    theme every colour answer.css hard-codes for dark has to follow the tokens.
-   Scoped under .app, so Heimdall's popup never sees any of it. */
+   Scoped under .app, so Vidar's popup never sees any of it. */
 
 .app .answer {
   font-family: var(--font-read);

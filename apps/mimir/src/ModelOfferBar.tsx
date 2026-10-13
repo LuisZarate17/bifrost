@@ -103,12 +103,12 @@ export function ModelOfferBar({
             {/* About ten seconds: 10.5 and 10.8 s measured 2026-10-02 at the app's num_ctx, and 11 s
                 straight after a reboot. */}
             <strong>{toName}</strong> is the model for working in code. Switch to it? Loading takes about
-            ten seconds, and Heimdall can't see your screen until you switch back.
+            ten seconds, and Vidar can't see your screen until you switch back.
           </>
         )}
         {state === "idle" && offer.kind === "back" && (
           <>
-            Folder closed. Switch back to <strong>{toName}</strong>? Heimdall needs it to see your screen.
+            Folder closed. Switch back to <strong>{toName}</strong>? Vidar needs it to see your screen.
           </>
         )}
       </span>

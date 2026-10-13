@@ -88,7 +88,7 @@ pub struct Power {
     warming_since: Mutex<Option<std::time::Instant>>,
     /// The card's reading the last time nothing of ours was on it.
     ///
-    /// Heimdall's own share is this subtracted from the current reading. Ollama
+    /// Vidar's own share is this subtracted from the current reading. Ollama
     /// reports a `size_vram` of its own, but C4a measured that against the card
     /// and found it **~2,500 MiB low** — it counts the weights, not the context
     /// and compute buffers the runner also allocates. Measuring the difference
@@ -122,13 +122,13 @@ impl Power {
 
     /// The model the shared config names, re-read when the file changes.
     ///
-    /// **Not stored at construction.** Mímir writes the current model to the
+    /// **Not stored at construction.** Mimir writes the current model to the
     /// config, and a tray holding the tag it saw at startup would warm, release
     /// and report on a model nobody had chosen since - silently, because every
     /// one of those operations succeeds against the wrong tag.
     ///
     /// **Cached on the file's modified time**, because `refresh` *is* a loop:
-    /// it runs every `POLL` for as long as Heimdall is open, and calls this twice
+    /// it runs every `POLL` for as long as Vidar is open, and calls this twice
     /// a tick. An earlier version of this comment claimed the tray read the
     /// config "on a menu action or a refresh, not in a loop", which was simply
     /// wrong - it was two file reads every five seconds, forever, against the
@@ -197,7 +197,7 @@ pub fn warm<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) {
         if already {
             power.end_warming();
             power.set(State::Ready);
-            println!("[heimdall] already resident — nothing to warm");
+            println!("[vidar] already resident — nothing to warm");
             refresh(&app, &power);
             return;
         }
@@ -207,11 +207,11 @@ pub fn warm<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) {
         match result {
             Ok(elapsed) => {
                 power.set(State::Ready);
-                println!("[heimdall] warmed in {:.1}s", elapsed.as_secs_f64());
+                println!("[vidar] warmed in {:.1}s", elapsed.as_secs_f64());
             }
             Err(e) => {
                 power.set(State::Off);
-                eprintln!("[heimdall] warm failed: {e}");
+                eprintln!("[vidar] warm failed: {e}");
             }
         }
         refresh(&app, &power);
@@ -222,9 +222,9 @@ pub fn off<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) {
     let app = app.clone();
     std::thread::spawn(move || {
         match ollama::unload(&power.model()) {
-            Ok(true) => println!("[heimdall] released"),
-            Ok(false) => eprintln!("[heimdall] Ollama still lists the model after 30s"),
-            Err(e) => eprintln!("[heimdall] off failed: {e}"),
+            Ok(true) => println!("[vidar] released"),
+            Ok(false) => eprintln!("[vidar] Ollama still lists the model after 30s"),
+            Err(e) => eprintln!("[vidar] off failed: {e}"),
         }
         power.set(State::Off);
         refresh(&app, &power);
@@ -248,7 +248,7 @@ fn observe(power: &Power) -> (State, String, String, String) {
             let secs = elapsed.as_secs_f64();
             return (
                 State::Warming,
-                format!("Heimdall — warming… ({secs:.0}s)"),
+                format!("Vidar — warming… ({secs:.0}s)"),
                 format!("Loading… ({secs:.0}s)"),
                 "Loaded".to_string(),
             );
@@ -262,7 +262,7 @@ fn observe(power: &Power) -> (State, String, String, String) {
         Err(_) => {
             return (
                 State::Off,
-                "Heimdall — Ollama not running".to_string(),
+                "Vidar — Ollama not running".to_string(),
                 "Ollama not running".to_string(),
                 "Loaded".to_string(),
             );
@@ -273,7 +273,7 @@ fn observe(power: &Power) -> (State, String, String, String) {
     let sample = vram::Card::open().ok().and_then(|c| c.sample().ok());
 
     // Every moment the model is off is a fresh reading of the card without us on
-    // it. Kept, so Heimdall's own share is a measured difference rather than a
+    // it. Kept, so Vidar's own share is a measured difference rather than a
     // guess - and re-taken constantly, because the idle figure drifts with
     // whatever else is open.
     if state == State::Off {
@@ -298,7 +298,7 @@ fn observe(power: &Power) -> (State, String, String, String) {
 
     let card = match (sample, ours_mib) {
         (Some(s), Some(ours)) => format!(
-            "Heimdall {:.1} · {:.1} of {:.1} GB in use",
+            "Vidar {:.1} · {:.1} of {:.1} GB in use",
             gb(ours),
             gb(s.used_mib),
             gb(s.total_mib)
@@ -312,7 +312,7 @@ fn observe(power: &Power) -> (State, String, String, String) {
     // the outside: warming pays off on the *next* press, which is invisible at
     // the moment you click. With it, the menu visibly goes from ~1 GB to ~9 GB.
     let line = match sample {
-        Some(s) => format!("Heimdall · {:.1} / {:.1} GB used", gb(s.used_mib), gb(s.total_mib)),
+        Some(s) => format!("Vidar · {:.1} / {:.1} GB used", gb(s.used_mib), gb(s.total_mib)),
         None => state.label().to_string(),
     };
 
@@ -325,7 +325,7 @@ fn observe(power: &Power) -> (State, String, String, String) {
 
     (
         state,
-        format!("Heimdall — {}\n{}", state.label(), card),
+        format!("Vidar — {}\n{}", state.label(), card),
         line,
         loaded_label,
     )
@@ -338,10 +338,10 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>, power: &Power) {
     // everything else, and a change is the only part worth a line.
     let previous = power.state();
     if previous != state {
-        println!("[heimdall] power: {} -> {}", previous.label(), state.label());
+        println!("[vidar] power: {} -> {}", previous.label(), state.label());
     }
     power.set(state);
-    if let Some(tray) = app.tray_by_id("heimdall") {
+    if let Some(tray) = app.tray_by_id("vidar") {
         let _ = tray.set_tooltip(Some(&tip));
     }
     // And the menu's own line, so opening it answers the question a click was
@@ -373,7 +373,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) -> tauri::Resu
     let off_item = CheckMenuItem::with_id(
         app, "off", "Released", true, false, None::<&str>,
     )?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit Heimdall", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit Vidar", true, None::<&str>)?;
 
     // A separator above Quit, because it sits directly under "Turn off" and the
     // two got confused twice in one testing session. One is reversible in a
@@ -393,9 +393,9 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) -> tauri::Resu
     });
 
     let handler_power = power.clone();
-    TrayIconBuilder::with_id("heimdall")
+    TrayIconBuilder::with_id("vidar")
         .icon(app.default_window_icon().unwrap().clone())
-        .tooltip("Heimdall — Off")
+        .tooltip("Vidar — Off")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app, event| match event.id().as_ref() {

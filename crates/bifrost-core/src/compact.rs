@@ -8,7 +8,7 @@
 //!
 //! - a 14k-token prompt at `num_ctx` 4096 came back with `prompt_eval_count` 43:
 //!   the system message and the last message survived, everything between went;
-//! - a turn shaped like Mímir's (system, the user's request, a read of `a.rs` at
+//! - a turn shaped like Mimir's (system, the user's request, a read of `a.rs` at
 //!   11k tokens, a read of `b.rs` at 11k) at `num_ctx` 8192 came back with
 //!   `prompt_eval_count` 4098: only the tail of the last file was kept, and the
 //!   model answered about the code instead of the request.

@@ -2,8 +2,8 @@
 //!
 //! **A missing file is a normal state, not an error.** `load()` cannot fail: no
 //! file yields the built-in defaults, and nothing here prints or panics. That is
-//! deliberate and load-bearing — PLAN.md decision #5 requires Heimdall to keep
-//! working on a machine where Mímir was never installed, so "no config" has to be
+//! deliberate and load-bearing — PLAN.md decision #5 requires Vidar to keep
+//! working on a machine where Mimir was never installed, so "no config" has to be
 //! the ordinary path rather than an error anyone has to handle.
 //!
 //! **A file that is there but cannot be read is not the same as no file.** One
@@ -42,18 +42,18 @@ pub const DEFAULT_MODEL: &str = "qwen3-vl:8b-instruct-q4_K_M";
 ///
 /// **This is the only copy in source.** It used to exist here, in the CLI's
 /// `prompt.txt`, as an inline fallback in the CLI's `main.rs`, and as a `const`
-/// in Heimdall's `App.tsx` — four places to keep in step, which nothing enforced.
+/// in Vidar's `App.tsx` — four places to keep in step, which nothing enforced.
 /// `evals/prompts/current.txt` is byte-identical and stays, because that one is
 /// measured input for the bench rather than a copy of this.
 pub const DEFAULT_PROMPT: &str =
     "What am I looking at? If there's an error or something broken, explain it \
      and the fix. Otherwise explain what matters here.";
 
-/// Heimdall's value, and now everyone's.
+/// Vidar's value, and now everyone's.
 ///
 /// **Measured 2026-09-19.** Ollama keys a loaded runner by the model *and* by
 /// `num_ctx`, so asking at a different context than you warmed at tears the
-/// runner down and rebuilds it. The CLI used to warm at 8192 while Heimdall asked
+/// runner down and rebuilds it. The CLI used to warm at 8192 while Vidar asked
 /// at 32768, and every switch between them cost about three seconds:
 ///
 /// | request | `load_duration` |
@@ -63,7 +63,7 @@ pub const DEFAULT_PROMPT: &str =
 /// | ask at 32768 | **3.09s** — reloaded |
 /// | back to 8192 | **2.86s** — reloaded again |
 ///
-/// **Why 32768 and not less, carried over from Heimdall where this used to live.**
+/// **Why 32768 and not less, carried over from Vidar where this used to live.**
 /// A 1080p screen costs ~2,070 image tokens — measured at A2 as 2,042, and
 /// confirmed at 2,056/4,132/6,208/8,284 for one through four shots. Ollama
 /// derives its own default from detected VRAM and lands at 4k on this card,
@@ -81,7 +81,7 @@ pub const DEFAULT_PROMPT: &str =
 /// | 65536   | 12.74 GB | **no** — spills to system RAM |
 ///
 /// 32768 is the last rung before the cliff, and room for far more context than
-/// Heimdall's four-screenshot cap will ever use.
+/// Vidar's four-screenshot cap will ever use.
 ///
 /// `crates/bench` deliberately keeps its own 8192 constant instead of reading
 /// this: it is a measurement harness, and changing its context would make F1's
@@ -90,13 +90,13 @@ pub const DEFAULT_NUM_CTX: u32 = 32768;
 
 /// Chosen at Gate 2 (2026-10-01) from the H4 benchmark: 25/48 against 6/48 for
 /// `DEFAULT_MODEL`, at 32s/task. Text-only — reports no `vision` capability — so
-/// it is never the model Heimdall can use, and the two cannot be resident
+/// it is never the model Vidar can use, and the two cannot be resident
 /// together on this card: 18 GB plus the 6 GB vision model does not fit in 16 GB.
 /// See `docs/results/H4-results.md`.
 pub const DEFAULT_CODING_MODEL: &str = "qwen3-coder:30b";
 
 /// What the apps agree on. Extended rather than replaced as Stage G lands —
-/// G2 writes `model` here when you pick one, and Heimdall reads it on every summon.
+/// G2 writes `model` here when you pick one, and Vidar reads it on every summon.
 ///
 /// `#[serde(default)]` on the struct means a file missing any field fills that
 /// field from `Default` rather than failing to parse. So a config written before
@@ -114,13 +114,13 @@ pub struct Config {
     pub prompt: String,
     #[serde(deserialize_with = "lenient_num_ctx")]
     pub num_ctx: u32,
-    /// The one folder Mímir may change files in, or `None` for no editing at
+    /// The one folder Mimir may change files in, or `None` for no editing at
     /// all. Set only through a native folder picker the user operates — there is
     /// no command that takes a path for it, so nothing reaching the app's IPC can
-    /// widen it. Heimdall and the CLI ignore it.
+    /// widen it. Vidar and the CLI ignore it.
     #[serde(deserialize_with = "lenient")]
     pub workspace: Option<String>,
-    /// Folders chosen before, newest first, for Mímir's new-chat screen. Only
+    /// Folders chosen before, newest first, for Mimir's new-chat screen. Only
     /// the picker adds to it, and the webview can pick an entry only by its
     /// position — so choosing a recent folder never lets a path in from outside,
     /// and `workspace` stays something the user picked with their own hands.
@@ -128,7 +128,7 @@ pub struct Config {
     pub recent_workspaces: Vec<String>,
     /// The check command for each folder, keyed by the folder as `workspace`
     /// stores it — the command the model may run to find out whether its edits
-    /// broke the build. Mímir writes an entry only from the candidates
+    /// broke the build. Mimir writes an entry only from the candidates
     /// `check::candidates` detected, chosen by position, so no command typed in
     /// the window reaches this map. Anything else is added by hand. Look an entry
     /// up with [`Config::check_for`], which ignores case the way Windows paths do.
@@ -139,13 +139,13 @@ pub struct Config {
     /// to defaults, and the next save would write that over the file.
     #[serde(deserialize_with = "lenient_checks")]
     pub checks: BTreeMap<String, Vec<String>>,
-    /// The model Mímir offers to switch to once a project folder is chosen.
+    /// The model Mimir offers to switch to once a project folder is chosen.
     /// An empty string turns the offer off entirely — there is no separate
     /// on/off flag, because an empty tag can never be installed and so
     /// [`crate::ollama::find`]-style lookups simply never match it.
     #[serde(deserialize_with = "lenient_coding_model")]
     pub coding_model: String,
-    /// The model Mímir switched away from, on the user's say-so, to load
+    /// The model Mimir switched away from, on the user's say-so, to load
     /// `coding_model`. What "switch back" restores once the folder is
     /// cleared. Cleared by switching back, and by any manual model pick —
     /// a pick made by hand ends the switch-back story outright, rather than
@@ -163,7 +163,7 @@ pub struct Config {
     /// `"false"` and `0` mean off; a missing field is off; anything else is on.
     #[serde(deserialize_with = "lenient_ask")]
     pub ask_every_call: bool,
-    /// The folders where Mímir sends the project's own notes file (`AGENTS.md` and
+    /// The folders where Mimir sends the project's own notes file (`AGENTS.md` and
     /// its kin, see `instructions`) with every question — **off for a folder until
     /// the user turns it on**, because the file is the project's text, and a cloned
     /// repository's author wrote it. Written only by the notes chip. Look a folder up
@@ -418,7 +418,7 @@ pub fn save(config: &Config) -> Result<(), String> {
 /// changes, and `accept_model_offer` held its copy across a network call. Callers
 /// give the change as `f`; whatever it returns is handed back once the save is done.
 ///
-/// The lock is per process (Heimdall and the CLI only read), and `f` runs under it,
+/// The lock is per process (Vidar and the CLI only read), and `f` runs under it,
 /// so it must not wait on the network or on another `update`. A config loaded from a
 /// file that could not be read is still refused by [`save_to`], so `f`'s change is
 /// then reported as an error and the real file is left alone.
@@ -446,7 +446,7 @@ pub fn update_at<T>(p: &Path, f: impl FnOnce(&mut Config) -> T) -> Result<T, Str
 }
 
 /// [`save`] for a given file. **Written to a temporary file beside it and renamed**, as
-/// `store::save` does, so a reader (Heimdall reads this on every summon) sees the
+/// `store::save` does, so a reader (Vidar reads this on every summon) sees the
 /// old file or the new one, never a half-written one.
 ///
 /// The temporary file has a name of its own for every save (process id and a
@@ -621,7 +621,7 @@ mod tests {
         }
     }
 
-    /// **A typo can only make Mímir stricter.** Without the lenient reader the
+    /// **A typo can only make Mimir stricter.** Without the lenient reader the
     /// whole file would fail to parse and every setting would reset.
     #[test]
     fn a_malformed_ask_every_call_means_ask_and_everything_else_survives() {
@@ -696,7 +696,7 @@ mod tests {
     }
 
     fn temp_file(name: &str) -> TempConfig {
-        let dir = std::env::temp_dir().join(format!("odin-config-test-{}-{name}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("bifrost-config-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         TempConfig { path: dir.join("config.json"), dir }

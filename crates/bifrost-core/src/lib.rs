@@ -1,4 +1,4 @@
-//! What Heimdall's CLI and its app both need to know about the model's power state.
+//! What Vidar's CLI and its app both need to know about the model's power state.
 //!
 //! Four modules, and the split is about what each one is the authority on:
 //!

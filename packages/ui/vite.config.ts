@@ -6,7 +6,7 @@ import react from "@vitejs/plugin-react";
 // and runs the output under node.
 //
 // The react plugin is present so that JSX is transformed exactly as it is in
-// apps/heimdall. Without it the check would depend on esbuild inferring the JSX
+// apps/vidar. Without it the check would depend on esbuild inferring the JSX
 // runtime from tsconfig, which is a difference between the two build paths that
 // nothing would announce.
 export default defineConfig({

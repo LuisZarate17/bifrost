@@ -1,9 +1,9 @@
 /**
- * Mímir's badge: its half of the Helm of Awe, drawn as SVG.
+ * Mimir's badge: its half of the Helm of Awe, drawn as SVG.
  *
  * The same geometry as tools/icon/badge.mjs, which draws the taskbar and file
  * icons: a disc with four tridents on the compass points and the eye at the
- * centre. The file icons keep Mímir's fixed sea color; in the window the badge
+ * centre. The file icons keep Mimir's fixed sea color; in the window the badge
  * takes the accent the user picked, so it changes with Appearance like
  * everything else the accent marks.
  *

@@ -448,7 +448,7 @@ fn main() {
     let questions: Vec<Question> =
         questions().into_iter().filter(|q| only.as_deref().is_none_or(|o| q.id.starts_with(o))).collect();
 
-    let scratch = std::env::temp_dir().join(format!("odin-findprobe-{}", std::process::id()));
+    let scratch = std::env::temp_dir().join(format!("bifrost-findprobe-{}", std::process::id()));
     // Started if it is not running, as the apps and the CLI do, and before the
     // worktree exists: a failure here then has nothing to clean up.
     if let Err(e) = ollama::ensure_running() {

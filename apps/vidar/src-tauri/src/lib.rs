@@ -31,7 +31,7 @@ const OLLAMA_URL: &str = "http://127.0.0.1:11434/api/chat";
 // DEFAULT_MODEL and NUM_CTX moved to bifrost_core::config at Before-G0 step 3, so
 // the CLI and the popup finally agree. They had drifted on num_ctx - 8192 there
 // against 32768 here - and Ollama keys a runner by model AND context, so every
-// `odin warm` was thrown away by the next hotkey press. Measured 2026-09-19:
+// `bifrost warm` was thrown away by the next hotkey press. Measured 2026-09-19:
 // a 3.09s reload each way. The VRAM ladder that chose 32768 moved with it.
 
 // The reasoning that picked 32768 - the image-token measurements and the VRAM
@@ -48,7 +48,7 @@ use bifrost_core::config::DEFAULT_NUM_CTX as NUM_CTX;
 /// this cannot fail.
 ///
 /// Read per request for now. G3 is what makes that *matter*: re-reading on every
-/// summon is how switching the model in Mímir reaches the popup without a
+/// summon is how switching the model in Mimir reaches the popup without a
 /// restart.
 async fn defaults() -> bifrost_core::config::Config {
     tauri::async_runtime::spawn_blocking(bifrost_core::config::load)
@@ -82,7 +82,7 @@ enum StreamEvent {
     Captured { width: u32, height: u32, png_bytes: usize },
     /// Ollama wasn't running, so this request is paying to start it.
     ///
-    /// The last step between "open Heimdall" and "it works". A1 recorded that
+    /// The last step between "open Vidar" and "it works". A1 recorded that
     /// Ollama has no autostart and does not survive a reboot, which made the
     /// first press after a restart fail with an error rather than an answer.
     StartingOllama,
@@ -94,7 +94,7 @@ enum StreamEvent {
     Warming,
     /// The chosen model cannot be sent images, so nothing was captured.
     ///
-    /// Heimdall's entire question is "what is on my screen", and a model without
+    /// Vidar's entire question is "what is on my screen", and a model without
     /// `vision` cannot be asked it. Ollama does not refuse — it drops the image
     /// and answers the prompt anyway, which produces a fluent, confident answer
     /// about a screenshot it never saw. **That is worse than an error**, because
@@ -254,7 +254,7 @@ async fn ask_about_screen(
     // about an image that is not there, and answers with a confident guess.
     // Saying so is strictly better than a plausible answer about nothing.
     //
-    // Cached per tag in odin-core, so this costs a round trip once per model
+    // Cached per tag in bifrost-core, so this costs a round trip once per model
     // rather than once per summon. `llama3.1:8b` is the case that proves it:
     // `/api/show` reports `completion, tools` and no `vision`.
     //
@@ -284,7 +284,7 @@ async fn ask_about_screen(
             .await
             .map_err(|e| format!("start thread panicked: {e}"))?;
         match started {
-            Ok(Some(took)) => println!("[heimdall] started Ollama in {:.1}s", took.as_secs_f64()),
+            Ok(Some(took)) => println!("[vidar] started Ollama in {:.1}s", took.as_secs_f64()),
             Ok(None) => {}
             Err(e) => return Err(e),
         }
@@ -340,7 +340,7 @@ async fn ask_another_shot(
     let model = model.unwrap_or(cfg.model);
 
     if chat.0.lock().map_err(|_| "chat store poisoned")?.is_empty() {
-        return Err("nothing to continue — summon Heimdall first".into());
+        return Err("nothing to continue — summon Vidar first".into());
     }
 
     // See `capture_screen_blocking` — this must not run on an async worker.
@@ -422,7 +422,7 @@ fn trim_images(turns: &[Turn]) -> Vec<Turn> {
 
 /// Let the popup hold a caret so a follow-up can be typed.
 ///
-/// Summoning Heimdall never steals focus — that is the point of `focusable: false`,
+/// Summoning Vidar never steals focus — that is the point of `focusable: false`,
 /// and B4 established that a window which never takes focus never receives key
 /// events either. Typing is the one thing that cannot work under that rule, so
 /// the rule bends for exactly as long as the box is open.
@@ -463,7 +463,7 @@ async fn ask_followup(
     {
         let mut turns = chat.0.lock().map_err(|_| "chat store poisoned")?;
         if turns.is_empty() {
-            return Err("no capture to follow up on — summon Heimdall first".into());
+            return Err("no capture to follow up on — summon Vidar first".into());
         }
         // No image: this asks about the screens already in the conversation. It
         // used to re-send the stored PNG as a fresh single-turn question, which
@@ -581,14 +581,14 @@ async fn ask_with_turns(
 }
 
 /// Hide the window from screen capture — the project's headline feature, and also
-/// what keeps Heimdall out of its own screenshot.
+/// what keeps Vidar out of its own screenshot.
 ///
 /// Called directly rather than via Tauri's `set_content_protected`, because `tao`'s
 /// implementation discards the result (`let _ = SetWindowDisplayAffinity(..)`), so a
 /// silent failure would be invisible. This reports it.
 ///
 /// Known upstream issue (tauri#14189): the flag can reset after `hide()`/`show()`,
-/// degrading to a black rectangle. Heimdall is exactly that shape once the hotkey
+/// degrading to a black rectangle. Vidar is exactly that shape once the hotkey
 /// lands at B4, so this will need reapplying — see docs/B3-results.md.
 #[cfg(windows)]
 fn exclude_from_capture(window: &tauri::WebviewWindow) -> Result<(), String> {
@@ -598,9 +598,9 @@ fn exclude_from_capture(window: &tauri::WebviewWindow) -> Result<(), String> {
 
     // Diagnostic escape hatch. The popup being invisible to screen capture also
     // means it cannot be screenshotted for inspection — so debugging how it
-    // *looks* requires temporarily giving that up. `HEIMDALL_NO_EXCLUDE=1` does.
-    if std::env::var("HEIMDALL_NO_EXCLUDE").is_ok() {
-        eprintln!("[heimdall] HEIMDALL_NO_EXCLUDE set — capture exclusion SKIPPED");
+    // *looks* requires temporarily giving that up. `VIDAR_NO_EXCLUDE=1` does.
+    if std::env::var("VIDAR_NO_EXCLUDE").is_ok() {
+        eprintln!("[vidar] VIDAR_NO_EXCLUDE set — capture exclusion SKIPPED");
         return Ok(());
     }
 
@@ -917,22 +917,22 @@ fn show_without_focus(
     // off for one reason: it costs the mouse wheel, "and answers are long". That
     // reason is now gone — Ctrl+Alt+Q and Ctrl+Alt+A scroll the answer without
     // the mouse, so losing the wheel no longer costs the ability to read a long
-    // answer. `HEIMDALL_NO_CLICKTHROUGH` puts it back.
+    // answer. `VIDAR_NO_CLICKTHROUGH` puts it back.
     //
     // This is also the ONE Tauri feature that sets WS_EX_LAYERED, and
     // SetWindowDisplayAffinity is reported to fail on layered windows. B4
     // measured that it doesn't — merely *carrying* the layered bit is not the
     // same as painting with `UpdateLayeredWindow` — but the affinity is read
     // back from Windows below on every show rather than assumed.
-    if std::env::var("HEIMDALL_NO_CLICKTHROUGH").is_err() {
+    if std::env::var("VIDAR_NO_CLICKTHROUGH").is_err() {
         window
             .set_ignore_cursor_events(true)
             .map_err(|e| format!("click-through failed: {e}"))?;
-        println!("[heimdall] click-through on — the mouse passes through (WS_EX_LAYERED set)");
+        println!("[vidar] click-through on — the mouse passes through (WS_EX_LAYERED set)");
     } else {
         // Explicit, so the log always says which mode the popup is in.
         let _ = window.set_ignore_cursor_events(false);
-        println!("[heimdall] click-through OFF (HEIMDALL_NO_CLICKTHROUGH) — the mouse lands on the popup");
+        println!("[vidar] click-through OFF (VIDAR_NO_CLICKTHROUGH) — the mouse lands on the popup");
     }
 
     // Reapply the backdrop after showing. The window is created with
@@ -943,7 +943,7 @@ fn show_without_focus(
     // and — unlike apply_mica/apply_tabbed — never touches
     // DWMWA_USE_IMMERSIVE_DARK_MODE. So acrylic cannot request dark on its own.
     if let Err(e) = force_dark_mode(window) {
-        eprintln!("[heimdall] WARNING: dark mode attribute failed: {e}");
+        eprintln!("[vidar] WARNING: dark mode attribute failed: {e}");
     }
 
     // No DWM system backdrop. Four attempts established that the backdrop path
@@ -1248,14 +1248,14 @@ fn hide_now(window: &tauri::WebviewWindow) {
     use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
 
     let Ok(hwnd) = window.hwnd() else {
-        eprintln!("[heimdall] hide: no HWND");
+        eprintln!("[vidar] hide: no HWND");
         return;
     };
     // SAFETY: valid HWND owned by this process.
     unsafe {
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
-    println!("[heimdall] hidden (now visible={})", is_really_visible(window));
+    println!("[vidar] hidden (now visible={})", is_really_visible(window));
 }
 
 /// Ask **Windows** whether the popup is on screen, not Tauri.
@@ -1275,7 +1275,7 @@ fn is_really_visible(window: &tauri::WebviewWindow) -> bool {
 
 /// Where the caret was before the follow-up box took it.
 ///
-/// Remembered so it can be handed back. Summoning Heimdall deliberately never
+/// Remembered so it can be handed back. Summoning Vidar deliberately never
 /// steals focus (that is why the window is `focusable: false`), and typing a
 /// follow-up is the one moment that rule has to bend — so it bends for exactly
 /// as long as the box is open, and puts things back afterwards.
@@ -1358,11 +1358,11 @@ fn report_affinity(window: &tauri::WebviewWindow) {
     let ok = unsafe { GetWindowDisplayAffinity(hwnd, &mut affinity) };
 
     match (ok.is_ok(), affinity) {
-        (true, 17) => println!("[heimdall] affinity verified: 17 (excluded) — click-through OK"),
+        (true, 17) => println!("[vidar] affinity verified: 17 (excluded) — click-through OK"),
         (true, other) => eprintln!(
-            "[heimdall] WARNING: affinity is {other}, not 17 — the window is NOT excluded from capture"
+            "[vidar] WARNING: affinity is {other}, not 17 — the window is NOT excluded from capture"
         ),
-        (false, _) => eprintln!("[heimdall] WARNING: could not read display affinity"),
+        (false, _) => eprintln!("[vidar] WARNING: could not read display affinity"),
     }
 }
 
@@ -1437,7 +1437,7 @@ fn popup_keys() -> [(Shortcut, &'static str); 3] {
 /// Claim the scroll keys, and say whether both were actually claimed.
 ///
 /// Bound on show and dropped on hide rather than held for the life of the
-/// process: Heimdall sits in the background all day, and a popup with nothing on
+/// process: Vidar sits in the background all day, and a popup with nothing on
 /// screen has no business owning Ctrl+Alt+Q system-wide.
 ///
 /// A failure is survivable and is reported rather than fatal — the wheel still
@@ -1452,7 +1452,7 @@ fn bind_popup_keys(app: &tauri::AppHandle) -> bool {
             continue;
         }
         if let Err(e) = app.global_shortcut().register(key) {
-            eprintln!("[heimdall] WARNING: {label} unavailable ({e})");
+            eprintln!("[vidar] WARNING: {label} unavailable ({e})");
             all = false;
         }
     }
@@ -1509,7 +1509,7 @@ static CONTINUE_PRESSES: AtomicI32 = AtomicI32::new(0);
 
 /// Which side button summons: `1` is XBUTTON1 and `2` is XBUTTON2 — on a typical
 /// mouse the rear and front thumb buttons, which Windows treats as Back and
-/// Forward. `0` disables it. Set from `HEIMDALL_MOUSE_BUTTON` at startup.
+/// Forward. `0` disables it. Set from `VIDAR_MOUSE_BUTTON` at startup.
 ///
 /// XBUTTON2 is the default because the press is **swallowed**, and Forward is the
 /// one of the pair almost nobody uses. Swallowing is not optional: a summon that
@@ -1530,7 +1530,7 @@ unsafe extern "system" fn mouse_hook(
 
     let message = wparam.0 as u32;
 
-    // The side buttons. Summon is live whenever Heimdall is running; continue is
+    // The side buttons. Summon is live whenever Vidar is running; continue is
     // live only while an answer is up, so Back stays Back the rest of the time.
     if code == HC_ACTION as i32 && (message == WM_XBUTTONDOWN || message == WM_XBUTTONUP) {
         let summon = SUMMON_BUTTON.load(Ordering::Relaxed);
@@ -1630,13 +1630,13 @@ fn watch_mouse(app: tauri::AppHandle) {
                 MOUSE_HOOK.store(hook.0 as isize, Ordering::Relaxed);
             }
             Err(e) => eprintln!(
-                "[heimdall] WARNING: mouse hook unavailable ({e}) — the side button won't summon, and Ctrl+Alt+wheel won't scroll"
+                "[vidar] WARNING: mouse hook unavailable ({e}) — the side button won't summon, and Ctrl+Alt+wheel won't scroll"
             ),
         }
     });
 
     if let Err(e) = installed {
-        eprintln!("[heimdall] WARNING: could not reach the main thread to hook the mouse ({e})");
+        eprintln!("[vidar] WARNING: could not reach the main thread to hook the mouse ({e})");
         return;
     }
 
@@ -1658,7 +1658,7 @@ fn watch_mouse(app: tauri::AppHandle) {
         // The other button continues the conversation. Only ever counted while
         // the popup is up, so there is always something to continue.
         if CONTINUE_PRESSES.swap(0, Ordering::Relaxed) > 0 {
-            let _ = app.emit("heimdall://another-shot", 0);
+            let _ = app.emit("vidar://another-shot", 0);
         }
 
         // Whole notches go to the webview; the remainder stays banked, so a
@@ -1673,7 +1673,7 @@ fn watch_mouse(app: tauri::AppHandle) {
             WHEEL_DELTA.fetch_add(delta % 120, Ordering::Relaxed);
             // Negated: Windows reports a forward roll as positive, and rolling
             // forward should move the answer *up*, which is a negative step.
-            let _ = app.emit("heimdall://scroll", -notches);
+            let _ = app.emit("vidar://scroll", -notches);
         }
 
         std::thread::sleep(Duration::from_millis(8));
@@ -1682,7 +1682,7 @@ fn watch_mouse(app: tauri::AppHandle) {
 
 /// Summon the popup, or dismiss it if it is already up.
 ///
-/// Everything that can summon Heimdall comes through here — the hotkey and the
+/// Everything that can summon Vidar comes through here — the hotkey and the
 /// mouse's side button — so the two cannot drift apart in what a press does.
 /// `source` only names the caller in the log.
 ///
@@ -1701,7 +1701,7 @@ fn toggle_popup(app: &tauri::AppHandle, source: &str) {
 
     let anim = app.state::<Arc<Anim>>().inner().clone();
 
-    println!("[heimdall] {source}: visible={visible}");
+    println!("[vidar] {source}: visible={visible}");
     if visible {
         // Bump before hiding, so the animator stops on its next frame rather
         // than steering a window that is on its way out.
@@ -1730,10 +1730,10 @@ fn toggle_popup(app: &tauri::AppHandle, source: &str) {
         // Place first, then show — the popup appears already in position, and
         // only animates from there.
         if let Err(e) = place_now(&window, &anim) {
-            eprintln!("[heimdall] WARNING: positioning failed: {e}");
+            eprintln!("[vidar] WARNING: positioning failed: {e}");
         }
         if let Err(e) = show_without_focus(&window, &anim, generation) {
-            eprintln!("[heimdall] WARNING: show failed: {e}");
+            eprintln!("[vidar] WARNING: show failed: {e}");
         }
     }
 
@@ -1743,7 +1743,7 @@ fn toggle_popup(app: &tauri::AppHandle, source: &str) {
     // The frontend owns the Channel, so it starts the capture. The payload says
     // whether the scroll keys are listening, so the UI can offer them without
     // ever advertising a shortcut that failed to bind.
-    let _ = app.emit("heimdall://summoned", keys_bound);
+    let _ = app.emit("vidar://summoned", keys_bound);
 }
 
 /// Put one block of the answer on the clipboard.
@@ -1779,7 +1779,7 @@ fn redirect_log_to_file() -> Option<std::path::PathBuf> {
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
 
-    let path = std::env::temp_dir().join("heimdall.log");
+    let path = std::env::temp_dir().join("vidar.log");
     let file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -1801,7 +1801,7 @@ fn redirect_log_to_file() -> Option<std::path::PathBuf> {
 pub fn run() {
     #[cfg(windows)]
     if let Some(log) = redirect_log_to_file() {
-        println!("[heimdall] log: {}", log.display());
+        println!("[vidar] log: {}", log.display());
     }
 
     let primary = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyW);
@@ -1829,7 +1829,7 @@ pub fn run() {
                     if *shortcut == key_copy() {
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            let _ = app.emit("heimdall://copy", 0);
+                            let _ = app.emit("vidar://copy", 0);
                         });
                         return;
                     }
@@ -1841,7 +1841,7 @@ pub fn run() {
                     if *shortcut == key_followup() {
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            let _ = app.emit("heimdall://followup", 0);
+                            let _ = app.emit("vidar://followup", 0);
                         });
                         return;
                     }
@@ -1852,7 +1852,7 @@ pub fn run() {
                     if *shortcut == key_another_shot() {
                         let app = app.clone();
                         tauri::async_runtime::spawn(async move {
-                            let _ = app.emit("heimdall://another-shot", 0);
+                            let _ = app.emit("vidar://another-shot", 0);
                         });
                         return;
                     }
@@ -1879,12 +1879,12 @@ pub fn run() {
             {
                 // Which side button summons, if any. Swallowed when it fires, so
                 // it defaults to the one of the pair almost nobody uses.
-                match std::env::var("HEIMDALL_MOUSE_BUTTON").as_deref() {
+                match std::env::var("VIDAR_MOUSE_BUTTON").as_deref() {
                     Ok("1") => SUMMON_BUTTON.store(1, Ordering::Relaxed),
                     Ok("2") => SUMMON_BUTTON.store(2, Ordering::Relaxed),
                     Ok("off") | Ok("0") => SUMMON_BUTTON.store(0, Ordering::Relaxed),
                     Ok(other) => eprintln!(
-                        "[heimdall] WARNING: HEIMDALL_MOUSE_BUTTON={other} is not 1, 2 or off — using 2"
+                        "[vidar] WARNING: VIDAR_MOUSE_BUTTON={other} is not 1, 2 or off — using 2"
                     ),
                     Err(_) => {}
                 }
@@ -1900,12 +1900,12 @@ pub fn run() {
                     .get_webview_window("main")
                     .expect("no window labeled \"main\" — check tauri.conf.json");
                 match exclude_from_capture(&window) {
-                    Ok(()) => println!("[heimdall] window excluded from screen capture"),
+                    Ok(()) => println!("[vidar] window excluded from screen capture"),
                     // Loudly, not silently: this is the headline feature.
-                    Err(e) => eprintln!("[heimdall] WARNING: capture exclusion failed: {e}"),
+                    Err(e) => eprintln!("[vidar] WARNING: capture exclusion failed: {e}"),
                 }
                 if let Err(e) = place_now(&window, &anim) {
-                    eprintln!("[heimdall] WARNING: positioning failed: {e}");
+                    eprintln!("[vidar] WARNING: positioning failed: {e}");
                 }
             }
 
@@ -1914,18 +1914,18 @@ pub fn run() {
             // setup and aborts the whole app, instead of falling back.
             let shortcut = match app.global_shortcut().register(primary) {
                 Ok(()) => {
-                    println!("[heimdall] hotkey registered: Ctrl+Alt+W");
+                    println!("[vidar] hotkey registered: Ctrl+Alt+W");
                     Some("Ctrl+Alt+W".to_string())
                 }
                 Err(e) => {
-                    eprintln!("[heimdall] Ctrl+Alt+W unavailable ({e}) — trying fallback");
+                    eprintln!("[vidar] Ctrl+Alt+W unavailable ({e}) — trying fallback");
                     match app.global_shortcut().register(fallback) {
                         Ok(()) => {
-                            println!("[heimdall] hotkey registered: Ctrl+Alt+Space");
+                            println!("[vidar] hotkey registered: Ctrl+Alt+Space");
                             Some("Ctrl+Alt+Space".to_string())
                         }
                         Err(e2) => {
-                            eprintln!("[heimdall] ERROR: no hotkey could be registered: {e2}");
+                            eprintln!("[vidar] ERROR: no hotkey could be registered: {e2}");
                             None
                         }
                     }
@@ -1950,7 +1950,7 @@ pub fn run() {
             let power = std::sync::Arc::new(tray::Power::new(cfg.num_ctx));
             app.manage(power.clone());
             if let Err(e) = tray::install(app.handle(), power) {
-                eprintln!("[heimdall] WARNING: tray unavailable: {e}");
+                eprintln!("[vidar] WARNING: tray unavailable: {e}");
             }
             Ok(())
         })

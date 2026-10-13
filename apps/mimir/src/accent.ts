@@ -1,4 +1,4 @@
-// One picked colour → every accent shade Mímir draws, in both themes.
+// One picked colour → every accent shade Mimir draws, in both themes.
 //
 // Worked in OKLCH, where lightness is perceptual: the lightness at which white
 // text stops being readable on a fill is nearly the same for every hue (L ≈ 0.55
@@ -38,7 +38,7 @@ export type Theme = {
   vars: Record<string, string>;
 };
 
-/** Sea: the color of Mímir's own badge, so the window and its icon match. */
+/** Sea: the color of Mimir's own badge, so the window and its icon match. */
 export const DEFAULT_SEED = "#1f8a8a";
 export const STORE_KEY = "mimir.theme";
 
@@ -218,7 +218,7 @@ export function themeVars(seed: string): Record<string, string> {
  * localStorage, not a file: it is synchronous, and only something synchronous
  * can be read before the first paint. A file would need an IPC round trip and the
  * default sea would flash first. The accent is cosmetic and per-machine, so it
- * does not belong in the config Heimdall and the CLI share.
+ * does not belong in the config Vidar and the CLI share.
  */
 export function loadTheme(): Theme | null {
   try {

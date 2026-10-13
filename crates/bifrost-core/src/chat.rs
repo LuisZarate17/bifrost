@@ -471,7 +471,7 @@ pub(crate) fn recover(
         Layout::Chatml => crate::toolcall::extract_calls(&raw.response, tools),
         Layout::Qwen3Coder => crate::xmlcall::extract_calls(&raw.response, tools),
     };
-    // A failure beside a call that did parse is not reported: Mímir acts on a
+    // A failure beside a call that did parse is not reported: Mimir acts on a
     // reply's first call only, so the call that parsed is what the model hears
     // back about. Unchanged from the ChatML path before this layout existed.
     if calls.is_empty()
@@ -528,7 +528,7 @@ pub enum StreamChunk<'a> {
 /// dependencies (this crate carries `reqwest`'s `blocking` feature only), and a
 /// much simpler loop. `reqwest::blocking::Response` implements [`std::io::Read`],
 /// so `BufReader::lines()` does the NDJSON splitting; the async version in
-/// Heimdall has to keep a remainder buffer because a network chunk can end
+/// Vidar has to keep a remainder buffer because a network chunk can end
 /// mid-line.
 ///
 /// Returning `on`'s error stops the stream — that is how a caller cancels, and
@@ -777,7 +777,7 @@ mod tests {
         ];
 
         for (i, messages) in conversations.into_iter().enumerate() {
-            let tools = odin_tools_for_live_test();
+            let tools = bifrost_tools_for_live_test();
             let native = chat(model, &messages, &tools, options).expect("native chat");
             // Read the native reply the way `chat_tools` does. Qwen3-Coder sometimes
             // writes its call without the `<tool_call>` opener, Ollama passes it
@@ -977,7 +977,7 @@ mod tests {
     }
 
     #[cfg(test)]
-    fn odin_tools_for_live_test() -> Vec<Tool> {
+    fn bifrost_tools_for_live_test() -> Vec<Tool> {
         crate::tools::available(true, None)
     }
 }

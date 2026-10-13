@@ -1,9 +1,9 @@
-//! Mímir — a local chat app sharing Heimdall's model.
+//! Mimir — a local chat app sharing Vidar's model.
 //!
-//! **Almost nothing from Heimdall's `lib.rs` belongs here.** That file is full of
+//! **Almost nothing from Vidar's `lib.rs` belongs here.** That file is full of
 //! Win32 work which exists only because the popup is a click-through overlay that
 //! never takes focus: capture exclusion, `SW_SHOWNOACTIVATE`, a low-level mouse
-//! hook, a tray icon, global shortcuts. Mímir is an ordinary window — focusable,
+//! hook, a tray icon, global shortcuts. Mimir is an ordinary window — focusable,
 //! decorated, resizable, in the taskbar, visible on a screen share. Copying any of
 //! that here would be a bug.
 //!
@@ -11,8 +11,8 @@
 //! `Channel`, never as the command's return value.
 //!
 //! **The conversation lives in the frontend for now.** `send` takes the whole
-//! message list rather than keeping turns in Rust state the way Heimdall does —
-//! Heimdall's popup is stateless between summons, while this window owns its thread.
+//! message list rather than keeping turns in Rust state the way Vidar does —
+//! Vidar's popup is stateless between summons, while this window owns its thread.
 //! G4 is what moves storage into Rust properly.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -105,7 +105,7 @@ async fn send(
 
     // Every bifrost_core call goes off the async worker. It is blocking by design,
     // and calling it from an async command drops a tokio runtime inside an async
-    // context and kills the worker — which already cost Heimdall a request that
+    // context and kills the worker — which already cost Vidar a request that
     // hung forever on "Reading your screen…".
     let cfg = tauri::async_runtime::spawn_blocking(config::load)
         .await
@@ -115,7 +115,7 @@ async fn send(
     start_ollama(Some(&on_event)).await?;
 
     // Cold? Say so before the wait, not after. Checked rather than assumed — the
-    // model may have been warmed from Heimdall's tray, from `odin warm`, or simply
+    // model may have been warmed from Vidar's tray, from `bifrost warm`, or simply
     // not have expired yet.
     let tag = model.clone();
     let resident = tauri::async_runtime::spawn_blocking(move || {
@@ -305,7 +305,7 @@ async fn unload_model(tag: String) -> Result<bool, String> {
 /// Write the chosen model to the shared config.
 ///
 /// **This is the switchboard part.** The config is the single source of truth for
-/// "current model", so writing it here is what lets the CLI and (from G3) Heimdall
+/// "current model", so writing it here is what lets the CLI and (from G3) Vidar
 /// follow the choice without being told separately.
 #[tauri::command]
 async fn set_model(tag: String) -> Result<(), String> {
@@ -403,7 +403,7 @@ async fn model_offer() -> Result<Option<ModelOffer>, String> {
 /// webview never sends a model tag, only which direction it clicked, so
 /// nothing reaching the IPC boundary can choose what model to load.
 ///
-/// The config is written *before* the load: Heimdall decides whether to
+/// The config is written *before* the load: Vidar decides whether to
 /// refuse by reading `cfg.model`, so this is what makes it refuse for the
 /// whole switch rather than racing to reload the vision model while the
 /// coding model is still coming up.
@@ -1459,7 +1459,7 @@ async fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<Folder>, 
     use tauri_plugin_dialog::DialogExt;
 
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog().file().set_title("Choose the folder Mímir may edit").blocking_pick_folder()
+        app.dialog().file().set_title("Choose the folder Mimir may edit").blocking_pick_folder()
     })
     .await
     .map_err(|e| format!("the folder picker failed: {e}"))?;
@@ -1715,12 +1715,12 @@ fn windows_accent() -> Option<String> {
 /// Send `println!` and `eprintln!` to a file, since there is no console.
 ///
 /// `main.rs` sets `windows_subsystem = "windows"`, so this process has no stdout
-/// to write to — without this, everything printed vanishes. Heimdall's `lib.rs`
-/// has the twin of this function writing `heimdall.log`, for the same reason.
+/// to write to — without this, everything printed vanishes. Vidar's `lib.rs`
+/// has the twin of this function writing `vidar.log`, for the same reason.
 ///
 /// **Two copies of twenty lines, deliberately.** It is app-level plumbing: each
 /// app picks its own filename and its own answer to whether it is windowless at
-/// all. `odin-core`'s stated rule is that nothing in it prints, and giving it a
+/// all. `bifrost-core`'s stated rule is that nothing in it prints, and giving it a
 /// Win32 console dependency to serve something only apps need would cost more
 /// than the duplication. **If a third app wants this, that is the signal to
 /// extract it.**
@@ -1798,7 +1798,7 @@ pub fn run() {
             stop
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Mímir");
+        .expect("error while running Mimir");
 }
 
 #[cfg(test)]
@@ -1872,8 +1872,8 @@ mod tests {
     }
 
     /// The approval boundary. These are the only tests in this crate on purpose:
-    /// everything else here is a thin `spawn_blocking` wrapper over `odin-core`,
-    /// which has its own. This is the one place Mímir enforces a rule of its
+    /// everything else here is a thin `spawn_blocking` wrapper over `bifrost-core`,
+    /// which has its own. This is the one place Mimir enforces a rule of its
     /// own, and a rule that is not tested is a comment.
     ///
     /// They drive `redeem_in` with a local slot rather than the process-wide

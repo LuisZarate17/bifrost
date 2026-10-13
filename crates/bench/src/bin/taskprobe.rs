@@ -115,8 +115,9 @@ fn without_plan(mut offered: Vec<Tool>) -> Vec<Tool> {
 /// The pinned commit every removal task starts from.
 const PIN: &str = "6653c27";
 
-/// Where the odin-core crate lives, relative to the repo root and to a worktree
-/// root alike.
+/// Where the shared crate lives inside a worktree of the pinned commits. The
+/// tasks are taken from a time it was still `odin-core`, so this stays the old
+/// path; the repo itself now calls it `crates/bifrost-core`.
 const CRATE: &str = "crates/odin-core";
 
 // ── the two kinds of task ───────────────────────────────────────────────────
@@ -1081,7 +1082,7 @@ fn run(
     // names where that repo is.
     //
     // A task that stubs out a safety function (b03's `contain_with`) stubs the
-    // worktree's copy only: the tools the model calls run on the odin-core this
+    // worktree's copy only: the tools the model calls run on the bifrost-core this
     // probe was built with, whose rules are intact.
     let setup = Setup { ws: &ws, backups: &backups, check: Some(&cargo), confine_reads: true, compact };
     let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, PROBE_ROUNDS, &setup);
@@ -1221,7 +1222,7 @@ fn main() {
     let tasks: Vec<Task> =
         tasks().into_iter().filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o))).collect();
 
-    let scratch_root = std::env::temp_dir().join(format!("odin-taskprobe-{}", std::process::id()));
+    let scratch_root = std::env::temp_dir().join(format!("bifrost-taskprobe-{}", std::process::id()));
     // The repo's own target dir: warming a fresh one would rebuild every
     // proc-macro from nothing, and a fresh link is what Smart App Control has
     // refused on this machine before.
@@ -1508,7 +1509,7 @@ mod tests {
     #[test]
     fn reads_are_confined_to_the_worktree() {
         let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let base = std::env::temp_dir().join(format!("odin-taskprobe-confine-{}-{n}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("bifrost-taskprobe-confine-{}-{n}", std::process::id()));
         let tree = base.join("tree");
         std::fs::create_dir_all(tree.join("src")).unwrap();
         std::fs::write(tree.join("src/lib.rs"), "pub fn inside() {}\n").unwrap();

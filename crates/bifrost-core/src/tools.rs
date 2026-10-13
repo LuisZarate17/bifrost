@@ -37,7 +37,7 @@
 //!
 //! **A read can take part of a file (H8).** `read_file` has `start_line` and
 //! `end_line`, 1-based and inclusive, because a read over 64 KB was refused whole
-//! and five of Mímir's own source files are over that — `edit_file` can change a
+//! and five of Mimir's own source files are over that — `edit_file` can change a
 //! file up to 1 MiB, but it needs text only a read gives. The range is stated in
 //! one header line, `[lines 120–180 of 2140]`, and the lines are **not** numbered:
 //! a small model copies numbers it is shown into the text it then edits. A file
@@ -1397,7 +1397,7 @@ mod tests {
 
     #[test]
     fn the_prompt_asks_for_a_check_only_when_there_is_one() {
-        let dir = std::env::temp_dir().join(format!("odin-prompt-ws-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("bifrost-prompt-ws-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let ws = Workspace::open(&dir).unwrap();
         assert!(!system_prompt(&ws, false).contains("run_check"));
@@ -1571,7 +1571,7 @@ mod tests {
     #[test]
     fn a_real_file_comes_back_normalised() {
         let mut p = std::env::temp_dir();
-        p.push(format!("odin-tools-test-{}.txt", std::process::id()));
+        p.push(format!("bifrost-tools-test-{}.txt", std::process::id()));
         std::fs::write(&p, "hello\r\nfrom a tool\r\n").unwrap();
         assert_eq!(run_read_file(&p, None), "hello\nfrom a tool\n");
         let _ = std::fs::remove_file(p);
@@ -1627,7 +1627,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or_default();
-            let dir = std::env::temp_dir().join(format!("odin-tools-{tag}-{}-{n}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("bifrost-tools-{tag}-{}-{n}", std::process::id()));
             std::fs::create_dir_all(dir.join("project")).unwrap();
             Self { dir }
         }
@@ -2070,13 +2070,13 @@ mod tests {
     #[test]
     fn a_drive_root_or_the_whole_profile_is_too_broad_to_read_unasked() {
         // Made-up profile names, so nothing here depends on this machine's folders.
-        let profile = Some(Path::new(r"C:\Users\odin-test-user"));
+        let profile = Some(Path::new(r"C:\Users\bifrost-test-user"));
         assert!(broad_root(Path::new(r"C:\"), profile));
         assert!(broad_root(Path::new(r"\\?\D:\"), None));
         assert!(broad_root(Path::new(r"C:\Users"), profile));
-        assert!(broad_root(Path::new(r"C:\Users\odin-test-user"), profile));
-        assert!(broad_root(Path::new(r"\\?\c:\users\ODIN-TEST-USER"), profile), "case and prefix do not matter");
-        assert!(!broad_root(Path::new(r"C:\Users\odin-test-user\source\repos\odin"), profile));
+        assert!(broad_root(Path::new(r"C:\Users\bifrost-test-user"), profile));
+        assert!(broad_root(Path::new(r"\\?\c:\users\BIFROST-TEST-USER"), profile), "case and prefix do not matter");
+        assert!(!broad_root(Path::new(r"C:\Users\bifrost-test-user\source\repos\odin"), profile));
         assert!(!broad_root(Path::new(r"C:\work\proj"), profile));
         assert!(!broad_root(Path::new(r"C:\work\proj"), None));
     }
@@ -2084,9 +2084,9 @@ mod tests {
     #[test]
     fn a_read_on_another_machine_is_shown_as_given_and_not_resolved() {
         for ws in [None, Some(&Sandbox::new("rt-remote").ws())] {
-            let (open, shown) = read_target(r"\\odin-test-no-such-host\share\x.txt", ws);
-            assert_eq!(open, PathBuf::from(r"\\odin-test-no-such-host\share\x.txt"));
-            assert_eq!(shown, r"\\odin-test-no-such-host\share\x.txt");
+            let (open, shown) = read_target(r"\\bifrost-test-no-such-host\share\x.txt", ws);
+            assert_eq!(open, PathBuf::from(r"\\bifrost-test-no-such-host\share\x.txt"));
+            assert_eq!(shown, r"\\bifrost-test-no-such-host\share\x.txt");
         }
     }
 

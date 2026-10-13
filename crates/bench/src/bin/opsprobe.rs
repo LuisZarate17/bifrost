@@ -407,7 +407,7 @@ fn main() {
     let tasks: Vec<Task> =
         tasks().into_iter().filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o))).collect();
 
-    let scratch_root = std::env::temp_dir().join(format!("odin-opsprobe-{}", std::process::id()));
+    let scratch_root = std::env::temp_dir().join(format!("bifrost-opsprobe-{}", std::process::id()));
     // A scratch APPDATA: the tools never read it for the fixture (backups are passed
     // in), but `edit` refuses anything under the real one, and nothing here should
     // be able to reach it.
@@ -563,14 +563,14 @@ mod tests {
     /// A scratch folder that removes itself when the test ends, however it ends.
     /// Both tests below used to call `remove_dir_all` as their last line, so any
     /// `unwrap` or failed assertion before it skipped the cleanup and left
-    /// `odin-opsprobe-undo-…` in `%TEMP%` (R-41). A guard's `Drop` runs on a
+    /// `bifrost-opsprobe-undo-…` in `%TEMP%` (R-41). A guard's `Drop` runs on a
     /// panic too.
     struct Scratch(PathBuf);
 
     impl Scratch {
         fn new(label: &str) -> Scratch {
             let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-            Scratch(std::env::temp_dir().join(format!("odin-opsprobe-{label}-{}-{n}", std::process::id())))
+            Scratch(std::env::temp_dir().join(format!("bifrost-opsprobe-{label}-{}-{n}", std::process::id())))
         }
     }
 

@@ -12,7 +12,7 @@
 //!
 //! 1. **Nothing outside the folder.** Patterns are relative; `..`, a drive or a
 //!    verbatim path is refused, not resolved. The walk does not follow links or
-//!    junctions, and skips `.git` and Mímir's own settings folder — the same
+//!    junctions, and skips `.git` and Bifrost's own settings folder — the same
 //!    places [`crate::edit`] will not write.
 //! 2. **Not the build's files.** `target/` and `node_modules/` are skipped even
 //!    in a folder with no `.gitignore`, and git's own ignore rules are honoured:
@@ -333,7 +333,7 @@ fn configured(top: &Path, root: &Path, parents: bool, app_data: Option<PathBuf>,
 /// The rule behind automatic reads: *if the listing would show it, reading it
 /// does not ask.* So this walks the same way the listing does — hidden files in,
 /// `.gitignore` files honoured wherever they sit, `.git`, `target`,
-/// `node_modules`, Mímir's own settings folder and every link skipped — but only
+/// `node_modules`, Bifrost's own settings folder and every link skipped — but only
 /// down the chain of folders from the root to `real`, and asks whether `real`
 /// comes out. A file a `.gitignore` hides, one in a skipped folder, and one
 /// reached through a link are therefore all `false`, with no second copy of
@@ -603,7 +603,7 @@ const MAP_COMMENT_CAP: usize = 120;
 /// and, when the files do not fit, ends with `… N more files`.
 ///
 /// The walk is [`walk`]'s, so the same rules hold: `.gitignore`, `target/`,
-/// `node_modules/`, links, Mímir's folder and Stop. Files whose names look like
+/// `node_modules/`, links, Bifrost's folder and Stop. Files whose names look like
 /// secrets are left out ([`secret_name`]), reads go through
 /// [`edit::open_checked`] and stop at 2 KB, and a file with a NUL in it is
 /// binary and left out. A file with no header comment gets its path alone.
@@ -718,7 +718,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or_default();
-            let dir = std::env::temp_dir().join(format!("odin-search-{tag}-{}-{n}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("bifrost-search-{tag}-{}-{n}", std::process::id()));
             std::fs::create_dir_all(dir.join("project")).unwrap();
             Self { dir }
         }

@@ -44,7 +44,7 @@ export function splitName(name: string): { family: string; size: string; tag: st
  * can call a tool.
  */
 const BADGES = [
-  { key: "vision", label: "Vision", Icon: Eye, title: "Can be sent images. Heimdall needs this for screenshots." },
+  { key: "vision", label: "Vision", Icon: Eye, title: "Can be sent images. Vidar needs this for screenshots." },
   { key: "tools", label: "Tools", Icon: Wrench, title: "Can emit structured tool calls (see docs/G0-results.md)." },
 ] as const;
 
@@ -71,9 +71,9 @@ export function GpuMeter({ card, compact }: { card: CardState | null; compact?: 
 /**
  * The switchboard: what is installed, what it can do, and what is loaded.
  *
- * This is what makes Mímir a hub rather than a chat box — it is the one place
+ * This is what makes Mimir a hub rather than a chat box — it is the one place
  * the resident model is chosen, and the choice is written to the shared config
- * so the CLI and Heimdall follow it without being told separately.
+ * so the CLI and Vidar follow it without being told separately.
  */
 export function Switchboard({
   models,
@@ -162,7 +162,7 @@ export function Switchboard({
           <div>
             <h2 id="models-title">Models</h2>
             <p className="dialog-sub">
-              The model you choose is shared — Heimdall and the <code>odin</code> CLI follow it.
+              The model you choose is shared — Vidar and the <code>bifrost</code> CLI follow it.
             </p>
           </div>
           <div className="dialog-tools">

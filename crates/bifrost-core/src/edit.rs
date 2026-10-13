@@ -356,7 +356,7 @@ impl Workspace {
         self.contain_with(real, requested, app_data().as_deref())
     }
 
-    /// [`contain`](Self::contain), with Mímir's own folder passed in so a test
+    /// [`contain`](Self::contain), with Bifrost's own folder passed in so a test
     /// can stand one up without touching the real `%APPDATA%`.
     fn contain_with(&self, real: &Path, requested: &str, app_data: Option<&Path>) -> Result<(), String> {
         if !real.starts_with(&self.root) {
@@ -396,12 +396,13 @@ impl Workspace {
                 clean(requested)
             ));
         }
-        // Mímir's settings and undo records. Only reachable when the folder you
-        // chose contains %APPDATA% — your home folder, say — and then editing
-        // `config.json` would let the model choose its own check command.
+        // Bifrost's settings and undo records, shared by every app. Only reachable
+        // when the folder you chose contains %APPDATA% — your home folder, say —
+        // and then editing `config.json` would let the model choose its own check
+        // command.
         if app_data.is_some_and(|d| real.starts_with(d)) {
             return Err(format!(
-                "{} is inside Mímir's own settings folder, which is never edited",
+                "{} is inside Bifrost's own settings folder, which is never edited",
                 clean(requested)
             ));
         }
@@ -1249,7 +1250,7 @@ pub fn backups_dir() -> Option<PathBuf> {
 /// failed read.
 fn write_replacing(path: &Path, bytes: &[u8], expect: u64) -> Result<(), String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = path.with_file_name(format!(".{name}.odin-tmp"));
+    let tmp = path.with_file_name(format!(".{name}.bifrost-tmp"));
     if let Err(e) = std::fs::write(&tmp, bytes) {
         // A write that failed part way (disk full) leaves a partial file behind.
         let _ = std::fs::remove_file(&tmp);
@@ -1392,7 +1393,7 @@ pub fn move_new(from: &Path, to: &Path) -> Result<(), String> {
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = path.with_file_name(format!(".{name}.odin-new"));
+    let tmp = path.with_file_name(format!(".{name}.bifrost-new"));
     // `create_new`: a leftover from a crash is never written over either.
     let mut f = std::fs::OpenOptions::new()
         .write(true)
@@ -2070,7 +2071,7 @@ mod tests {
 
     impl Sandbox {
         fn new(tag: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("odin-edit-{tag}-{}", new_id()));
+            let dir = std::env::temp_dir().join(format!("bifrost-edit-{tag}-{}", new_id()));
             std::fs::create_dir_all(&dir).unwrap();
             Self { dir }
         }
@@ -2307,7 +2308,7 @@ mod tests {
         let app = std::fs::canonicalize(s.dir.join("project/AppData/Roaming/odin")).unwrap();
         let real = std::fs::canonicalize(&cfg).unwrap();
         let err = ws.contain_with(&real, "AppData/Roaming/odin/config.json", Some(&app)).unwrap_err();
-        assert!(err.contains("Mímir's own settings"), "{err}");
+        assert!(err.contains("Bifrost's own settings"), "{err}");
         // Its neighbours are ordinary files.
         let other = std::fs::canonicalize(s.write("AppData/Roaming/other/x.txt", b"x")).unwrap();
         assert!(ws.contain_with(&other, "AppData/Roaming/other/x.txt", Some(&app)).is_ok());
@@ -2955,7 +2956,7 @@ mod tests {
         let b = replace(&s, &ws, "b.txt", "red", "blue");
         // A directory where write_replacing wants its temporary file makes the
         // write to a.txt fail on any OS.
-        let block = ws.root().join(".a.txt.odin-tmp");
+        let block = ws.root().join(".a.txt.bifrost-tmp");
         std::fs::create_dir(&block).unwrap();
 
         let out = undo_turn(&[a.clone(), b.clone()], &s.backups()).unwrap();
@@ -3079,7 +3080,7 @@ mod tests {
         // have tried an SMB connection first. It comes back as given, outside.
         let s = Sandbox::new("loc-remote");
         let ws = s.ws();
-        let given = r"\\odin-test-no-such-host\share\x.txt";
+        let given = r"\\bifrost-test-no-such-host\share\x.txt";
         match ws.locate(given) {
             Located::Outside(p) => assert_eq!(p, PathBuf::from(given)),
             other => panic!("{other:?}"),
@@ -3861,7 +3862,7 @@ mod tests {
             let path = s.write("a.txt", b"one\n");
             let id = replace(&s, &ws, "a.txt", "one", "two");
             let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let h = editor_save_on(path, ws.root().to_path_buf(), |n| n.ends_with(".odin-tmp"), done.clone());
+            let h = editor_save_on(path, ws.root().to_path_buf(), |n| n.ends_with(".bifrost-tmp"), done.clone());
             let r = undo(&id, &s.backups());
             done.store(true, std::sync::atomic::Ordering::SeqCst);
             let saved = h.join().unwrap();
@@ -3881,7 +3882,7 @@ mod tests {
         let err = write_replacing(&p, b"ours\n", fingerprint(b"one\n")).unwrap_err();
         assert!(err.contains("changed just now"), "{err}");
         assert_eq!(s.read("a.txt"), b"theirs\n");
-        assert!(!s.dir.join("project").join(".a.txt.odin-tmp").exists());
+        assert!(!s.dir.join("project").join(".a.txt.bifrost-tmp").exists());
         write_replacing(&p, b"ours\n", fingerprint(b"theirs\n")).unwrap();
         assert_eq!(s.read("a.txt"), b"ours\n");
     }
@@ -3932,7 +3933,7 @@ mod tests {
         assert!(!err.contains("reading"), "{err}");
         assert_eq!(s.read("a.txt"), b"one
 ");
-        assert!(!s.dir.join("project").join(".a.txt.odin-tmp").exists());
+        assert!(!s.dir.join("project").join(".a.txt.bifrost-tmp").exists());
     }
 
     /// An editor that holds the file open for reading only, and shares nothing but
@@ -3950,7 +3951,7 @@ mod tests {
         assert!(err.contains("is open in another program that won't let it be replaced"), "{err}");
         assert!(!err.contains("os error"), "{err}");
         assert_eq!(s.read("a.txt"), b"one\n");
-        assert!(!s.dir.join("project").join(".a.txt.odin-tmp").exists());
+        assert!(!s.dir.join("project").join(".a.txt.bifrost-tmp").exists());
         // Once the editor lets go, the same write goes through.
         write_replacing(&p, b"two\n", fingerprint(b"one\n")).unwrap();
         assert_eq!(s.read("a.txt"), b"two\n");

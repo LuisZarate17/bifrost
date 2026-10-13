@@ -5,7 +5,7 @@
 // developer convenience. It is not fine here: Smart App Control refuses release
 // builds on this machine, so the debug build *is* the app, and a console
 // application dies with the console that launched it. Closing a terminal took
-// Heimdall down with it.
+// Vidar down with it.
 //
 // The logs are not lost — `vidar_lib::run` redirects them to a file. See
 // `redirect_log_to_file`.

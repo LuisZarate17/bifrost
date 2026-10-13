@@ -425,7 +425,7 @@ fn main() {
     let tasks: Vec<Task> =
         tasks().into_iter().filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o))).collect();
 
-    let scratch_root = std::env::temp_dir().join(format!("odin-fixprobe-{}", std::process::id()));
+    let scratch_root = std::env::temp_dir().join(format!("bifrost-fixprobe-{}", std::process::id()));
     let cargo = Check {
         argv: vec!["cargo".into(), "check".into()],
         env: vec![

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Answer } from "@bifrost/ui";
-// The renderer's own styles. @odin/ui does not import them itself, so that
+// The renderer's own styles. @bifrost/ui does not import them itself, so that
 // `npm run check:inert` can SSR-build Answer and run it under plain node.
 import "@bifrost/ui/answer.css";
 import "./App.css";
@@ -110,7 +110,7 @@ function App() {
   }, []);
 
   // Dev-only: `?preview` renders a real saved answer plus the injection cases,
-  // in a plain browser with no Heimdall process. Smart App Control blocks the
+  // in a plain browser with no Vidar process. Smart App Control blocks the
   // built binary, and this work doesn't need it.
   useEffect(() => {
     if (!import.meta.env.DEV) return;
@@ -145,7 +145,7 @@ function App() {
         setStatus("Warming the model…");
       } else if (message.event === "noVision") {
         // Nothing was captured and nothing will be asked. Say which model, so
-        // the fix — switch it in Mímir — is obvious rather than a guess.
+        // the fix — switch it in Mimir — is obvious rather than a guess.
         setStatus("");
         setNoVision(message.data.model);
       } else if (message.event === "token") {
@@ -196,7 +196,7 @@ function App() {
   }, [stream, setPick]);
 
   useEffect(() => {
-    const unlisten = listen("heimdall://another-shot", () => void anotherShot());
+    const unlisten = listen("vidar://another-shot", () => void anotherShot());
     return () => void unlisten.then((f) => f());
   }, [anotherShot]);
 
@@ -270,7 +270,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const unlisten = listen<boolean>("heimdall://summoned", (event) => {
+    const unlisten = listen<boolean>("vidar://summoned", (event) => {
       setScrollKeys(event.payload);
       void ask();
     });
@@ -348,7 +348,7 @@ function App() {
   // viewport. It already means up and down, so nothing new has to be learned and
   // nothing further has to be claimed from the rest of the system.
   useEffect(() => {
-    const unlisten = listen<number>("heimdall://scroll", (event) => {
+    const unlisten = listen<number>("vidar://scroll", (event) => {
       const at = pickRef.current;
 
       // Collapsed, and asked to go down: that *is* the request to see more. The
@@ -386,7 +386,7 @@ function App() {
 
   // One key, two halves: enter the pick, then take it.
   useEffect(() => {
-    const unlisten = listen("heimdall://followup", () => {
+    const unlisten = listen("vidar://followup", () => {
       // A toggle, like Ctrl+Alt+W and Ctrl+Alt+Z. Escape turned out not to reach
       // the page even while the box holds the caret, so the key that opens the
       // box has to be able to close it — otherwise the only way out is to send a
@@ -423,7 +423,7 @@ function App() {
   }, [asking, closeAsk]);
 
   useEffect(() => {
-    const unlisten = listen("heimdall://copy", () => {
+    const unlisten = listen("vidar://copy", () => {
       const list = blocks();
       if (list.length === 0) return;
 
@@ -568,7 +568,7 @@ function App() {
   return (
     <main className="popup" ref={popupRef}>
       <header>
-        <span className="mark">Heimdall</span>
+        <span className="mark">Vidar</span>
         {/* The hint says whatever is most useful *now*: confirmation of a copy,
             then how to finish a pick, then how to reach the rest of a long
             answer — and only otherwise the key you just pressed to get here.
@@ -644,7 +644,7 @@ function App() {
         <p className="idle">
           <strong>{noVision}</strong> cannot be sent images, so nothing was captured.
           <br />
-          Pick a model with the <em>vision</em> badge in Mímir, then press the hotkey again.
+          Pick a model with the <em>vision</em> badge in Mimir, then press the hotkey again.
         </p>
       )}
 

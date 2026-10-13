@@ -19,14 +19,14 @@ mod power;
 
 use bifrost_core::{config, ollama};
 
-// DEFAULT_MODEL and NUM_CTX moved to odin-core::config at Before-G0 step 3.
-// They were duplicated here and in Heimdall, and the num_ctx copies had already
-// drifted apart - this one said 8192 while Heimdall said 32768, so `odin warm`
+// DEFAULT_MODEL and NUM_CTX moved to bifrost-core::config at Before-G0 step 3.
+// They were duplicated here and in Vidar, and the num_ctx copies had already
+// drifted apart - this one said 8192 while Vidar said 32768, so `bifrost warm`
 // loaded a runner the hotkey then threw away. Measured 2026-09-19: switching
 // context cost a 3.09s reload every time.
 
 // The reason it must be set at all still holds, and now lives with the constant
-// in odin-core::config: a 1080p screen costs ~2,042 image tokens (A2), and
+// in bifrost-core::config: a 1080p screen costs ~2,042 image tokens (A2), and
 // Ollama derives its own default from VRAM, landing at 4k on this card — which
 // would silently truncate the screenshot.
 
@@ -129,13 +129,13 @@ fn capture_screen() -> Shot {
 }
 
 const USAGE: &str = "\
-odin — ask a local vision model about your screen
+bifrost — ask a local vision model about your screen
 
-  odin [SECONDS] [--model TAG]   capture the screen and ask about it
-  odin warm      [--model TAG]   load the model and pin it in VRAM
-  odin off       [--model TAG]   release it and give the card its memory back
-  odin status    [--model TAG]   what is loaded, per Ollama and per the card
-  odin help                      this text
+  bifrost [SECONDS] [--model TAG]   capture the screen and ask about it
+  bifrost warm      [--model TAG]   load the model and pin it in VRAM
+  bifrost off       [--model TAG]   release it and give the card its memory back
+  bifrost status    [--model TAG]   what is loaded, per Ollama and per the card
+  bifrost help                      this text
 
 The model, the prompt and num_ctx come from %APPDATA%\\odin\\config.json.
 Delete it and the built-in defaults apply — a missing config is a normal state.

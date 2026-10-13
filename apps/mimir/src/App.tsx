@@ -14,7 +14,7 @@ import { Appearance, syncWindowsAccent } from "./Appearance";
 // The badge — the same mark as the taskbar icon, so the window and the thing you
 // clicked to open it read as one object. Drawn as SVG so it follows the accent.
 import { Badge } from "./Badge";
-// The renderer's styles. @odin/ui does not import them itself, so that
+// The renderer's styles. @bifrost/ui does not import them itself, so that
 // `npm run check:inert` can SSR-build Answer and run it under plain node.
 import "@bifrost/ui/answer.css";
 import "./App.css";
@@ -34,7 +34,7 @@ type StreamEvent =
       };
     };
 
-/** What odin_core::store writes. The unused fields are decision #2: adding
+/** What bifrost_core::store writes. The unused fields are decision #2: adding
  *  them later would mean migrating files already holding real conversations. */
 type StoredMessage = {
   role: string;
@@ -121,10 +121,10 @@ export type Entry =
       error?: string;
     };
 
-/** One step of the model's task list; `odin_core::tools::PlanStep`. */
+/** One step of the model's task list; `bifrost_core::tools::PlanStep`. */
 export type PlanItem = { text: string; status: "pending" | "doing" | "done" };
 
-/** `odin_core::tools::Lines`: 1-based and inclusive; `end` null is "to the end". */
+/** `bifrost_core::tools::Lines`: 1-based and inclusive; `end` null is "to the end". */
 export type LineRange = { start: number; end: number | null };
 
 export type DiffLine = { tag: " " | "-" | "+"; text: string; old: number | null; new: number | null };
@@ -139,13 +139,13 @@ type Folder = {
   notes?: { name: string; on: boolean; cut: boolean } | null;
 };
 
-/** Matches odin_core::tools::MAX_ROUNDS. G7 measured a two-file change taking
+/** Matches bifrost_core::tools::MAX_ROUNDS. G7 measured a two-file change taking
  *  five rounds, one more than G6's old bound of four allowed. A call that costs no
  *  round (an accepted task-list update, an automatic read, listing or search that
  *  succeeded) does not count toward it. */
 const MAX_ROUNDS = 10;
 
-/** Matches odin_core::tools::MAX_FREE_CALLS. The calls that cost no round a turn
+/** Matches bifrost_core::tools::MAX_FREE_CALLS. The calls that cost no round a turn
  *  may make on top of MAX_ROUNDS: the loop below stops at MAX_ROUNDS + this many
  *  requests whatever Rust says. Not a budget to use up but the ceiling that stops
  *  a model reading in circles. */
@@ -222,7 +222,7 @@ function markUndone(all: Entry[], ids: string[]): Entry[] {
   );
 }
 
-/** What `undo_turn` reports; see odin_core::edit::TurnUndo. */
+/** What `undo_turn` reports; see bifrost_core::edit::TurnUndo. */
 type TurnUndo = { restored: string[]; already: string[]; failed: { id: string; display: string; error: string } | null };
 
 /** A second click this soon after the first is a habit, not an answer. */
@@ -283,7 +283,7 @@ const BUDGET = 0.75;
 const estimate = (text: string) => Math.ceil(text.length / 4);
 
 /**
- * What the new-chat screen offers to start with — the four things Mímir does
+ * What the new-chat screen offers to start with — the four things Mimir does
  * that a plain chat box does not, each filling the composer rather than sending,
  * so the question is still yours to finish.
  */
@@ -308,9 +308,9 @@ function greeting(now = new Date()): string {
 /**
  * Put text on the clipboard.
  *
- * Mímir is an ordinary focusable window served from `tauri.localhost`, which
+ * Mimir is an ordinary focusable window served from `tauri.localhost`, which
  * Chromium treats as a secure context — so the web clipboard works here, unlike
- * in Heimdall's never-focused popup, which has to write it from Rust.
+ * in Vidar's never-focused popup, which has to write it from Rust.
  */
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -980,9 +980,9 @@ function App() {
   /**
    * Drop the oldest exchanges until the conversation fits, and say so.
    *
-   * Heimdall's `trim_images` set the precedent and the reasoning: it strips images
+   * Vidar's `trim_images` set the precedent and the reasoning: it strips images
    * from old turns but keeps the turns, because dropping whole ones "would leave
-   * the conversation full of holes". Mímir is text-only, so pairs are the unit
+   * the conversation full of holes". Mimir is text-only, so pairs are the unit
    * — but the principle that carries is **degrade visibly, never silently**. An
    * unannounced drop is exactly what "it got strange after a while" looks like.
    */
@@ -1829,7 +1829,7 @@ function App() {
         <div className="sb-top">
           <div className="brand">
             <Badge size={32} className="brand-mark" />
-            <span className="brand-name">Mímir</span>
+            <span className="brand-name">Mimir</span>
           </div>
           <button
             className="icon-btn"
@@ -2058,7 +2058,7 @@ function App() {
                     void send();
                   }
                 }}
-                placeholder={empty ? "How can I help?" : "Reply to Mímir"}
+                placeholder={empty ? "How can I help?" : "Reply to Mimir"}
                 rows={1}
                 disabled={streaming}
                 aria-label="Message"

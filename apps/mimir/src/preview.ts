@@ -3,7 +3,7 @@
 // writing a conversation to disk. Loaded through a dynamic import behind
 // `import.meta.env.DEV`, so none of this reaches the built app.
 //
-// Same idea as Heimdall's `?preview` and its sample-answer.ts.
+// Same idea as Vidar's `?preview` and its sample-answer.ts.
 //
 //   ?preview          a finished exchange, ending on a tool call awaiting approval
 //   ?preview=stream   the same thread, with an answer still being waited on
@@ -99,8 +99,8 @@ function seedConversations(): Summary[] {
 
 const STREAMED = `Here is the short version of **docs/PLAN.md**:
 
-1. **Heimdall** answers about whatever is on screen, in a popup no screen-share can see.
-2. **Mímir** is the chat window, sharing Heimdall's model and deciding which one is loaded.
+1. **Vidar** answers about whatever is on screen, in a popup no screen-share can see.
+2. **Mimir** is the chat window, sharing Vidar's model and deciding which one is loaded.
 3. Both run on one machine, and nothing leaves it.
 
 The model holds about 8 GB while resident, which is why \`warm\` and \`off\` are explicit.`;
@@ -259,18 +259,18 @@ Three things worth knowing:
 const FILE = `[workspace]
 resolver = "3"
 members = [
-    "crates/odin-core",
-    "crates/odin-cli",
+    "crates/bifrost-core",
+    "crates/bifrost-cli",
     "crates/bench",
-    "apps/heimdall/src-tauri",
+    "apps/vidar/src-tauri",
     "apps/mimir/src-tauri",
 ]`;
 
-const SECOND = `Five members. \`apps/heimdall/src-tauri\` and \`apps/mimir/src-tauri\` are the two apps; the rest are the shared crate, the CLI, and the bench harness.
+const SECOND = `Five members. \`apps/vidar/src-tauri\` and \`apps/mimir/src-tauri\` are the two apps; the rest are the shared crate, the CLI, and the bench harness.
 
 Because they share one \`target/\`, a plain \`cargo build\` at the root rebuilds **both** apps without their frontend embedded. Build them with \`npm run app\` and \`npm run app:mimir\` instead.`;
 
-/** An edit as Rust would plan it: the real shape of odin_core::edit's diff. */
+/** An edit as Rust would plan it: the real shape of bifrost_core::edit's diff. */
 const RENAME_DIFF = {
   create: false,
   added: 2,

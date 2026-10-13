@@ -4,7 +4,7 @@
 //!   cargo run -p bench --bin editprobe -- --model llama3.1:8b --runs 3
 //!   cargo run -p bench --bin editprobe -- --only t10 --format replace
 //!
-//! **This decides how Mímir edits files, and whether it should at all.**
+//! **This decides how Mimir edits files, and whether it should at all.**
 //! Reading a file wrong costs one bad answer; writing one wrong corrupts it. So
 //! before the feature is trusted, it is measured on the model that will do it.
 //!
@@ -515,7 +515,7 @@ fn main() {
         }
     }
 
-    let scratch_root = std::env::temp_dir().join(format!("odin-editprobe-{}", std::process::id()));
+    let scratch_root = std::env::temp_dir().join(format!("bifrost-editprobe-{}", std::process::id()));
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())

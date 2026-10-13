@@ -134,7 +134,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or_default();
-            let dir = std::env::temp_dir().join(format!("odin-notes-{tag}-{}-{n}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("bifrost-notes-{tag}-{}-{n}", std::process::id()));
             std::fs::create_dir_all(dir.join("project")).unwrap();
             Self { dir }
         }

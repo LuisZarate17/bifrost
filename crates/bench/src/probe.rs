@@ -3,7 +3,7 @@
 //! Included by each probe as `#[path = "../probe.rs"] mod probe;` rather than
 //! through a library target. A lib in this crate would be named `bench`, and on
 //! Windows a lib and a bin cannot share a name (rust-lang/cargo#8519) — the same
-//! reason Mímir's own lib is `mimir_lib`.
+//! reason Mimir's own lib is `mimir_lib`.
 //!
 //! **What it copies from the app, and must keep copying**, because a probe that
 //! drives a different loop measures a different product:
@@ -530,7 +530,7 @@ mod tests {
     #[test]
     fn a_plan_update_runs_unasked_and_costs_no_round_but_a_bad_one_does() {
         let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let base = std::env::temp_dir().join(format!("odin-probe-plan-{}-{n}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("bifrost-probe-plan-{}-{n}", std::process::id()));
         let tree = base.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
         let ws = Workspace::open(&tree).unwrap();
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn a_failed_read_gets_the_read_repeat_note_and_is_not_an_edit_error() {
         let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let base = std::env::temp_dir().join(format!("odin-probe-read-{}-{n}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("bifrost-probe-read-{}-{n}", std::process::id()));
         let tree = base.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
         std::fs::write(tree.join("a.txt"), "one\ntwo\n").unwrap();
@@ -608,7 +608,7 @@ mod tests {
     #[test]
     fn asks_follow_the_apps_rule() {
         let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-        let base = std::env::temp_dir().join(format!("odin-probe-asks-{}-{n}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("bifrost-probe-asks-{}-{n}", std::process::id()));
         let tree = base.join("tree");
         std::fs::create_dir_all(&tree).unwrap();
         std::fs::write(tree.join("a.txt"), "hello

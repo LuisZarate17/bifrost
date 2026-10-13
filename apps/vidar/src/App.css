@@ -1,10 +1,10 @@
-/* Heimdall's popup chrome. The renderer's own styles moved to @odin/ui at
-   Before-G0 step 1e and are imported by App.tsx as "@odin/ui/answer.css" —
+/* Vidar's popup chrome. The renderer's own styles moved to @bifrost/ui at
+   Before-G0 step 1e and are imported by App.tsx as "@bifrost/ui/answer.css" —
    look there for anything matching .answer, .code, .inline-code or .link-text.
 
    Three rules here do select .answer descendants and stay on purpose: the
-   pick-and-copy overlay and the two collapse rules are Heimdall behaviours, not
-   renderer ones. Mímir will want the renderer without any of them. */
+   pick-and-copy overlay and the two collapse rules are Vidar behaviours, not
+   renderer ones. Mimir will want the renderer without any of them. */
 
 /* The window is transparent and the page paints its own background, so every
    layer above has to stay genuinely see-through. No DWM backdrop is involved —

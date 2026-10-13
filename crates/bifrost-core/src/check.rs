@@ -4,7 +4,7 @@
 //! can apply cleanly and still leave a call site pointing at a name that no longer
 //! exists; nothing in G7 would ever tell the model. `cargo check` does.
 //!
-//! **The model never chooses the command.** Mímir detects [`candidates`] from the
+//! **The model never chooses the command.** Mimir detects [`candidates`] from the
 //! folder's own files, a person picks one by position, and the approval ticket
 //! carries the exact argv that runs. The model's only choice is *when*.
 //!
@@ -191,7 +191,7 @@ pub fn run(
 
     // Everything the command starts goes in one job, so it can all be ended
     // together — when the command is stopped, when it ends but leaves something
-    // running, and when Mímir itself exits mid-check.
+    // running, and when Mimir itself exits mid-check.
     let job = Job::new();
 
     let started = Instant::now();
@@ -284,7 +284,7 @@ fn plain(p: &Path) -> PathBuf {
 }
 
 /// A Windows job object that ends everything in it when it is killed or
-/// dropped — and, because the handle closes with the process, when Mímir exits.
+/// dropped — and, because the handle closes with the process, when Mimir exits.
 #[cfg(windows)]
 struct Job(windows::Win32::Foundation::HANDLE);
 
@@ -361,7 +361,7 @@ impl Job {
 #[cfg(windows)]
 fn no_window(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
-    // Mímir has no console, so every console program it starts would otherwise
+    // Mimir has no console, so every console program it starts would otherwise
     // get a window of its own flashing up. CREATE_NO_WINDOW alone — see
     // `ollama::spawn_detached` for why not DETACHED_PROCESS as well.
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -567,7 +567,7 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or_default();
-            let dir = std::env::temp_dir().join(format!("odin-check-{tag}-{}-{n}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!("bifrost-check-{tag}-{}-{n}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             Self(dir)
         }
@@ -583,7 +583,7 @@ mod tests {
         /// **Retried, because a process that is a moment from ending can still have
         /// the folder as its working directory** — `ping` after the "linger" test's
         /// check — and Windows then refuses to remove it. One try, with the error
-        /// ignored, is how an `odin-check-linger-…` folder was left in `%TEMP%`.
+        /// ignored, is how an `bifrost-check-linger-…` folder was left in `%TEMP%`.
         fn drop(&mut self) {
             for _ in 0..50 {
                 if std::fs::remove_dir_all(&self.0).is_ok() || !self.0.exists() {
@@ -729,7 +729,7 @@ mod tests {
     #[test]
     fn a_program_that_does_not_exist_is_an_error() {
         let f = Folder::new("missing");
-        let err = run(&f.0, &cmd(&["no-such-program-odin"]), CHECK_TIMEOUT, &[], never).unwrap_err();
+        let err = run(&f.0, &cmd(&["no-such-program-bifrost"]), CHECK_TIMEOUT, &[], never).unwrap_err();
         assert!(err.contains("could not start"), "{err}");
     }
 

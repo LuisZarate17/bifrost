@@ -6,7 +6,7 @@ type ToolEntry = Extract<Entry, { kind: "tool" }>;
 /**
  * A change, the way you review it before it is made.
  *
- * Rendered from the same plan Rust writes — odin_core::edit — so this is not a
+ * Rendered from the same plan Rust writes — bifrost_core::edit — so this is not a
  * preview of the edit, it *is* the edit. Line numbers on both sides, three lines
  * of context, and a gap marker between separate changes.
  */
@@ -65,7 +65,7 @@ function reasonOf(error = ""): string {
   if (error.includes("does not exist")) return "that file doesn't exist";
   if (error.includes("is a folder")) return "that is a folder, not a file";
   if (error.includes("decides what the check command runs")) return "that file decides what the check runs";
-  if (error.includes("own settings folder")) return "that is Mímir's own settings folder";
+  if (error.includes("own settings folder")) return "that is Bifrost's own settings folder";
   if (error.includes("no check command is set")) return "no check command is chosen for this folder";
   if (error.includes("no project folder to search")) return "no project folder is chosen";
   if (error.includes("is not inside the project folder")) return "that pattern reaches outside the project folder";
