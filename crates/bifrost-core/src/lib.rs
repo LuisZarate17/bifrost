@@ -34,6 +34,7 @@ pub mod config;
 pub mod edit;
 pub mod instructions;
 pub mod ollama;
+pub mod paths;
 pub mod search;
 pub mod store;
 pub mod toolcall;

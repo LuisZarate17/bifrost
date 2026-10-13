@@ -517,10 +517,12 @@ fn decides_what_the_check_runs(inside: &Path) -> bool {
         })
 }
 
-/// `%APPDATA%\odin`, canonical, if it exists. [`crate::search`] skips it too.
+/// Bifrost's data folder ([`crate::paths::data_dir`]), canonical, if it exists.
+/// That is whichever folder is live: the old `%APPDATA%\odin` until it has moved,
+/// `%APPDATA%\bifrost` after, when the old one holds only a note.
+/// [`crate::search`] skips it too.
 pub(crate) fn app_data() -> Option<PathBuf> {
-    let dir = PathBuf::from(std::env::var_os("APPDATA")?).join("odin");
-    std::fs::canonicalize(dir).ok()
+    std::fs::canonicalize(crate::paths::data_dir()?).ok()
 }
 
 /// Models wrap paths in quotes or backticks surprisingly often.
@@ -1211,10 +1213,9 @@ impl Record {
     }
 }
 
-/// `%APPDATA%\odin\backups\`, beside the conversations.
+/// `backups\` in [`crate::paths::data_dir`], beside the conversations.
 pub fn backups_dir() -> Option<PathBuf> {
-    let appdata = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(appdata).join("odin").join("backups"))
+    Some(crate::paths::data_dir()?.join("backups"))
 }
 
 /// Write `bytes` over `path` — **only if it is still exactly what the caller saw**
@@ -2304,10 +2305,10 @@ mod tests {
         // As when the chosen folder is the home folder, which holds %APPDATA%.
         let s = Sandbox::new("appdata");
         let ws = s.ws();
-        let cfg = s.write("AppData/Roaming/odin/config.json", b"{}");
-        let app = std::fs::canonicalize(s.dir.join("project/AppData/Roaming/odin")).unwrap();
+        let cfg = s.write("AppData/Roaming/bifrost/config.json", b"{}");
+        let app = std::fs::canonicalize(s.dir.join("project/AppData/Roaming/bifrost")).unwrap();
         let real = std::fs::canonicalize(&cfg).unwrap();
-        let err = ws.contain_with(&real, "AppData/Roaming/odin/config.json", Some(&app)).unwrap_err();
+        let err = ws.contain_with(&real, "AppData/Roaming/bifrost/config.json", Some(&app)).unwrap_err();
         assert!(err.contains("Bifrost's own settings"), "{err}");
         // Its neighbours are ordinary files.
         let other = std::fs::canonicalize(s.write("AppData/Roaming/other/x.txt", b"x")).unwrap();

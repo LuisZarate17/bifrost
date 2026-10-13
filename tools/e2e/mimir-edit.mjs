@@ -32,7 +32,15 @@ import path from "node:path";
 
 const PORT = Number(process.env.CDP_PORT ?? 9223);
 const APPDATA = process.env.APPDATA;
-const CONFIG = path.join(APPDATA, "odin", "config.json");
+
+// The data folder moved to %APPDATA%\bifrost at the I0 rename. Until the new
+// Mimir has started once, the real data is still in %APPDATA%\odin, and making a
+// bifrost folder here would strand it there. Refuse rather than guess.
+if (fs.existsSync(path.join(APPDATA, "odin")) && !fs.existsSync(path.join(APPDATA, "odin", "MOVED.txt"))) {
+  console.log("SKIP: %APPDATA%\\odin still holds the data. Start the new Mimir once so it moves to %APPDATA%\\bifrost.");
+  process.exit(2);
+}
+const CONFIG = path.join(APPDATA, "bifrost", "config.json");
 
 // ── a tiny CDP client ───────────────────────────────────────────────────────
 
@@ -185,7 +193,7 @@ function skip(name, why) {
   console.log(`  SKIP  ${name} — ${why}`);
 }
 
-const BACKUPS = path.join(APPDATA, "odin", "backups");
+const BACKUPS = path.join(APPDATA, "bifrost", "backups");
 const backupNames = () => (fs.existsSync(BACKUPS) ? fs.readdirSync(BACKUPS) : []);
 
 // Connect first: a failed connection (the app is not running) then has no temp

@@ -39,7 +39,15 @@ import path from "node:path";
 
 const PORT = Number(process.env.CDP_PORT ?? 9223);
 const APPDATA = process.env.APPDATA;
-const CONFIG = path.join(APPDATA, "odin", "config.json");
+
+// The data folder moved to %APPDATA%\bifrost at the I0 rename. Until the new
+// Mimir has started once, the real data is still in %APPDATA%\odin, and making a
+// bifrost folder here would strand it there. Refuse rather than guess.
+if (fs.existsSync(path.join(APPDATA, "odin")) && !fs.existsSync(path.join(APPDATA, "odin", "MOVED.txt"))) {
+  console.log("SKIP: %APPDATA%\\odin still holds the data. Start the new Mimir once so it moves to %APPDATA%\\bifrost.");
+  process.exit(2);
+}
+const CONFIG = path.join(APPDATA, "bifrost", "config.json");
 
 // ── a tiny CDP client ───────────────────────────────────────────────────────
 
@@ -228,7 +236,7 @@ const configBefore = fs.existsSync(CONFIG) ? fs.readFileSync(CONFIG) : null;
 // The fix scenario's edits leave undo records in the user's backups folder.
 // Only this run's — records whose file lies in this run's project — are removed
 // afterwards, so a Mímir session of the user's own keeps its undo history.
-const BACKUPS = path.join(APPDATA, "odin", "backups");
+const BACKUPS = path.join(APPDATA, "bifrost", "backups");
 const backupNames = () => (fs.existsSync(BACKUPS) ? fs.readdirSync(BACKUPS) : []);
 const backupsBefore = new Set(backupNames());
 function cleanBackups() {

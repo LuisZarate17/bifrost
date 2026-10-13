@@ -1754,11 +1754,29 @@ fn redirect_log_to_file() -> Option<std::path::PathBuf> {
     None
 }
 
+fn report_migration(m: bifrost_core::paths::Migration) {
+    use bifrost_core::paths::Migration;
+    match m {
+        Migration::Nothing => {}
+        Migration::Moved => println!("[mimir] moved %APPDATA%\\odin to %APPDATA%\\bifrost"),
+        Migration::BothExist => eprintln!(
+            "[mimir] WARNING: %APPDATA%\\odin and %APPDATA%\\bifrost both hold data; using bifrost, nothing moved"
+        ),
+        Migration::Blocked(e) => {
+            eprintln!("[mimir] WARNING: could not move %APPDATA%\\odin yet ({e}); still using it")
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     if let Some(log) = redirect_log_to_file() {
         println!("[mimir] log: {}", log.display());
     }
+    // Before anything reads the config: the data folder moved from
+    // %APPDATA%\odin to %APPDATA%\bifrost at the rename, and the first app to
+    // start moves it. After the log redirect, so what happened is written down.
+    report_migration(bifrost_core::paths::migrate());
 
     tauri::Builder::default()
         // Used only from Rust, by choose_project_folder. The capability file grants

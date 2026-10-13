@@ -1,4 +1,5 @@
-//! The settings all three binaries share, at `%APPDATA%\odin\config.json`.
+//! The settings all three binaries share, at `%APPDATA%\bifrost\config.json`
+//! (see [`crate::paths`] for the folder and its move from `%APPDATA%\odin`).
 //!
 //! **A missing file is a normal state, not an error.** `load()` cannot fail: no
 //! file yields the built-in defaults, and nothing here prints or panics. That is
@@ -325,13 +326,12 @@ impl Default for Config {
     }
 }
 
-/// `%APPDATA%\odin\config.json`, or `None` if `%APPDATA%` is not set.
+/// `config.json` in [`crate::paths::data_dir`], or `None` if `%APPDATA%` is not set.
 ///
 /// Returns the path whether or not anything is there — callers that want to know
 /// if it exists should ask the filesystem.
 pub fn path() -> Option<PathBuf> {
-    let appdata = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(appdata).join("odin").join("config.json"))
+    Some(crate::paths::data_dir()?.join("config.json"))
 }
 
 /// Read the config, falling back to defaults for anything missing or unreadable.
@@ -403,7 +403,7 @@ fn unreadable(p: &Path) -> Config {
     }
 }
 
-/// Write the config, creating `%APPDATA%\odin\` if it is not there.
+/// Write the config, creating `%APPDATA%\bifrost\` if it is not there.
 ///
 /// This one *does* return a `Result`: a save is something the user asked for, so
 /// silently doing nothing would be wrong. G2 writes the model choice through it.

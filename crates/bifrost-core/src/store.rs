@@ -1,4 +1,4 @@
-//! Conversations on disk, at `%APPDATA%\odin\conversations\<id>.json`.
+//! Conversations on disk, at `%APPDATA%\bifrost\conversations\<id>.json`.
 //!
 //! One file per conversation, beside `config.json` and in the same format. No
 //! database, deliberately: G4 needs save, list, rename and delete, and nothing
@@ -169,10 +169,9 @@ pub struct Summary {
     pub message_count: usize,
 }
 
-/// `%APPDATA%\odin\conversations\`, or `None` if `%APPDATA%` is not set.
+/// `conversations\` in [`crate::paths::data_dir`], or `None` if `%APPDATA%` is not set.
 pub fn dir() -> Option<PathBuf> {
-    let appdata = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(appdata).join("odin").join("conversations"))
+    Some(crate::paths::data_dir()?.join("conversations"))
 }
 
 fn path_for(id: &str) -> Option<PathBuf> {
@@ -264,10 +263,9 @@ pub fn delete(id: &str) -> Result<bool, String> {
 // 1080p screenshot is ~790 KB once base64-encoded; inlining that would turn a
 // 20 KB conversation into a multi-megabyte file rewritten on every turn.
 
-/// `%APPDATA%\odin\attachments\`.
+/// `attachments\` in [`crate::paths::data_dir`].
 pub fn attachments_dir() -> Option<PathBuf> {
-    let appdata = std::env::var_os("APPDATA")?;
-    Some(PathBuf::from(appdata).join("odin").join("attachments"))
+    Some(crate::paths::data_dir()?.join("attachments"))
 }
 
 fn attachment_path(name: &str) -> Option<PathBuf> {

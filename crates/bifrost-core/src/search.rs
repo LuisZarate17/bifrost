@@ -806,9 +806,9 @@ mod tests {
     #[test]
     fn mimirs_own_folder_is_skipped() {
         let s = Sandbox::new("appdata");
-        s.write("AppData/Roaming/odin/config.json", "{\"checks\":{}}\n");
+        s.write("AppData/Roaming/bifrost/config.json", "{\"checks\":{}}\n");
         s.write("notes.txt", "checks\n");
-        let app = std::fs::canonicalize(s.dir.join("project/AppData/Roaming/odin")).unwrap();
+        let app = std::fs::canonicalize(s.dir.join("project/AppData/Roaming/bifrost")).unwrap();
         let out = search_in(&s.ws(), "checks", None, Some(&app), &never).unwrap();
         assert!(out.contains("notes.txt") && !out.contains("config.json"), "{out}");
     }

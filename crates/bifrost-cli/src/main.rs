@@ -17,7 +17,7 @@ use windows_capture::settings::{
 
 mod power;
 
-use bifrost_core::{config, ollama};
+use bifrost_core::{config, ollama, paths};
 
 // DEFAULT_MODEL and NUM_CTX moved to bifrost-core::config at Before-G0 step 3.
 // They were duplicated here and in Vidar, and the num_ctx copies had already
@@ -137,7 +137,7 @@ bifrost — ask a local vision model about your screen
   bifrost status    [--model TAG]   what is loaded, per Ollama and per the card
   bifrost help                      this text
 
-The model, the prompt and num_ctx come from %APPDATA%\\odin\\config.json.
+The model, the prompt and num_ctx come from %APPDATA%\\bifrost\\config.json.
 Delete it and the built-in defaults apply — a missing config is a normal state.
 ";
 
@@ -207,6 +207,20 @@ fn parse_args(args: &[String], cfg: &config::Config) -> Result<Command, String> 
 
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // The data folder moved from %APPDATA%\odin to %APPDATA%\bifrost at the
+    // rename; whichever binary starts first moves it. Quiet unless something
+    // happened, so `bifrost status` output stays the same on every other run.
+    match paths::migrate() {
+        paths::Migration::Nothing => {}
+        paths::Migration::Moved => eprintln!("moved %APPDATA%\\odin to %APPDATA%\\bifrost"),
+        paths::Migration::BothExist => eprintln!(
+            "warning: %APPDATA%\\odin and %APPDATA%\\bifrost both hold data; using bifrost, nothing moved"
+        ),
+        paths::Migration::Blocked(e) => {
+            eprintln!("warning: could not move %APPDATA%\\odin yet ({e}); still using it")
+        }
+    }
 
     // Read once, here, rather than in each function that wants a field. Three
     // scattered load() calls would be three chances to disagree inside one run.
