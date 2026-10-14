@@ -1,26 +1,29 @@
-# ODIN — On-Device INference
+# Bifrost
 
-Local AI tools that share one model and one machine. Nothing leaves the computer, ever.
+Local AI tools that share one model and one machine. Nothing leaves the computer on its own.
 
 | | |
 |---|---|
-| **`odin`** | The same pipeline from the command line, plus `warm` / `off` / `status` power control |
-| **Mímir** | A local chat app sharing Heimdall's model and deciding which one is loaded. **Built, in testing** — [stages/STAGE-G.md](stages/STAGE-G.md) |
+| **Mimir** | The main workspace: a local chat app that reads, finds and edits code in a folder you pick, runs the folder's check, and decides which model is loaded. **Built through Stage H** |
+| **Hugin** | A terminal agent on Mimir's engine, in the spirit of Claude Code, and one Claude Code can hand work to. **Planned** — [stages/STAGE-I.md](stages/STAGE-I.md) |
+| **`bifrost`** | Vidar's pipeline from the command line, plus `warm` / `off` / `status` power control |
 
-Things with an icon get a name; things you type get a description (PLAN.md §0b).
+Things with an icon get a name; things you type get a description (PLAN.md §0b). Bifrost is the
+bridge between them.
 
 **Status.** Stages A–C are complete — `Ctrl+Alt+W` anywhere captures the screen and streams an
 answer into the popup. What is left of the original plan is one afternoon of testing, see
-[docs/BUILD.md](docs/BUILD.md). **Stage G is built** — Mímir exists through G7, where it learned
-to edit files in a folder you pick, and what is left is the testing round in
-[docs/G-testing.md](docs/G-testing.md).
+[docs/BUILD.md](docs/BUILD.md). **Stages G and H are built** — Mimir chats, edits files in a folder
+you pick, finds code, runs the folder's check and undoes a whole turn; Stage G's checks by hand
+still wait in [docs/G-testing.md](docs/G-testing.md). **Now: Stage I** — the rename is done, and
+Hugin comes next; see [docs/I-status.md](docs/I-status.md).
 
 ## The apps
 
 ```
-npm run app:vidar              # build Heimdall
-npm run app:mimir            # build Mímir
-target/debug/heimdall.exe        # or the Desktop / Start Menu shortcuts
+npm run app:vidar              # build Vidar
+npm run app:mimir              # build Mimir
+target/debug/vidar.exe         # or the Desktop / Start Menu shortcuts
 target/debug/mimir.exe
 ```
 
@@ -34,30 +37,38 @@ at the root now skips both apps for exactly this reason (`default-members` in `C
 Release builds are refused by Smart App Control on this machine; debug builds usually run, and when
 one is blocked, rebuilding for a fresh hash clears it. See [docs/PLAN.md](docs/PLAN.md) §3.
 
-**Every control Heimdall has is in [docs/shortcuts.md](docs/shortcuts.md)** — there is no menu and no
+**Every control Vidar has is in [docs/shortcuts.md](docs/shortcuts.md)** — there is no menu and no
 window chrome, so that file is the interface.
 
 ## The CLI
 
 The same pipeline without the GUI in the way. It is also ahead of the app on controls: a capture
-delay, a model flag, and a prompt you can edit without rebuilding.
+delay and a model flag for one run.
 
-The binary is `odin` — short and guessable, because it is a name you type rather than one that
-carries an icon (PLAN.md §0b).
+The binary is `bifrost`, the project's own name — a name you type rather than one that carries an
+icon (PLAN.md §0b).
 
 ```
-cargo build                                    # builds the crates (not the apps) into target/
-target/debug/odin                              # answer about your screen, now
-target/debug/odin 12                           # wait 12s first
-target/debug/odin --model qwen3-vl:4b-instruct-q8_0
+cargo build                                       # builds the crates (not the apps) into target/
+target/debug/bifrost                              # answer about your screen, now
+target/debug/bifrost 12                           # wait 12s first
+target/debug/bifrost --model qwen3-vl:4b-instruct-q8_0
 
-target/debug/odin warm                         # load the model and pin it in VRAM
-target/debug/odin off                          # release it, give the card its memory back
-target/debug/odin status                       # what is loaded, per Ollama and per the card
+target/debug/bifrost warm                         # load the model and pin it in VRAM
+target/debug/bifrost off                          # release it, give the card its memory back
+target/debug/bifrost status                       # what is loaded, per Ollama and per the card
 ```
 
-The prompt lives in `crates/odin-cli/prompt.txt`, not in source. Ollama is started automatically
-if it is not already running.
+The model, the prompt and `num_ctx` come from `%APPDATA%\bifrost\config.json`, the file every app
+shares; with no file, the built-in defaults apply. Ollama is started automatically if it is not
+already running.
+
+## Where your data lives
+
+Settings, conversations, attachments and undo records are in `%APPDATA%\bifrost`. Until the rename
+on 2026-10-12 they were in `%APPDATA%\odin`: the first app or CLI run after the rename moves that
+folder once, whole, and leaves a `MOVED.txt` behind saying where it went. If `bifrost` already
+exists while `odin` still holds data, nothing is moved, `bifrost` is used, and the apps log a warning.
 
 ## How it works
 
@@ -77,24 +88,25 @@ One Cargo workspace and one npm workspace, so there is a single `target/`, a sin
 each kind, and a single `node_modules`.
 
 ```
-odin/
+bifrost/
 ├── apps/
-│   ├── heimdall/        the overlay — hotkey, popup, tray (src-tauri/ + its React frontend)
-│   └── mimir/       the chat app — conversations, models, reading and editing files
+│   ├── vidar/          the overlay — hotkey, popup, tray (src-tauri/ + its React frontend)
+│   └── mimir/          the chat app — conversations, models, reading and editing files
 ├── packages/
-│   └── ui/            @odin/ui — the Markdown renderer both apps share
+│   └── ui/             @bifrost/ui — the Markdown renderer both apps share
 ├── crates/
-│   ├── odin-core/     shared — Ollama, VRAM readout, config, chat, tools, safe file edits
-│   ├── odin-cli/      the CLI, binary `odin`
-│   └── bench/         benchmark harness, plus the tool-call and file-edit probes
-├── evals/             rubric, fixtures, saved runs
-├── tools/             shortcuts, icon, the end-to-end test that drives Mímir, the practice folder
-├── docs/              plan, build log, shortcuts, results  →  docs/README.md
-└── stages/            execution packets — paste one into a fresh chat
+│   ├── bifrost-core/   shared — Ollama, VRAM readout, config, chat, tools, safe file edits
+│   ├── bifrost-cli/    the CLI, binary `bifrost`
+│   └── bench/          benchmark harness, plus the tool-call and file-edit probes
+├── evals/              rubric, fixtures, saved runs
+├── tools/              shortcuts, icon, the end-to-end tests that drive Mimir, the practice folder
+├── docs/               plan, build log, shortcuts, results  →  docs/README.md
+└── stages/             execution packets — paste one into a fresh chat
 ```
 
-*(Restructured at Before-G0 step 1 of Stage G. The project is **ODIN**; **Heimdall** is the overlay
-and **Mímir** is the chat app — PLAN.md §0b.)*
+*(Restructured at Before-G0 step 1 of Stage G, renamed at I0 of Stage I. The project is
+**Bifrost** (was ODIN); **Vidar** is the overlay (was Heimdall) and **Mimir** the chat app (was
+Mímir). `stages/` and `docs/results/` keep the names they were written with — PLAN.md §0b.)*
 
 ## Docs
 
@@ -106,7 +118,7 @@ for it. The four you will actually open:
 | [docs/shortcuts.md](docs/shortcuts.md) | Every control. This is the interface |
 | [docs/PLAN.md](docs/PLAN.md) | Scope, the machine, decisions already closed, hard rules |
 | [docs/BUILD.md](docs/BUILD.md) | The build plan, chunk by chunk, and what is left |
-| [stages/STAGE-G.md](stages/STAGE-G.md) | The next thing — the local chat app |
+| [stages/STAGE-I.md](stages/STAGE-I.md) | The next thing — one engine, and Hugin in the terminal |
 
 ## Stack
 
@@ -114,8 +126,10 @@ Rust, Tauri 2, React + TypeScript, Ollama, Windows Graphics Capture.
 
 ## Hard rules
 
-- 100% local. No cloud API calls, ever, for any reason. If a local model is bad at something,
-  the fix is a different local model, not a fallback.
+- Local. Bifrost never calls the cloud on its own, and if a local model is bad at something, the
+  fix is a different local model, not a fallback. **One exception, on purpose (2026-10-12):** Stage
+  I's *Check with Claude* button in Mimir — off by default, only on a click, and it says what it
+  sends before it sends it. Not built yet.
 - Summoned, never ambient — it only runs when the hotkey is pressed.
 - This is a personal daily-use tool, not a portfolio project. Features only earn their keep if
   Luis actually uses them.

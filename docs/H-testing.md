@@ -1,7 +1,7 @@
 # Stage H — the testing round
 
 A worksheet to fill in at the machine: **what to type, and what should happen**, for what Stage H
-added to Mímir. Everything here needs a person. The tools, the rules behind them and the model's
+added to Mimir. Everything here needs a person. The tools, the rules behind them and the model's
 use of them are already tested in code, by probes and by the end-to-end scripts — what is left is
 whether the real chips, cards and keys do what they say, and how it feels.
 
@@ -9,16 +9,20 @@ The longer reasoning lives in [PENDING-CHECKS.md](PENDING-CHECKS.md); the plan i
 [STAGE-H.md](../stages/STAGE-H.md); what each chunk measured in `docs/results/H*-results.md`.
 Stage G's worksheet is [G-testing.md](G-testing.md).
 
+> **Names.** Renamed 2026-10-12 at Stage I's I0: Heimdall is now **Vidar**, Mímir is **Mimir**, the
+> shared crate is `bifrost-core`, and the data folder is `%APPDATA%\bifrost`. The checks use the new
+> names. The repo folder is still `…\repos\odin` until it is renamed too.
+
 **Before you start**
 
-- `npm run app:mimir` if anything changed since the last build, then open Mímir from its shortcut
+- `npm run app:mimir` if anything changed since the last build, then open Mimir from its shortcut
 - `node tools/practice.mjs` — builds `practice\` in the repo (gitignored). **Run it again to reset
   the folder** whenever a check leaves it changed
 - Model: `qwen3-vl:8b-instruct-q4_K_M` unless a check says otherwise
-- In Mímir: turn on **Tools**, then **Choose folder** → `C:\Users\you\source\repos\odin\practice`
+- In Mimir: turn on **Tools**, then **Choose folder** → `C:\Users\you\source\repos\odin\practice`
   (double-click *into* `practice` before **Select Folder** — selecting `odin` itself would let
-  Mímir work on the real project)
-- When a folder is chosen, Mímir may offer the coding model (H4b). Press **Not now** unless the
+  Mimir work on the real project)
+- When a folder is chosen, Mimir may offer the coding model (H4b). Press **Not now** unless the
   step is the one testing that switch
 - Tick as you go. Anything that fails: write what you saw next to it
 
@@ -27,7 +31,7 @@ What the practice folder holds:
 | File | Contents |
 |---|---|
 | `greet.rs` | 7 lines. Line 1 is `fn greet(name: &str) -> String {`, line 6 is `println!("{}", greet("world"));` |
-| `Cargo.toml` | Makes `greet.rs` a project `cargo check` can build, so Mímir offers a check. Its own `[workspace]`, so cargo does not attach it to odin. It names the binary `greet` |
+| `Cargo.toml` | Makes `greet.rs` a project `cargo check` can build, so Mimir offers a check. Its own `[workspace]`, so cargo does not attach it to Bifrost's workspace. It names the binary `greet` |
 | `shopping.md` | A heading and three items: apples, bread, milk |
 | `facts.txt` | One line: *The practice code is 4417-AMBER.* |
 | `refuse-me.zip` | An empty zip |
@@ -99,14 +103,14 @@ person sees.
 
 `node tools/e2e/mimir-switch.mjs` covers the offer appearing, declining it, switching for real —
 with `/api/ps` and the config checked against each other — the coder answering a tool question,
-and the switch back. What it cannot do is press Heimdall's hotkey, so these need a person.
+and the switch back. What it cannot do is press Vidar's hotkey, so these need a person.
 
-- [ ] **Heimdall refuses while the coder is current.** With `qwen3-coder:30b` loaded as the current
-      model (switch to it from a folder, or by hand in the Switchboard), press Heimdall's hotkey.
+- [ ] **Vidar refuses while the coder is current.** With `qwen3-coder:30b` loaded as the current
+      model (switch to it from a folder, or by hand in the Switchboard), press Vidar's hotkey.
       **Expect:** it refuses *before* capturing the screen, and names `qwen3-coder:30b` as the
       reason — no screenshot is taken.
-- [ ] **Heimdall sees the screen again after switching back.** Clear the folder, accept the
-      switch-back offer, and once it says ready, press Heimdall's hotkey again. **Expect:** a normal
+- [ ] **Vidar sees the screen again after switching back.** Clear the folder, accept the
+      switch-back offer, and once it says ready, press Vidar's hotkey again. **Expect:** a normal
       answer about whatever is on screen.
 - [ ] **A manual pick ends the switch-back story.** While on the coder with a folder open, open the
       Switchboard and pick a different model by hand (not the vision default). Close the dialog,
@@ -138,7 +142,7 @@ keeps its cards. What it cannot judge is how it reads and feels.
       search runs without asking, finds nothing, and its result ends with a note that files whose
       names look like they hold secrets were not searched. Delete `.env` afterwards (or run
       `node tools/practice.mjs`).
-- [ ] **The switch.** Add `"ask_every_call": true` to `%APPDATA%\odin\config.json`, with no
+- [ ] **The switch.** Add `"ask_every_call": true` to `%APPDATA%\bifrost\config.json`, with no
       restart, and type `Read greet.rs.` **Expect:** a card waiting, with no *no approval needed*
       tag. Type `List the files.` **Expect:** that waits too. Put the line back to `false` (or
       remove it), and `Read greet.rs.` runs at once again.
@@ -156,7 +160,7 @@ keeps its cards. What it cannot judge is how it reads and feels.
 
 `node tools/e2e/mimir-edit.mjs` (section 5) drives a real two-file turn: the first click only asks,
 a changed file refuses the whole turn, and then the project comes back byte for byte, CRLF kept,
-with the cards still Undone after reopening. `cargo test -p odin-core` covers every chain shape.
+with the cards still Undone after reopening. `cargo test -p bifrost-core` covers every chain shape.
 What it cannot judge is how the line reads, a Stop in the middle, and a file held open elsewhere.
 
 - [ ] **The line, and the question.** In `practice`, type `Change "world" to "Luis" in greet.rs,
@@ -181,14 +185,14 @@ What it cannot judge is how the line reads, a Stop in the middle, and a file hel
 
 ## 6 — A turn that outgrows the context (H7)
 
-Unit tests in `odin_core::compact` cover the rule (oldest first, never the request or the newest
+Unit tests in `bifrost_core::compact` cover the rule (oldest first, never the request or the newest
 result, the newest read of each file only once nothing else is left, one-way) and
 `cargo test -p mimir` the index mapping. What
 they cannot judge is whether the meter moves while a turn runs, how the note reads, and that the
 answer still addresses what you asked.
 
-- [ ] **A turn that reads a lot.** Choose `crates/odin-core/src` of this repo as the folder (or any
-      folder with several large files) and type `Read every .rs file in odin's crates/odin-core/src and
+- [ ] **A turn that reads a lot.** Choose `crates/bifrost-core/src` of this repo as the folder (or any
+      folder with several large files) and type `Read every .rs file in odin's crates/bifrost-core/src and
       summarise each`. **Expect:** the context meter climbs while the turn runs, not only at the end.
       Once it is past about 75%, a quiet line after the cards: **Set aside N earlier results to fit
       the model's context**, the count growing as the turn goes on. The answer still addresses the
@@ -203,14 +207,14 @@ answer still addresses what you asked.
 
 ## 7 — Reading part of a big file (H8)
 
-Unit tests in `odin_core::tools` cover the range, the header and the errors, `cargo test -p mimir`
+Unit tests in `bifrost_core::tools` cover the range, the header and the errors, `cargo test -p mimir`
 the ticket, and `node tools/e2e/mimir-bigfile.mjs` an edit past line 2000 of a ~120 KB file. What
 they cannot judge is how the real card reads, and whether the answer uses what the read gave. These
 need a file past 64 KB, which `practice` does not have, so choose **odin itself**
 (`C:\Users\you\source\repos\odin`) as the folder — they only read, so decline any edit it offers.
 
 - [ ] **A question about the end of a big file.** Ask `What does the last function in
-      crates/odin-core/src/edit.rs before its tests do?` (or anything near the end of that file).
+      crates/bifrost-core/src/edit.rs before its tests do?` (or anything near the end of that file).
       **Expect:** a read card with **lines …** next to the path (two numbers with a dash), marked
       *no approval needed*, and an answer that quotes what that read returned.
 - [ ] **A question only a count can answer.** Ask `How many lines does apps/mimir/src/App.tsx
@@ -223,7 +227,7 @@ need a file past 64 KB, which `practice` does not have, so choose **odin itself*
 
 ## 8 — Moving, deleting, new folders (H9)
 
-Unit tests in `odin_core::edit` cover every combination (a move then an edit, a create then a
+Unit tests in `bifrost_core::edit` cover every combination (a move then an edit, a create then a
 delete, a delete then a move onto the same path, case-variant paths, a junction swapped in), and
 `node tools/e2e/mimir-ops.mjs` drives a create, a delete, a move, the refusals and Undo all against
 a throwaway project. What they cannot judge is how the cards read and whether a delete looks like

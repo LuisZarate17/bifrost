@@ -1,6 +1,6 @@
-// The Heimdall and Mímir badges: the Helm of Awe (Ægishjálmur) split between
-// the two apps. Heimdall holds the four barred arms on the diagonals, around a
-// ring; Mímir holds the four tridents on the compass points, with the eye at the
+// The Vidar and Mimir badges: the Helm of Awe (Ægishjálmur) split between
+// the two apps. Vidar holds the four barred arms on the diagonals, around a
+// ring; Mimir holds the four tridents on the compass points, with the eye at the
 // centre. Each is a disc in its own color with its half of the helm drawn on it,
 // and the two together complete the eight-armed helm.
 //
@@ -13,7 +13,7 @@
 // apps/mimir/src/Badge.tsx draws in, so the window's mark and these files match.
 
 export const COLORS = {
-  heimdall: "#c0c7d1", // silver
+  vidar: "#c0c7d1", // silver
   mimir: "#1f8a8a", // sea
   // Both discs carry near-black marks: it out-contrasts white on each of them.
   ink: "#141414",
@@ -41,7 +41,7 @@ const rotate = (angles, arm) => angles.flatMap((deg) => {
 });
 
 export const BADGES = {
-  heimdall: { color: COLORS.heimdall, strokes: rotate(DIAGONALS, BARRED), ring: { r: 9.5, w: 6 } },
+  vidar: { color: COLORS.vidar, strokes: rotate(DIAGONALS, BARRED), ring: { r: 9.5, w: 6 } },
   mimir: {
     color: COLORS.mimir, strokes: rotate(COMPASS, TRIDENT), dot: { r: 5.5 },
     small: { strokes: rotate(COMPASS, TRIDENT_SMALL), dot: { r: 7.5 } },

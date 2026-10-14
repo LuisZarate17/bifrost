@@ -7,6 +7,10 @@ is left is whether the real buttons, pickers and keys do what they say.
 The longer reasoning behind each check lives in [PENDING-CHECKS.md](PENDING-CHECKS.md). This file
 is the short version, in the order that is quickest to work through.
 
+> **Names.** Renamed 2026-10-12 at Stage I's I0: Heimdall is now **Vidar**, Mímir is **Mimir**, and
+> the command is `bifrost`. The open checks use the new names; a check already done keeps the
+> names it was done under. The repo folder is still `…\repos\odin` until it is renamed too.
+
 **Before you start**
 
 - `npm run app:vidar` and `npm run app:mimir` if anything changed since the last build, then open both
@@ -25,7 +29,7 @@ What the practice folder holds:
 | `shopping.md` | A heading and three items: apples, bread, milk |
 | `facts.txt` | One line: *The practice code is 4417-AMBER.* No model can know that, so an answer quoting it proves the file was read |
 | `refuse-me.zip` | An empty zip. It exists to be refused |
-| `Cargo.toml` | Makes `greet.rs` a project `cargo check` can build, so Mímir offers a check here ([H-testing.md](H-testing.md)). Its own `[workspace]`, so cargo does not attach it to odin |
+| `Cargo.toml` | Makes `greet.rs` a project `cargo check` can build, so Mimir offers a check here ([H-testing.md](H-testing.md)). Its own `[workspace]`, so cargo does not attach it to Bifrost's workspace |
 
 ---
 
@@ -40,16 +44,16 @@ What the practice folder holds:
 
 ## 1 — Editing files
 
-In Mímir. Turn on **Tools** in the message box first; the folder button only appears while it
+In Mimir. Turn on **Tools** in the message box first; the folder button only appears while it
 is on.
 
 - [ ] **Pick the folder.**
-  1. Click **Choose folder**. The Windows folder picker opens, titled *Choose the folder Mímir
+  1. Click **Choose folder**. The Windows folder picker opens, titled *Choose the folder Mimir
      may edit*.
   2. Go to `C:\Users\you\source\repos\odin`, then double-click **into** `practice`.
   3. Click **Select Folder**.
 
-  ⚠ **Not while you are still in `odin`** — selecting `odin` itself lets Mímir edit the real
+  ⚠ **Not while you are still in `odin`** — selecting `odin` itself lets Mimir edit the real
   project instead of the practice files.
 
   **Expect:** the button now reads `practice`.
@@ -62,7 +66,7 @@ is on.
       `- bread` becoming `- rice`. Both line-number columns say 4. Nothing else in the diff.
 
       *Not* `greet.rs`'s "Hello": qwen3-vl adds a semicolon that line doesn't have, every time
-      (4 of 4, 2026-09-27), so Mímir rightly refuses it. bread → rice went 5 of 5.
+      (4 of 4, 2026-09-27), so Mimir rightly refuses it. bread → rice went 5 of 5.
 - [ ] **Apply it.** Click **Apply edit**. **Expect:** the card says **Applied**. Open
       `shopping.md` in VS Code: line 4 says rice, and nothing else changed.
 - [ ] **Undo it.** Click **Undo** on the card. **Expect:** *Undone — the file is back as it was.*
@@ -133,7 +137,7 @@ Tools on. The folder does not matter; reads are allowed anywhere, one approval a
 
 - [ ] **It remembers across a restart.** New chat. Type:
       `Remember this: my dog is called Bramble. Reply with just OK.`
-      Close Mímir. Reopen it from the Desktop shortcut, open that chat in the sidebar, and type:
+      Close Mimir. Reopen it from the Desktop shortcut, open that chat in the sidebar, and type:
       `What is my dog called?` **Expect:** Bramble.
 - [ ] **Titles.** **Expect:** that chat is titled from its first line, not *New conversation*.
 - [ ] **Rename.** On the chat's row, click **Rename**, type a new name, press Enter.
@@ -143,20 +147,20 @@ Tools on. The folder does not matter; reads are allowed anywhere, one approval a
 
 ---
 
-## 5 — Heimdall follows Mímir
+## 5 — Vidar follows Mimir
 
-Have a terminal open in the repo for `target\debug\odin status`.
+Have a terminal open in the repo for `target\debug\bifrost status`.
 
 - [ ] **Switch the model.** Click the model button at the bottom right of the message box and pick
-      `qwen3-vl:4b-instruct-q4_K_M`. Run `target\debug\odin status`. **Expect:** `model` shows the
-      4b. Press `Ctrl+Alt+W` — **without restarting Heimdall**. **Expect:** a normal answer, and
-      `odin status` then shows the 4b loaded.
+      `qwen3-vl:4b-instruct-q4_K_M`. Run `target\debug\bifrost status`. **Expect:** `model` shows the
+      4b. Press `Ctrl+Alt+W` — **without restarting Vidar**. **Expect:** a normal answer, and
+      `bifrost status` then shows the 4b loaded.
 - [ ] **A model that can't see.** Pick `llama3.1:8b`, press `Ctrl+Alt+W`. **Expect:** the popup
       header says **cannot see images**, and the popup says *llama3.1:8b cannot be sent images, so
       nothing was captured*. No answer.
-- [ ] **The tray follows too.** Right-click Heimdall's tray icon and tick **Loaded**. Run
-      `odin status`. **Expect:** `state Ready`, with the model you picked.
-- [ ] **Warm survives the hotkey.** Run `target\debug\odin warm`, then press `Ctrl+Alt+W`.
+- [ ] **The tray follows too.** Right-click Vidar's tray icon and tick **Loaded**. Run
+      `bifrost status`. **Expect:** `state Ready`, with the model you picked.
+- [ ] **Warm survives the hotkey.** Run `target\debug\bifrost warm`, then press `Ctrl+Alt+W`.
       **Expect:** no *Warming the model…*; the answer starts straight away.
 - [ ] **Put it back.** Pick `qwen3-vl:8b-instruct-q4_K_M` again.
 
@@ -177,19 +181,19 @@ Click the bottom of the sidebar, where the loaded model and the GPU meter are.
 
 ## 7 — How answers look
 
-- [ ] **Mímir streams, and renders.** Type:
+- [ ] **Mimir streams, and renders.** Type:
       `Write a short Rust function that adds two numbers. Use a heading, a bullet list and a code block.`
       **Expect:** words appear progressively, not all at once. The code block is highlighted,
       `inline code` has a faint pill, the heading is larger.
-- [ ] **Heimdall looks as it did.** Open `greet.rs` in VS Code, press `Ctrl+Alt+W`, then
+- [ ] **Vidar looks as it did.** Open `greet.rs` in VS Code, press `Ctrl+Alt+W`, then
       `Ctrl+Alt+F` and type:
       `Answer with a heading, a bullet list, a short Rust code block and a link to doc.rust-lang.org.`
       **Expect:** headings set apart by weight more than size, a dark code panel with a border,
       inline code with a faint pill, the link underlined but not coloured, and a long answer
       folded with a fade and *Ctrl+Alt+wheel down for the rest*.
-- [ ] **Heimdall with Mímir open.** Both running, `Ctrl+Alt+W` still answers.
+- [ ] **Vidar with Mimir open.** Both running, `Ctrl+Alt+W` still answers.
 
-**Optional.** Fill Mímir's context by pasting a long document several times. **Expect:**
+**Optional.** Fill Mimir's context by pasting a long document several times. **Expect:**
 *The last request left out n earlier turns to fit the context. They are still saved.* in the
 thread, rather than the chat quietly going strange.
 

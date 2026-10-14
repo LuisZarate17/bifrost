@@ -268,7 +268,7 @@ members = [
 
 const SECOND = `Five members. \`apps/vidar/src-tauri\` and \`apps/mimir/src-tauri\` are the two apps; the rest are the shared crate, the CLI, and the bench harness.
 
-Because they share one \`target/\`, a plain \`cargo build\` at the root rebuilds **both** apps without their frontend embedded. Build them with \`npm run app\` and \`npm run app:mimir\` instead.`;
+Because they share one \`target/\`, a plain \`cargo build\` at the root rebuilds **both** apps without their frontend embedded. Build them with \`npm run app:vidar\` and \`npm run app:mimir\` instead.`;
 
 /** An edit as Rust would plan it: the real shape of bifrost_core::edit's diff. */
 const RENAME_DIFF = {

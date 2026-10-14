@@ -1,14 +1,14 @@
-// End-to-end: the context budget inside a tool turn (H7), in the real Mímir,
+// End-to-end: the context budget inside a tool turn (H7), in the real Mimir,
 // driven by the real model.
 //
-//   1. Start Mímir with its WebView2 debug port open:
+//   1. Start Mimir with its WebView2 debug port open:
 //        $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9223"
 //        target\debug\mimir.exe            (or: npm run tauri -w apps/mimir -- dev)
 //   2. node tools/e2e/mimir-context.mjs
 //      node tools/e2e/mimir-context.mjs --only 2    one scenario, by number
 //
 // The rule it proves: inside one tool turn, when the prompt would outgrow the
-// model's context, Mímir sets old tool results aside (a one-line stub goes to the
+// model's context, Mimir sets old tool results aside (a one-line stub goes to the
 // model in their place) instead of letting Ollama silently drop the middle of the
 // prompt, which loses the user's request. The thread says so with a muted
 // `.dropped` note, or, if even that is not enough, a `.dropped.warn` one. The
@@ -40,7 +40,17 @@ const APPDATA = process.env.APPDATA;
 // The data folder moved to %APPDATA%\bifrost at the I0 rename. Until the new
 // Mimir has started once, the real data is still in %APPDATA%\odin, and making a
 // bifrost folder here would strand it there. Refuse rather than guess.
-if (fs.existsSync(path.join(APPDATA, "odin")) && !fs.existsSync(path.join(APPDATA, "odin", "MOVED.txt"))) {
+// The same rule as bifrost-core's paths.rs: the old folder is live while it holds
+// files and no MOVED.txt. Links count as files, and so does a folder that can't be read.
+const holdsFiles = (d) => {
+  try {
+    return fs.readdirSync(d, { withFileTypes: true }).some((e) => !e.isDirectory() || holdsFiles(path.join(d, e.name)));
+  } catch {
+    return true;
+  }
+};
+const LEGACY = path.join(APPDATA, "odin");
+if (fs.existsSync(LEGACY) && !fs.existsSync(path.join(LEGACY, "MOVED.txt")) && holdsFiles(LEGACY)) {
   console.log("SKIP: %APPDATA%\\odin still holds the data. Start the new Mimir once so it moves to %APPDATA%\\bifrost.");
   process.exit(2);
 }
@@ -53,10 +63,10 @@ async function connect() {
   try {
     targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
   } catch {
-    throw new Error(`nothing on 127.0.0.1:${PORT} — start Mímir with the debug port (see the top of this file)`);
+    throw new Error(`nothing on 127.0.0.1:${PORT} — start Mimir with the debug port (see the top of this file)`);
   }
   const page = targets.find((t) => t.type === "page");
-  if (!page) throw new Error("Mímir has no page open");
+  if (!page) throw new Error("Mimir has no page open");
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
   let id = 0;
@@ -134,7 +144,7 @@ function makeProject() {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "mimir-context-e2e-")));
   const proj = path.join(root, "proj");
   fs.mkdirSync(proj);
-  // The key Mímir stores a folder under is its canonical form.
+  // The key Mimir stores a folder under is its canonical form.
   return { root, proj: fs.realpathSync.native(proj) };
 }
 
@@ -229,7 +239,7 @@ const runs = (n) => only === null || only === n;
 const configBefore = fs.existsSync(CONFIG) ? fs.readFileSync(CONFIG) : null;
 const cfgBase = configBefore ? JSON.parse(configBefore) : {};
 
-// Made only once Mímir has answered, so a run that cannot connect leaves no
+// Made only once Mimir has answered, so a run that cannot connect leaves no
 // temporary project behind.
 let root = null;
 let proj = null;
@@ -253,7 +263,7 @@ const { js } = cdp;
 const convosBefore = new Set((await js(`window.__TAURI_INTERNALS__.invoke("conversations")`)).map((c) => c.id));
 ({ root, proj } = makeProject());
 
-/** Point Mímir at the project with this context size. `ask_every_call` is written
+/** Point Mimir at the project with this context size. `ask_every_call` is written
  *  explicitly, so the user's own setting cannot change what a scenario sees. */
 function configure(numCtx) {
   fs.mkdirSync(path.dirname(CONFIG), { recursive: true });

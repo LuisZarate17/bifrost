@@ -1,7 +1,7 @@
-// End-to-end: the check command, and finding code, in the real Mímir, driven by
+// End-to-end: the check command, and finding code, in the real Mimir, driven by
 // the real model.
 //
-//   1. Start Mímir with its WebView2 debug port open:
+//   1. Start Mimir with its WebView2 debug port open:
 //        $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9223"
 //        target\debug\mimir.exe            (or: npm run tauri -w apps/mimir -- dev)
 //   2. node tools/e2e/mimir-check.mjs
@@ -43,7 +43,17 @@ const APPDATA = process.env.APPDATA;
 // The data folder moved to %APPDATA%\bifrost at the I0 rename. Until the new
 // Mimir has started once, the real data is still in %APPDATA%\odin, and making a
 // bifrost folder here would strand it there. Refuse rather than guess.
-if (fs.existsSync(path.join(APPDATA, "odin")) && !fs.existsSync(path.join(APPDATA, "odin", "MOVED.txt"))) {
+// The same rule as bifrost-core's paths.rs: the old folder is live while it holds
+// files and no MOVED.txt. Links count as files, and so does a folder that can't be read.
+const holdsFiles = (d) => {
+  try {
+    return fs.readdirSync(d, { withFileTypes: true }).some((e) => !e.isDirectory() || holdsFiles(path.join(d, e.name)));
+  } catch {
+    return true;
+  }
+};
+const LEGACY = path.join(APPDATA, "odin");
+if (fs.existsSync(LEGACY) && !fs.existsSync(path.join(LEGACY, "MOVED.txt")) && holdsFiles(LEGACY)) {
   console.log("SKIP: %APPDATA%\\odin still holds the data. Start the new Mimir once so it moves to %APPDATA%\\bifrost.");
   process.exit(2);
 }
@@ -56,10 +66,10 @@ async function connect() {
   try {
     targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
   } catch {
-    throw new Error(`nothing on 127.0.0.1:${PORT} — start Mímir with the debug port (see the top of this file)`);
+    throw new Error(`nothing on 127.0.0.1:${PORT} — start Mimir with the debug port (see the top of this file)`);
   }
   const page = targets.find((t) => t.type === "page");
-  if (!page) throw new Error("Mímir has no page open");
+  if (!page) throw new Error("Mimir has no page open");
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
   let id = 0;
@@ -107,7 +117,7 @@ function makeProject() {
   fs.writeFileSync(path.join(proj, "Cargo.toml"), crlf(CARGO_TOML));
   fs.writeFileSync(path.join(proj, "src", "config.rs"), crlf(CONFIG_RS));
   fs.writeFileSync(path.join(proj, "src", "main.rs"), crlf(MAIN_RS));
-  // The key Mímir stores a folder under is its canonical form.
+  // The key Mimir stores a folder under is its canonical form.
   return { root, proj: fs.realpathSync.native(proj) };
 }
 
@@ -235,7 +245,7 @@ const configBefore = fs.existsSync(CONFIG) ? fs.readFileSync(CONFIG) : null;
 
 // The fix scenario's edits leave undo records in the user's backups folder.
 // Only this run's — records whose file lies in this run's project — are removed
-// afterwards, so a Mímir session of the user's own keeps its undo history.
+// afterwards, so a Mimir session of the user's own keeps its undo history.
 const BACKUPS = path.join(APPDATA, "bifrost", "backups");
 const backupNames = () => (fs.existsSync(BACKUPS) ? fs.readdirSync(BACKUPS) : []);
 const backupsBefore = new Set(backupNames());
@@ -263,10 +273,10 @@ process.on("SIGINT", () => {
 const cfgBase = configBefore ? JSON.parse(configBefore) : {};
 const convosBefore = new Set((await js(`window.__TAURI_INTERNALS__.invoke("conversations")`)).map((c) => c.id));
 
-/** Point Mímir at the project, with this check command set for it. Since H5 a
+/** Point Mimir at the project, with this check command set for it. Since H5 a
  *  read, listing or search inside the folder runs without asking unless
  *  `ask_every_call` is on; it is written explicitly, so the user's own setting
- *  cannot change what a scenario sees. Mímir re-reads the config every round. */
+ *  cannot change what a scenario sees. Mimir re-reads the config every round. */
 function useCheck(argv, askEveryCall = false) {
   const checks = { ...(cfgBase.checks ?? {}), [proj]: argv };
   fs.mkdirSync(path.dirname(CONFIG), { recursive: true });

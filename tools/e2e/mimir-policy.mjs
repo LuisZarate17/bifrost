@@ -1,6 +1,6 @@
-// End-to-end: the approval policy (H5), in the real Mímir, driven by the real model.
+// End-to-end: the approval policy (H5), in the real Mimir, driven by the real model.
 //
-//   1. Start Mímir with its WebView2 debug port open:
+//   1. Start Mimir with its WebView2 debug port open:
 //        $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9223"
 //        target\debug\mimir.exe            (or: npm run tauri -w apps/mimir -- dev)
 //   2. node tools/e2e/mimir-policy.mjs
@@ -11,7 +11,7 @@
 // folder's own .gitignore hides, or a secret-looking one such as .env, or one
 // reached through a junction that points out — still asks; every edit and every
 // check still asks; and `ask_every_call: true` in the config brings back asking
-// for everything, without a restart (Mímir re-reads the config every round).
+// for everything, without a restart (Mimir re-reads the config every round).
 //
 //   1. a read inside the folder runs without asking
 //   2. a read outside asks — by absolute path, and by ../, shown resolved
@@ -27,7 +27,7 @@
 // the exact path and the model still answers without making the call (Qwen3-Coder
 // sometimes declines a .env or a junction on its own), nothing about the policy
 // was exercised: that prints SKIP, is not counted as a pass, and is not a failure.
-// The unit tests in odin-core carry the rule; this script proves the app wires it.
+// The unit tests in bifrost-core carry the rule; this script proves the app wires it.
 //
 // Every card that asks is Denied, and the marker it would have revealed must
 // never appear in the thread: a denied read reads nothing.
@@ -49,7 +49,17 @@ const APPDATA = process.env.APPDATA;
 // The data folder moved to %APPDATA%\bifrost at the I0 rename. Until the new
 // Mimir has started once, the real data is still in %APPDATA%\odin, and making a
 // bifrost folder here would strand it there. Refuse rather than guess.
-if (fs.existsSync(path.join(APPDATA, "odin")) && !fs.existsSync(path.join(APPDATA, "odin", "MOVED.txt"))) {
+// The same rule as bifrost-core's paths.rs: the old folder is live while it holds
+// files and no MOVED.txt. Links count as files, and so does a folder that can't be read.
+const holdsFiles = (d) => {
+  try {
+    return fs.readdirSync(d, { withFileTypes: true }).some((e) => !e.isDirectory() || holdsFiles(path.join(d, e.name)));
+  } catch {
+    return true;
+  }
+};
+const LEGACY = path.join(APPDATA, "odin");
+if (fs.existsSync(LEGACY) && !fs.existsSync(path.join(LEGACY, "MOVED.txt")) && holdsFiles(LEGACY)) {
   console.log("SKIP: %APPDATA%\\odin still holds the data. Start the new Mimir once so it moves to %APPDATA%\\bifrost.");
   process.exit(2);
 }
@@ -62,10 +72,10 @@ async function connect() {
   try {
     targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
   } catch {
-    throw new Error(`nothing on 127.0.0.1:${PORT} — start Mímir with the debug port (see the top of this file)`);
+    throw new Error(`nothing on 127.0.0.1:${PORT} — start Mimir with the debug port (see the top of this file)`);
   }
   const page = targets.find((t) => t.type === "page");
-  if (!page) throw new Error("Mímir has no page open");
+  if (!page) throw new Error("Mimir has no page open");
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
   let id = 0;
@@ -118,7 +128,7 @@ function makeProject() {
   fs.writeFileSync(path.join(root, "elsewhere", "linked.txt"), `${LINKED}\n`);
   // A junction needs no privilege, unlike a symlink.
   execFileSync("cmd", ["/c", "mklink", "/J", path.join(proj, "linked"), path.join(root, "elsewhere")], { stdio: "pipe" });
-  // The key Mímir stores a folder under is its canonical form.
+  // The key Mimir stores a folder under is its canonical form.
   return { root, proj: fs.realpathSync.native(proj) };
 }
 
@@ -235,7 +245,7 @@ const runs = (n) => only === null || only === n;
 const configBefore = fs.existsSync(CONFIG) ? fs.readFileSync(CONFIG) : null;
 const cfgBase = configBefore ? JSON.parse(configBefore) : {};
 
-// Made only once Mímir has answered, so a run that cannot connect leaves no
+// Made only once Mimir has answered, so a run that cannot connect leaves no
 // temporary project behind.
 let root = null;
 let proj = null;
@@ -261,9 +271,9 @@ const { js } = cdp;
 const convosBefore = new Set((await js(`window.__TAURI_INTERNALS__.invoke("conversations")`)).map((c) => c.id));
 ({ root, proj } = makeProject());
 
-/** Point Mímir at the project, with `ask_every_call` as given (written
+/** Point Mimir at the project, with `ask_every_call` as given (written
  *  explicitly, so the user's own setting cannot change what a scenario sees) and
- *  optionally a check command. Mímir re-reads it every round. */
+ *  optionally a check command. Mimir re-reads it every round. */
 function configure({ askEveryCall = false, check: argv = null } = {}) {
   const checks = argv ? { ...(cfgBase.checks ?? {}), [proj]: argv } : cfgBase.checks;
   fs.mkdirSync(path.dirname(CONFIG), { recursive: true });
@@ -441,7 +451,7 @@ try {
   // 7 ── the off switch ────────────────────────────────────────────────────
   if (runs(7)) {
     console.log("\n7. with ask_every_call on, an inside read and a listing ask");
-    // Written mid-run, no restart: Mímir re-reads the config every round.
+    // Written mid-run, no restart: Mimir re-reads the config every round.
     configure({ askEveryCall: true });
     await newChat(js);
     await toolsOn(js);

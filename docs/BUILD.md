@@ -1,5 +1,12 @@
 # ODIN — Build Plan
 
+> **Names (2026-10-12).** This log keeps the names of its time. Since Stage I's I0 the project is
+> **Bifrost** (was ODIN), the overlay **Vidar** (was Heimdall, first Warden), the chat app **Mimir**
+> (was Mímir, first Citadel), the command `bifrost` and the shared crate `bifrost-core`. The
+> `HEIMDALL_*` switches below are `VIDAR_*` now; set the old name and nothing happens. For
+> today's commands, paths and switches, see [../README.md](../README.md) and
+> [shortcuts.md](shortcuts.md).
+
 Companion to [PLAN.md](PLAN.md). Stages A-F built **Heimdall**, the overlay, in nineteen chunks;
 Stage G builds **Mímir** and is tracked in its own packet. **Each chunk is one sitting
 and one execution chat.** Every one ends in something observable, so you can always stop.

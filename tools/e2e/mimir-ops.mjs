@@ -1,6 +1,6 @@
-// End-to-end: new folders, delete and move (H9), in the real Mímir, driven by the real model.
+// End-to-end: new folders, delete and move (H9), in the real Mimir, driven by the real model.
 //
-//   1. Start Mímir with its WebView2 debug port open:
+//   1. Start Mimir with its WebView2 debug port open:
 //        $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9223"
 //        target\debug\mimir.exe            (or: npm run tauri -w apps/mimir -- dev)
 //   2. node tools/e2e/mimir-ops.mjs
@@ -39,7 +39,17 @@ const APPDATA = process.env.APPDATA;
 // The data folder moved to %APPDATA%\bifrost at the I0 rename. Until the new
 // Mimir has started once, the real data is still in %APPDATA%\odin, and making a
 // bifrost folder here would strand it there. Refuse rather than guess.
-if (fs.existsSync(path.join(APPDATA, "odin")) && !fs.existsSync(path.join(APPDATA, "odin", "MOVED.txt"))) {
+// The same rule as bifrost-core's paths.rs: the old folder is live while it holds
+// files and no MOVED.txt. Links count as files, and so does a folder that can't be read.
+const holdsFiles = (d) => {
+  try {
+    return fs.readdirSync(d, { withFileTypes: true }).some((e) => !e.isDirectory() || holdsFiles(path.join(d, e.name)));
+  } catch {
+    return true;
+  }
+};
+const LEGACY = path.join(APPDATA, "odin");
+if (fs.existsSync(LEGACY) && !fs.existsSync(path.join(LEGACY, "MOVED.txt")) && holdsFiles(LEGACY)) {
   console.log("SKIP: %APPDATA%\\odin still holds the data. Start the new Mimir once so it moves to %APPDATA%\\bifrost.");
   process.exit(2);
 }
@@ -53,10 +63,10 @@ async function connect() {
   try {
     targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
   } catch {
-    throw new Error(`nothing on 127.0.0.1:${PORT} — start Mímir with the debug port (see the top of this file)`);
+    throw new Error(`nothing on 127.0.0.1:${PORT} — start Mimir with the debug port (see the top of this file)`);
   }
   const page = targets.find((t) => t.type === "page");
-  if (!page) throw new Error("Mímir has no page open");
+  if (!page) throw new Error("Mimir has no page open");
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
   let id = 0;
@@ -108,7 +118,7 @@ function makeProject() {
   fs.writeFileSync(path.join(proj, "notes.txt"), crlf(NOTES));
   fs.writeFileSync(path.join(proj, ".git", "config"), GIT_CONFIG);
   fs.writeFileSync(path.join(root, "outside.txt"), OUTSIDE);
-  // The key Mímir stores a folder under is its canonical form.
+  // The key Mimir stores a folder under is its canonical form.
   return { root, proj: fs.realpathSync.native(proj) };
 }
 
@@ -242,7 +252,7 @@ const cfgBase = configBefore ? JSON.parse(configBefore) : {};
 const backupNames = () => (fs.existsSync(BACKUPS) ? fs.readdirSync(BACKUPS) : []);
 const backupsBefore = new Set(backupNames());
 
-// Made only once Mímir has answered, so a run that cannot connect leaves no
+// Made only once Mimir has answered, so a run that cannot connect leaves no
 // temporary project behind.
 let root = null;
 let proj = null;
@@ -254,7 +264,7 @@ function removeProject() {
 }
 
 /** Remove the backup records this run made — only those whose file, or whose move
- *  destination, lies in this run's project, so a Mímir session of the user's own
+ *  destination, lies in this run's project, so a Mimir session of the user's own
  *  running meanwhile keeps its undo history. Called while `proj` is still set. */
 function cleanBackups() {
   if (!proj) return;

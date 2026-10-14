@@ -1,4 +1,4 @@
-// Screenshots every `?preview` state of Mímir, in dark and light, at three widths.
+// Screenshots every `?preview` state of Mimir, in dark and light, at three widths.
 //
 //   npm run dev:mimir                          first, in another terminal
 //   node tools/mimir-shots.mjs                 PNGs into %TEMP%\mimir-shots

@@ -5,7 +5,7 @@ files plus the answer hashes recorded in `docs/` are the durable record.
 
 | File | Status |
 |---|---|
-| `current.txt` | **Shipping.** Byte-identical to `DEFAULT_PROMPT` in `bench.mjs` and, after its `.trim()`, to `crates/odin-cli/prompt.txt` |
+| `current.txt` | **Shipping.** Byte-identical to `DEFAULT_PROMPT` in `bench.mjs` and to `config::DEFAULT_PROMPT` in `crates/bifrost-core/src/config.rs`, the only copy in source |
 | `brief.txt` | **Rejected at C1b.** Regressed case-02: concluded the code compiles when it does not |
 | `tight.txt` | **Rejected 2026-09-18.** Same failure as `brief.txt` |
 | `ordered.txt` | **Rejected 2026-09-18.** Same failure as `brief.txt` |
@@ -41,7 +41,7 @@ shorter. Glanceability and brevity turned out to be different purchases.
 
 ## Write these files byte-exactly — no trailing newline
 
-`bench.mjs` reads a `--prompt-file` verbatim. `crates/odin-cli/src/main.rs` calls `.trim()`; the
+`bench.mjs` reads a `--prompt-file` verbatim. `crates/bifrost-cli/src/main.rs` calls `.trim()`; the
 harness does not. At C1b a control built with `cp crates/odin-cli/prompt.txt` carried one trailing
 newline that
 A2's baseline did not, and at `temperature: 0` with a fixed seed **that single byte flipped the

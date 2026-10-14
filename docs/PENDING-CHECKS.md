@@ -7,6 +7,10 @@ machine.
 **[G-testing.md](G-testing.md)** — the same checks as a
 worksheet, with exact text to type and what should happen. This file keeps the reasoning.
 
+> **Names.** Renamed 2026-10-12 at Stage I's I0: Heimdall is now **Vidar**, Mímir is **Mimir**, the
+> command is `bifrost`, and the data folder is `%APPDATA%\bifrost`. The open checks below use
+> the new names; anything already checked keeps the names it was checked under.
+
 ## Stage H's checks, run 2026-10-12
 
 Every item below for H1–H10 was run against the real app and model, driven over CDP (the way
@@ -269,7 +273,7 @@ refused outright and that a directory is rejected clearly.
 
 ## Open — G5, attachments, 2026-09-19
 
-Images ride as base64 on the message; the bytes live in `%APPDATA%\odin\attachments\` and the
+Images ride as base64 on the message; the bytes live in `%APPDATA%\bifrost\attachments\` and the
 conversation records the filename. Text files are folded into the question as a labelled code
 fence instead, so a model with no `vision` can still read them.
 
@@ -292,7 +296,7 @@ of those being the image, matching A2. Deleting a conversation takes its attachm
 
 ## Open — G4, persistence, 2026-09-19
 
-Conversations are one JSON file each in `%APPDATA%\odin\conversations\`, beside `config.json`. No
+Conversations are one JSON file each in `%APPDATA%\bifrost\conversations\`, beside `config.json`. No
 database: G4 needs save, list, rename and delete, and none of that needs a query. What a plain file
 buys is that you can read it in an editor, back it up by copying it, and delete one conversation by
 deleting one file.
@@ -302,7 +306,7 @@ rename and delete work, deleting something already gone returns `false` rather t
 a record written without the G5/G6 fields still parses. 12 tests cover the record shape, the title
 derivation, the date arithmetic and the path-traversal refusal.
 
-- [ ] **⭐ Close Mímir, reopen it, and continue a conversation.** Ask something, quit, relaunch,
+- [ ] **⭐ Close Mimir, reopen it, and continue a conversation.** Ask something, quit, relaunch,
       hit **History**, open the thread, and ask a follow-up that depends on what was said before.
       **That is the chunk's done-when.**
 - [ ] **Titles derive from the first question.** A list of conversations all called "New
@@ -312,10 +316,10 @@ derivation, the date arithmetic and the path-traversal refusal.
 - [ ] **Delete** with the `×`, which arms an in-place Delete/Keep rather than opening a dialog —
       one click to arm, one to confirm, and nothing that can be dismissed into deleting by accident.
       Deleting the conversation that is currently open should clear the thread.
-- [ ] **Look at a file.** `%APPDATA%\odin\conversations\` — it should be readable JSON, with
+- [ ] **Look at a file.** `%APPDATA%\bifrost\conversations\` — it should be readable JSON, with
       `model` recorded on assistant turns and `images`/`tool_calls` absent until G5 and G6 fill them.
 
-## Open — G3, Heimdall follows the app, 2026-09-19
+## Open — G3, Vidar follows the app, 2026-09-19
 
 **This is the chunk that answers the original question**, and its checks are the ones that matter
 most in Stage G — two of them are about whether a new app broke a finished one.
@@ -325,16 +329,16 @@ most in Stage G — two of them are about whether a new app broke a finished one
 3.02 ms round trip into a **4.10 µs** lookup — about 700× — which is what keeps the popup instant.
 With no config file present, `config::load()` still yields `qwen3-vl:8b-instruct-q4_K_M` at 32,768.
 
-- [ ] **Switch the model in Mímir, then press `Ctrl+Alt+W` — without restarting Heimdall.**
-      The popup should answer using the new model. Heimdall re-reads the config on every summon, so
+- [ ] **Switch the model in Mimir, then press `Ctrl+Alt+W` — without restarting Vidar.**
+      The popup should answer using the new model. Vidar re-reads the config on every summon, so
       there is no IPC, no file watching and no daemon; it simply looks when it wakes up.
-- [ ] **Pick `llama3.1:8b` in Mímir and press the hotkey.** The popup must say
+- [ ] **Pick `llama3.1:8b` in Mimir and press the hotkey.** The popup must say
       **`cannot see images`** in the header and name the model, *instead of* capturing and
       answering. Ollama does not refuse a screenshot sent to a text-only model — it drops the image
       and answers anyway, which is a fluent, confident description of nothing. That is worse than
       an error, because nothing about it looks wrong.
 - [ ] **The tray follows too.** After switching, use the tray's Warm — it should load the model you
-      chose, not the one Heimdall started with. Confirm with `odin status` in a terminal.
+      chose, not the one Vidar started with. Confirm with `bifrost status` in a terminal.
 - [x] **⭐ Delete `%APPDATA%\odin\config.json` entirely and press the hotkey.** The popup must
       answer normally on its built-in default, **with no error and no stall**. This is decision #5
       and the single most important check in the stage: it is the one that says **a new app did not
@@ -356,8 +360,8 @@ What is open is the panel itself.
 - [ ] **Open the model panel** — the button in the header showing the current tag. Every installed
       model should be listed with its size, quantization, `vision`/`tools` badges, and whether it
       is resident.
-- [ ] **Pick a different model.** The radio writes the choice to `%APPDATA%\odin\config.json`, so
-      `odin status` in a terminal should immediately report the new tag. **That is the switchboard
+- [ ] **Pick a different model.** The radio writes the choice to `%APPDATA%\bifrost\config.json`, so
+      `bifrost status` in a terminal should immediately report the new tag. **That is the switchboard
       working** — one source of truth, followed by the CLI without being told.
 - [ ] **Load and Unload.** The card figure in the footer should move to match within a few seconds.
       Note Ollama and the card disagree by ~2,100 MiB (9,737 vs 11,830 measured); **the card is the
@@ -369,20 +373,20 @@ What is open is the panel itself.
 
 ## Open — G1, 2026-09-19
 
-Mímir builds, launches, and shows a window titled **Mímir** alongside a running Heimdall. What no
+Mimir builds, launches, and shows a window titled **Mimir** alongside a running Vidar. What no
 tool call can do is type in it.
 
 **Already proven mechanically**, so only the wiring is open: a three-message conversation through
-`odin_core::chat::stream` correctly recalled both facts from turn one — *"Your dog is called
+`bifrost_core::chat::stream` correctly recalled both facts from turn one — *"Your dog is called
 Bramble, and you mentioned the colour vermilion."* The stream delivers separate fragments (8 for a
-count to eight), Heimdall still compiles and runs, and both guards pass.
+count to eight), Vidar still compiles and runs, and both guards pass.
 
 - [ ] **Hold a real conversation.** Launch `target\debug\mimir.exe`, ask something, then ask a
       follow-up that only makes sense given the first — "what did I just ask you?". **This is the
       chunk's done-when.**
 - [ ] **Watch it stream.** Tokens should appear progressively, *not* all at once. Arriving whole is
       the tell for returning the answer as the command's `Result` instead of through the `Channel`.
-- [ ] **Markdown renders through `@odin/ui`** — ask for a Rust snippet and confirm the code block
+- [ ] **Markdown renders through `@bifrost/ui`** — ask for a Rust snippet and confirm the code block
       highlights, inline code gets its pill, headings scale. *(This also settles 1e's open visual
       check from the other direction: same renderer, different app.)*
 - [ ] **Switch model mid-conversation** in the header picker; the next turn uses the new one.
@@ -392,7 +396,7 @@ count to eight), Heimdall still compiles and runs, and both guards pass.
 - [ ] **Fill the context** — paste something long, repeatedly — and confirm
       `⋯ n earlier turns dropped to make room` appears in the thread rather than the conversation
       quietly going strange.
-- [ ] **Heimdall is undisturbed.** `Ctrl+Alt+W` still answers with Mímir open.
+- [ ] **Vidar is undisturbed.** `Ctrl+Alt+W` still answers with Mimir open.
 
 > **Expect Smart App Control to refuse `mimir.exe` at some point.** It did not on the first
 > launch, but a new binary is a fresh verdict; a rebuild for a new hash clears it (PLAN.md §3).
@@ -401,23 +405,23 @@ count to eight), Heimdall still compiles and runs, and both guards pass.
 
 The config was verified end to end **through the CLI**: no file at all gives working defaults and
 exit 0; a file with a distinctive prompt reaches the model; renaming it away falls back silently
-without forcing a reload. `odin warm` then `odin` now reports **`load 0.00s`**, where the same
+without forcing a reload. `bifrost warm` then `bifrost` now reports **`load 0.00s`**, where the same
 sequence cost 3.09s before. What none of that exercises is the popup.
 
-- [ ] **Does Heimdall read the config too?** Write `%APPDATA%\odin\config.json` with an obvious
+- [ ] **Does Vidar read the config too?** Write `%APPDATA%\bifrost\config.json` with an obvious
       prompt — `{"model":"qwen3-vl:8b-instruct-q4_K_M","prompt":"Say only the word BANANA.","num_ctx":32768}`
       — then press `Ctrl+Alt+W`. The popup should answer `BANANA`.
 - [x] **Then delete the file and press it again.** *(Passed 2026-09-25 — the ⭐ check under G3.)*
       The popup must answer normally on the built-in default, **with no error and no stall**. This is the one that matters: PLAN.md decision #5
       says a missing config is a normal state, and it is what keeps Heimdall working on a machine
       where Mímir was never installed.
-- [ ] **Warm survives the hotkey.** `odin warm`, then `Ctrl+Alt+W`. The popup should not show
+- [ ] **Warm survives the hotkey.** `bifrost warm`, then `Ctrl+Alt+W`. The popup should not show
       "Warming the model…" — the tray and the CLI now load at the same `num_ctx` the popup asks
       with, so the runner is no longer torn down between them.
 
 ## Open — Before G0 step 1e, 2026-09-19
 
-- [ ] **Does the popup still look identical after the renderer moved to `@odin/ui`?**
+- [ ] **Does the popup still look identical after the renderer moved to `@bifrost/ui`?**
       `Answer.tsx` and `CodeBlock.tsx` moved to `packages/ui/`, and the renderer's CSS was split
       out of `App.css` into `packages/ui/src/answer.css`. **1e changes no behaviour and no
       appearance** — so anything that looks different is a bug in the split.
@@ -434,7 +438,7 @@ sequence cost 3.09s before. What none of that exercises is the popup.
       **The three rules deliberately left in `App.css`** are the ones to suspect if the *collapse*
       or `Ctrl+Alt+Z`'s highlight misbehave rather than the prose: `.answer > .copy-pick` and the
       two `.content.collapsed .answer…` rules. They select `.answer` descendants but encode
-      Heimdall's behaviour, not the renderer's.
+      Vidar's behaviour, not the renderer's.
 
 ## Cleared 2026-09-25 — the rename
 

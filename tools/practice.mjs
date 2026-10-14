@@ -1,4 +1,4 @@
-// Builds a practice folder for trying Mímir's file tools by hand.
+// Builds a practice folder for trying Mimir's file tools by hand.
 //
 //   node tools/practice.mjs          create it, or put it back the way it started
 //   node tools/practice.mjs --path   print where it is, and change nothing
@@ -17,7 +17,7 @@ import path from "node:path";
 const DIR = path.resolve(import.meta.dirname, "..", "practice");
 const MARKER = ".mimir-practice";
 
-// CRLF, like most files on this machine. Mímir keeps whatever endings a file
+// CRLF, like most files on this machine. Mimir keeps whatever endings a file
 // has, and a practice file with Windows endings exercises the case that matters.
 const crlf = (s) => s.replace(/\r?\n/g, "\r\n");
 
@@ -40,9 +40,9 @@ fn main() {
   // an answer without it after a Deny proves it was not.
   "facts.txt": `The practice code is 4417-AMBER.
 `,
-  // Makes greet.rs a project `cargo check` can build, so Mímir offers a check
+  // Makes greet.rs a project `cargo check` can build, so Mimir offers a check
   // here. The empty [workspace] makes this folder its own workspace: without
-  // it, cargo finds odin's Cargo.toml above and refuses to build.
+  // it, cargo finds Bifrost's Cargo.toml above and refuses to build.
   "Cargo.toml": `[package]
 name = "greet"
 version = "0.1.0"
@@ -57,7 +57,7 @@ path = "greet.rs"
 };
 
 // The smallest valid zip: an empty archive, just the end-of-directory record.
-// It exists to be refused — Mímir takes images and text, nothing else.
+// It exists to be refused — Mimir takes images and text, nothing else.
 const EMPTY_ZIP = Buffer.from([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]);
 
 if (process.argv.includes("--path")) {

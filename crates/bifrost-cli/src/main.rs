@@ -215,7 +215,7 @@ fn main() -> std::process::ExitCode {
         paths::Migration::Nothing => {}
         paths::Migration::Moved => eprintln!("moved %APPDATA%\\odin to %APPDATA%\\bifrost"),
         paths::Migration::BothExist => eprintln!(
-            "warning: %APPDATA%\\odin and %APPDATA%\\bifrost both hold data; using bifrost, nothing moved"
+            "warning: %APPDATA%\\odin still holds data but %APPDATA%\\bifrost already exists; using bifrost, nothing moved"
         ),
         paths::Migration::Blocked(e) => {
             eprintln!("warning: could not move %APPDATA%\\odin yet ({e}); still using it")

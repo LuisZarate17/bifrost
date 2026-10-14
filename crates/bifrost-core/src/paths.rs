@@ -41,8 +41,9 @@ pub enum Migration {
     Nothing,
     /// `odin` became `bifrost` just now.
     Moved,
-    /// Both folders hold data and the old one has no marker. Nothing is touched;
-    /// someone has to decide which one is right.
+    /// The old folder still holds files and has no marker, but `bifrost` already
+    /// exists. Nothing is touched and `bifrost` is used; someone has to decide
+    /// which one is right.
     BothExist,
     /// The rename kept failing (something held a file open). Nothing moved, and
     /// [`data_dir`] keeps using the old folder until a later start succeeds.
@@ -57,7 +58,7 @@ pub fn data_dir() -> Option<PathBuf> {
 
 /// [`data_dir`] under `base`:
 /// - `base\bifrost` if it exists;
-/// - else `base\odin` if it exists and has not been moved (no marker);
+/// - else `base\odin` if it still holds the data (files, and no marker);
 /// - else `base\bifrost`, which the first save creates.
 pub fn data_dir_in(base: &Path) -> PathBuf {
     let new = base.join(DIR);
@@ -100,8 +101,10 @@ pub fn migrate_in(base: &Path) -> Migration {
             }
             Migration::Moved
         }
-        // Another app started at the same moment and moved it first.
-        Err(_) if !old.exists() && new.exists() => Migration::Nothing,
+        // Another app started at the same moment and moved it first. It re-creates
+        // the old folder for its note an instant later, so the old folder may be
+        // back already, empty or marked; either way it no longer holds the data.
+        Err(_) if new.exists() && !legacy_is_live(&old) => Migration::Nothing,
         Err(e) => Migration::Blocked(e.to_string()),
     }
 }
@@ -110,10 +113,33 @@ fn appdata() -> Option<PathBuf> {
     std::env::var_os("APPDATA").map(PathBuf::from)
 }
 
-/// The old folder still holds the live data: it exists, and nothing has marked
-/// it as moved.
+/// The old folder still holds the live data: it holds files, and nothing has
+/// marked it as moved. An empty one is not live: that is what is left when the
+/// note could not be written, or was deleted without the folder.
 fn legacy_is_live(old: &Path) -> bool {
-    old.is_dir() && !old.join(MOVED_MARKER).exists()
+    old.is_dir() && !old.join(MOVED_MARKER).exists() && holds_files(old)
+}
+
+/// Whether `dir` holds anything but folders, at any depth. Read-only. Links are
+/// never followed; a link counts as something, and so does a folder that cannot
+/// be read. A folder that is not there holds nothing.
+fn holds_files(dir: &Path) -> bool {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => return e.kind() != std::io::ErrorKind::NotFound,
+    };
+    for entry in entries {
+        let Ok(entry) = entry else { return true };
+        match entry.file_type() {
+            Ok(t) if t.is_dir() && !t.is_symlink() => {
+                if holds_files(&entry.path()) {
+                    return true;
+                }
+            }
+            _ => return true,
+        }
+    }
+    false
 }
 
 /// Rename a folder, retrying for about two seconds while something holds a file
@@ -240,6 +266,33 @@ mod tests {
         b.write("bifrost/config.json", "{}");
         assert_eq!(migrate_in(&b.0), Migration::Nothing);
         assert_eq!(data_dir_in(&b.0), b.0.join("bifrost"));
+    }
+
+    #[test]
+    fn an_empty_old_folder_is_not_live() {
+        // What is left when the note was deleted without the folder, or could not
+        // be written, or when a second app lost the race to move it: no warning,
+        // and nothing to move.
+        let b = Base::new("empty-old");
+        std::fs::create_dir_all(b.0.join("odin/conversations")).unwrap();
+        b.write("bifrost/config.json", "{}");
+        assert_eq!(migrate_in(&b.0), Migration::Nothing);
+        assert_eq!(data_dir_in(&b.0), b.0.join("bifrost"));
+
+        // With nothing else there, it is a fresh machine.
+        std::fs::remove_dir_all(b.0.join("bifrost")).unwrap();
+        assert_eq!(migrate_in(&b.0), Migration::Nothing);
+        assert_eq!(data_dir_in(&b.0), b.0.join("bifrost"));
+        assert!(!b.0.join("bifrost").exists(), "nothing is created before a save");
+    }
+
+    #[test]
+    fn one_file_deep_in_the_old_folder_keeps_it_live() {
+        let b = Base::new("deep");
+        b.write("odin/backups/1.bak", "B");
+        assert_eq!(data_dir_in(&b.0), b.0.join("odin"));
+        assert_eq!(migrate_in(&b.0), Migration::Moved);
+        assert_eq!(b.read("bifrost/backups/1.bak"), "B");
     }
 
     #[cfg(windows)]

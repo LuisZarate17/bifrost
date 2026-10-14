@@ -1760,7 +1760,7 @@ fn report_migration(m: bifrost_core::paths::Migration) {
         Migration::Nothing => {}
         Migration::Moved => println!("[mimir] moved %APPDATA%\\odin to %APPDATA%\\bifrost"),
         Migration::BothExist => eprintln!(
-            "[mimir] WARNING: %APPDATA%\\odin and %APPDATA%\\bifrost both hold data; using bifrost, nothing moved"
+            "[mimir] WARNING: %APPDATA%\\odin still holds data but %APPDATA%\\bifrost already exists; using bifrost, nothing moved"
         ),
         Migration::Blocked(e) => {
             eprintln!("[mimir] WARNING: could not move %APPDATA%\\odin yet ({e}); still using it")

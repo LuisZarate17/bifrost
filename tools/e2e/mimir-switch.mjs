@@ -1,7 +1,7 @@
 // End-to-end: choosing a project folder offers the coding model, and clearing
 // it offers to switch back — against the real Ollama, loading the real models.
 //
-//   1. Start Mímir with its WebView2 debug port open:
+//   1. Start Mimir with its WebView2 debug port open:
 //        $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9223"
 //        target\debug\mimir.exe            (or: npm run tauri -w apps/mimir -- dev)
 //   2. node tools/e2e/mimir-switch.mjs
@@ -34,7 +34,17 @@ const APPDATA = process.env.APPDATA;
 // The data folder moved to %APPDATA%\bifrost at the I0 rename. Until the new
 // Mimir has started once, the real data is still in %APPDATA%\odin, and making a
 // bifrost folder here would strand it there. Refuse rather than guess.
-if (fs.existsSync(path.join(APPDATA, "odin")) && !fs.existsSync(path.join(APPDATA, "odin", "MOVED.txt"))) {
+// The same rule as bifrost-core's paths.rs: the old folder is live while it holds
+// files and no MOVED.txt. Links count as files, and so does a folder that can't be read.
+const holdsFiles = (d) => {
+  try {
+    return fs.readdirSync(d, { withFileTypes: true }).some((e) => !e.isDirectory() || holdsFiles(path.join(d, e.name)));
+  } catch {
+    return true;
+  }
+};
+const LEGACY = path.join(APPDATA, "odin");
+if (fs.existsSync(LEGACY) && !fs.existsSync(path.join(LEGACY, "MOVED.txt")) && holdsFiles(LEGACY)) {
   console.log("SKIP: %APPDATA%\\odin still holds the data. Start the new Mimir once so it moves to %APPDATA%\\bifrost.");
   process.exit(2);
 }
@@ -51,10 +61,10 @@ async function connect() {
   try {
     targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
   } catch {
-    throw new Error(`nothing on 127.0.0.1:${PORT} — start Mímir with the debug port (see the top of this file)`);
+    throw new Error(`nothing on 127.0.0.1:${PORT} — start Mimir with the debug port (see the top of this file)`);
   }
   const page = targets.find((t) => t.type === "page");
-  if (!page) throw new Error("Mímir has no page open");
+  if (!page) throw new Error("Mimir has no page open");
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = fail; });
   let id = 0;
@@ -190,7 +200,7 @@ async function restoreLoadedModels() {
       if (now[tag] && !loadedBefore[tag]) {
         await fetch(`${OLLAMA}/api/generate`, { method: "POST", body: JSON.stringify({ model: tag, keep_alive: 0 }) });
       } else if (!now[tag] && loadedBefore[tag]) {
-        // As the app loads it (odin-core's ollama::load): its num_ctx and keep_alive -1.
+        // As the app loads it (bifrost-core's ollama::load): its num_ctx and keep_alive -1.
         // Without them the model would come back at Ollama's default context and
         // expire after five minutes, not the way it was found.
         await fetch(`${OLLAMA}/api/generate`, {

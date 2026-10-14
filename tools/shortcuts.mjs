@@ -1,20 +1,24 @@
-// Create or repoint the Desktop and Start Menu shortcuts.
+// Create or repoint the Desktop and Start Menu shortcuts, and remove the ones the
+// renames left behind.
 //
-//   node tools/shortcuts.mjs           # write them
+//   node tools/shortcuts.mjs           # write them, remove retired ones
 //   node tools/shortcuts.mjs --check   # report where they currently point, change nothing
 //
 // Why this is a script and not a one-off. The shortcuts were made by hand and
 // pointed at `src-tauri/target/debug/heimdall.exe`, which stopped existing the
-// moment Before-G0 step 1 moved Heimdall into apps/ and consolidated every crate
-// into one root `target/`. A shortcut that silently does nothing is a worse
+// moment Before-G0 step 1 moved the overlay into apps/ and consolidated every
+// crate into one root `target/`. A shortcut that silently does nothing is a worse
 // failure than one that is obviously broken, so the fix has to be repeatable —
-// and PLAN.md decision #5 gives Mímir its own shortcut beside Heimdall's, so a
+// and PLAN.md decision #5 gives Mimir its own shortcut beside Vidar's, so a
 // second caller already exists.
 //
 // The Desktop is resolved through the shell, never by joining %USERPROFILE% and
 // "Desktop": on this machine it is OneDrive-redirected to
 // C:\Users\<user>\OneDrive\Desktop, and assembling the path writes a shortcut
 // into a folder nobody ever looks at.
+//
+// Taskbar pins are not touched: Windows keeps them out of reach of scripts on
+// purpose. After a rename, unpin the old app and pin the new one by hand.
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -30,24 +34,35 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
  * two processes that happen to share a model, and either alone is fully usable —
  * so they get two shortcuts rather than one launcher with a menu.
  *
- * Their icons come from `tools/icon/`: each app holds half of the Helm of Awe on
- * a disc of its own color, Heimdall the barred arms in silver and Mímir the
- * tridents in sea teal. Same family, different mark — two identical icons on the
- * Desktop is worse than no icon at all, and color alone is too little to tell
+ * Their icons come from `tools/icon/`, one badge per app. Two identical icons on
+ * the Desktop is worse than no icon at all, and color alone is too little to tell
  * two icons apart at taskbar size.
  */
 const APPS = [
   {
-    name: "Heimdall",
-    exe: path.join(repoRoot, "target", "debug", "heimdall.exe"),
+    name: "Vidar",
+    exe: path.join(repoRoot, "target", "debug", "vidar.exe"),
+    build: "npm run app:vidar",
     description: "Press a hotkey, get an answer about whatever is on screen.",
   },
   {
-    name: "Mímir",
+    name: "Mimir",
     exe: path.join(repoRoot, "target", "debug", "mimir.exe"),
+    build: "npm run app:mimir",
     description: "A local chat app. Every token stays on this machine.",
   },
 ];
+
+/**
+ * Shortcut names from before a rename. Left in place they open an exe that is
+ * gone or out of date, so they are removed. Heimdall and Mímir became Vidar and
+ * Mimir at Stage I's I0; Warden and Citadel were their names before that.
+ *
+ * Only when they point at one of this repo's exes, though: a shortcut that
+ * merely shares one of these names is somebody else's, and stays.
+ */
+const RETIRED = ["Heimdall", "Mímir", "Warden", "Citadel"];
+const RETIRED_EXES = new Set(["heimdall.exe", "mimir.exe", "warden.exe", "citadel.exe"]);
 
 const ps = (script) =>
   execFileSync(
@@ -90,7 +105,7 @@ const locations = [
 let missingExe = false;
 for (const app of APPS) {
   if (!fs.existsSync(app.exe)) {
-    console.log(`!  ${app.name}: ${app.exe} does not exist — build it first (npm run app:vidar)`);
+    console.log(`!  ${app.name}: ${app.exe} does not exist — build it first (${app.build})`);
     missingExe = true;
   }
   for (const [label, dir] of locations) {
@@ -109,6 +124,26 @@ for (const app of APPS) {
     console.log(`${changed ? "updated" : "  same "}  ${label.padEnd(11)} ${app.name}.lnk`);
     if (before && changed) console.log(`           was: ${before.target}`);
     console.log(`           now: ${after.target}`);
+  }
+}
+
+for (const name of RETIRED) {
+  for (const [label, dir] of locations) {
+    const lnk = path.join(dir, `${name}.lnk`);
+    const was = readShortcut(lnk);
+    if (!was) continue;
+    const ours = RETIRED_EXES.has(path.basename(was.target).toLowerCase());
+    if (check) {
+      const what = ours ? "retired — the next write removes it" : `not ours, left alone: ${was.target || "no target"}`;
+      console.log(`${label.padEnd(11)} ${name}.lnk  (${what})`);
+      continue;
+    }
+    if (!ours) {
+      console.log(`left     ${label.padEnd(11)} ${name}.lnk — it points at ${was.target || "nothing"}, not one of ours`);
+      continue;
+    }
+    fs.rmSync(lnk);
+    console.log(`removed  ${label.padEnd(11)} ${name}.lnk`);
   }
 }
 

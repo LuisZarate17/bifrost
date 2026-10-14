@@ -52,7 +52,7 @@ menu bar, activity bar, line numbers, minimap and status bar all in frame — sh
 > **Replaced 2026-09-08.** The first version of this case was *rendered* — text drawn
 > programmatically into a mock editor — because scripted window management kept capturing the
 > wrong window. That was the wrong call. The eval set exists to measure whether a model can read
-> a **real** screen; a hand-drawn approximation tests something Heimdall will never send, and when
+> a **real** screen; a hand-drawn approximation tests something Vidar will never send, and when
 > it fails you can't tell whether the model misread the code or the renderer drew it wrong.
 
 **What's on screen:** `main.rs` — the source that produces case-01. A `CaptureFrame` struct, a
@@ -79,7 +79,7 @@ read the code.
 
 The two images are the same bug from both directions. A model that passes case-01 but fails
 case-02 is reading text well but not reasoning about code — worth knowing before committing to
-it, since Heimdall's whole job is looking at a screen and working out what's wrong.
+it, since Vidar's whole job is looking at a screen and working out what's wrong.
 
 ---
 

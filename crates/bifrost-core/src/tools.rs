@@ -2076,7 +2076,7 @@ mod tests {
         assert!(broad_root(Path::new(r"C:\Users"), profile));
         assert!(broad_root(Path::new(r"C:\Users\bifrost-test-user"), profile));
         assert!(broad_root(Path::new(r"\\?\c:\users\BIFROST-TEST-USER"), profile), "case and prefix do not matter");
-        assert!(!broad_root(Path::new(r"C:\Users\bifrost-test-user\source\repos\odin"), profile));
+        assert!(!broad_root(Path::new(r"C:\Users\bifrost-test-user\source\repos\bifrost"), profile));
         assert!(!broad_root(Path::new(r"C:\work\proj"), profile));
         assert!(!broad_root(Path::new(r"C:\work\proj"), None));
     }

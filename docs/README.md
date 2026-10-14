@@ -6,7 +6,7 @@ know what you want but not where it lives, it is on this page.
 ## Start here
 
 - **What does this key do?** → [shortcuts.md](shortcuts.md)
-  Heimdall has no menu and no window chrome, so that file *is* the interface.
+  Vidar has no menu and no window chrome, so that file *is* the interface.
 - **Where does the project stand?** → [BUILD.md](BUILD.md)
 - **Why was this decided?** → [PLAN.md](PLAN.md)
 - **How do I build and run it?** → [../README.md](../README.md)
@@ -27,14 +27,14 @@ Read it before re-deriving something, or when wondering whether a feature belong
 
 **[BUILD.md](BUILD.md)** — the build plan, stages A–F, chunk by chunk, and what is left.
 
-**[shortcuts.md](shortcuts.md)** — every control Heimdall has, and why each one is that key and
+**[shortcuts.md](shortcuts.md)** — every control Vidar has, and why each one is that key and
 not another. The most-opened file here.
 
 **[D-testing.md](D-testing.md)** — the deferred testing round, as a worksheet to fill in at the
 machine. For when you have an afternoon.
 
 **[G-testing.md](G-testing.md)** — Stage G's checks as a worksheet: exact text to type into
-Mímir and Heimdall, and what should happen. `node tools/practice.mjs` builds the folder it uses.
+Mimir and Vidar, and what should happen. `node tools/practice.mjs` builds the folder it uses.
 
 **[H-testing.md](H-testing.md)** — Stage H's checks, the same way: the check command's chip and
 card, Stop, finding code, switching to the coding model. Grows a section per chunk that adds
@@ -44,6 +44,9 @@ something you can press.
 one-line result. Updated at the end of each chunk.
 
 **[I-status.md](I-status.md)** — the same chart for Stage I.
+
+**[I-testing.md](I-testing.md)** — Stage I's checks by hand, the same way as H's. Starts with the
+rename: Vidar's hotkey and tray, Mimir's conversations and Undo, the taskbar pins.
 
 **[PENDING-CHECKS.md](PENDING-CHECKS.md)** — things no tool call can verify, because they need a
 keypress, a hover, or a second machine. Where "built but never actually pressed" is tracked.
@@ -55,9 +58,9 @@ records of what happened.
 
 - **[STAGE-A.md](../stages/STAGE-A.md)** — foundations, no GUI. Complete.
 - **[STAGE-B.md](../stages/STAGE-B.md)** — the app shell. Complete.
-- **[STAGE-G.md](../stages/STAGE-G.md)** — **Mímir**, the local chat app sharing Heimdall's
+- **[STAGE-G.md](../stages/STAGE-G.md)** — **Mimir**, the local chat app sharing Vidar's
   model. Built through G7 (editing files); the testing round is open.
-- **[STAGE-H.md](../stages/STAGE-H.md)** — Mímir learns to find code, check its work and run
+- **[STAGE-H.md](../stages/STAGE-H.md)** — Mimir learns to find code, check its work and run
   longer: twelve chunks (H1–H10, plus H4a and H4b) in four phases, each gated on a measurement. H1 (the check command), H2
   (finding code) and H3 (the benchmark of real work) built; H4 measured three coding models;
   Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5 and H6 built. H7 built. H8 built. H9 built. H10 built — Stage H complete.
@@ -74,15 +77,17 @@ Four Rust crates, one shared React package and one app frontend. Line numbers dr
 names don't, so grep the name if a number has gone stale.
 
 > **Paths changed at Before-G0 step 1** (Stage G). Everything moved under `apps/`, `packages/` and
-> `crates/`, and `heimdall-core` became `odin-core`. The headings below are the current locations.
+> `crates/`, and `heimdall-core` became `odin-core`. **And again at I0** (Stage I, 2026-10-12):
+> `odin-core` became `bifrost-core`, `odin-cli` became `bifrost-cli`, and `apps/heimdall` became
+> `apps/vidar`. The headings below are the current locations; the results docs keep the old ones.
 
-### `crates/odin-core/` — shared by everything
+### `crates/bifrost-core/` — shared by everything
 
 - **What Ollama believes is loaded** — `ollama.rs` → `ps()`, `find()`
 - **Load or release a model** — `ollama.rs` → `load()`, `unload()`, via `keep_alive: -1` and `0`
 - **Start Ollama if it is down** — `ollama.rs` → `is_running()`, `ensure_running()`
 - **What the card is *actually* holding** — `vram.rs` → `Card::open()`, `sample()`
-- **The default prompt** — `ollama.rs` → `DEFAULT_PROMPT`
+- **The default prompt** — `config.rs` → `DEFAULT_PROMPT`, the only copy in source
 - **Editing a file safely** — `edit.rs` → `Workspace` (containment), `plan_replace()`,
   `plan_create()`, `apply()`, `undo()`. Plan first, write the plan, refuse over a changed file
 - **The tools the model is offered, and their wording** — `tools.rs` → `available()`,
@@ -99,7 +104,7 @@ names don't, so grep the name if a number has gone stale.
 > Everything here is **blocking by design**. Calling it from an `async` Tauri command drops a tokio
 > runtime inside an async context and kills the worker. Go through `spawn_blocking`.
 
-### `apps/heimdall/src-tauri/src/lib.rs` — Heimdall's Rust side
+### `apps/vidar/src-tauri/src/lib.rs` — Vidar's Rust side
 
 About 2,000 lines, and most of the app is in it.
 
@@ -123,22 +128,22 @@ About 2,000 lines, and most of the app is in it.
 - **Where the logs go** — `redirect_log_to_file()` (~1732)
   The app is windowless, so this is the only way to see anything it printed.
 
-### `apps/heimdall/src-tauri/src/tray.rs` — the tray
+### `apps/vidar/src-tauri/src/tray.rs` — the tray
 
 - **The menu, and Off / Warming / Ready** — `install()` (~324), `Power`
 - **Warming exists only here** — `/api/ps` has no "loading" entry, so only a long-lived process
   that knows it issued a load can show it
 
-### `apps/heimdall/src/` — Heimdall's own React frontend
+### `apps/vidar/src/` — Vidar's own React frontend
 
 - **The popup's markup, header hints, pick-and-copy state** — `App.tsx`
-- **The popup's chrome** — `App.css`. The renderer's styles are *not* here; see `@odin/ui` below.
-  Three rules that select `.answer` descendants do stay, because they are Heimdall behaviours rather
+- **The popup's chrome** — `App.css`. The renderer's styles are *not* here; see `@bifrost/ui` below.
+  Three rules that select `.answer` descendants do stay, because they are Vidar behaviours rather
   than renderer ones: `.answer > .copy-pick` and the two `.content.collapsed .answer…` rules.
 
-### `packages/ui/` — `@odin/ui`, the renderer both apps share
+### `packages/ui/` — `@bifrost/ui`, the renderer both apps share
 
-Extracted at Before-G0 step 1e, while Heimdall was still its only consumer. Mímir imports the same
+Extracted at Before-G0 step 1e, while Vidar was still its only consumer. Mimir imports the same
 package from G1, so **one renderer means one security review rather than two that drift**.
 
 - **Markdown rendering, and the security refusals** — `src/Answer.tsx`
@@ -147,15 +152,16 @@ package from G1, so **one renderer means one security review rather than two tha
 - **The renderer's styles** — `src/answer.css`
 - **Proof the refusals hold** — `src/Answer.inert-check.tsx`, run by `npm run check:inert`
 
-> **The component does not import its own CSS; the consumer does** — `import "@odin/ui/answer.css"`.
+> **The component does not import its own CSS; the consumer does** — `import "@bifrost/ui/answer.css"`.
 > `check:inert` SSR-builds `Answer` and runs the output under plain `node`, where a CSS import
 > would fail outright.
 
-### `crates/odin-cli/` — the CLI, binary `odin`
+### `crates/bifrost-cli/` — the CLI, binary `bifrost`
 
 - **Capture, encode, stream, print** — `src/main.rs`
 - **`warm` / `off` / `status`** — `src/power.rs`
-- **The prompt, editable without a rebuild** — `prompt.txt`
+- **The prompt, editable without a rebuild** — `prompt` in `%APPDATA%\bifrost\config.json`,
+  the file every app shares
 
 ### `crates/bench/` and `evals/` — measuring models
 
@@ -167,13 +173,13 @@ package from G1, so **one renderer means one security review rather than two tha
 - **Does the check help it fix what it breaks?** — `crates/bench/src/bin/fixprobe.rs` (H1): eight
   tasks whose obvious edit breaks the build, with `run_check` and without
 - **Can it find code nobody pointed it at?** — `crates/bench/src/bin/findprobe.rs` (H2): eighteen
-  questions about odin itself, in a git worktree at a pinned commit
+  questions about this repo itself, in a git worktree at a pinned commit
 - **Can it do real work?** — `crates/bench/src/bin/taskprobe.rs` (H3): sixteen tasks — four real
   commits and twelve function bodies removed — scored by the project's own hidden tests.
   `--selfcheck` proves every task solvable and not already solved, without a model
 - **The loop they all share** — `crates/bench/src/probe.rs`: the app's tool loop with every call
   approved, so a probe measures what ships
-- **Mímir's file editing, end to end** — `tools/e2e/mimir-edit.mjs`. Drives the running app
+- **Mimir's file editing, end to end** — `tools/e2e/mimir-edit.mjs`. Drives the running app
   over its WebView2 debug port with the real model; 16 checks, leaves nothing behind
 - **The check and finding code, end to end** — `tools/e2e/mimir-check.mjs`: approval, denial,
   Stop, a late result after switching threads, the fix loop, a search and a declined listing;

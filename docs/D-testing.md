@@ -5,7 +5,7 @@ from a tool call.
 
 **Before you start**
 
-- `npm run app` if anything changed since the last build, then launch Heimdall from the shortcut
+- `npm run app:vidar` if anything changed since the last build, then launch Vidar from the shortcut
 - Have something on screen worth asking about, so an answer is actually on display while you test
 - Keep this file open and tick as you go — an afternoon, and it can be split across several
 
@@ -19,7 +19,7 @@ For each app: share your screen, press `Ctrl+Alt+W`, and look at what the far si
 **Two answers per app**, not one:
 
 - **SEE** — does the popup appear in the shared image? Must be **no**.
-- **LIST** — does the app name "Heimdall" in its share picker? Not a leak, but worth knowing. Zoom
+- **LIST** — does the app name "Vidar" in its share picker? Not a leak, but worth knowing. Zoom
   does, with a black thumbnail.
 
 | App | Capture path | SEE | LIST | Notes |
@@ -36,10 +36,10 @@ For each app: share your screen, press `Ctrl+Alt+W`, and look at what the far si
 | Steam broadcast | injected overlay | ☐ | ☐ | the odd one out — injects into the game process |
 
 **Then the one that is easy to forget:** with an answer on screen, press `Ctrl+Alt+W` again for a
-fresh capture. **Heimdall's own previous answer must not be in the new screenshot.** If it is, the
+fresh capture. **Vidar's own previous answer must not be in the new screenshot.** If it is, the
 exclusion works for other applications but not for us, which would be the worst of both.
 
-**If a row fails, it is not a bug to fix — it is a line for the README.** "Heimdall is visible in X"
+**If a row fails, it is not a bug to fix — it is a line for the README.** "Vidar is visible in X"
 is useful; pretending the feature is absolute is not. You will rely on this in a meeting one day.
 
 ---

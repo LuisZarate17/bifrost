@@ -1,4 +1,4 @@
-# ODIN — Handoff Packet
+# Bifrost — Handoff Packet
 
 > Press one key. **Warden** looks at your screen and answers immediately, in a corner popup that
 > nobody you're screen sharing with can see. Entirely on your own machine.
@@ -8,21 +8,23 @@ captures the screen and streams an answer into the popup. Model chosen at A2:
 `qwen3-vl:8b-instruct-q4_K_M`. What is left of the original plan is one deferred testing round
 (BUILD.md D1/D2), not a feature.
 
-**Stage H is complete and pushed** — Mímir finds code, checks its work and runs longer.
+**Stage H is complete and pushed** — Mimir finds code, checks its work and runs longer.
 The independent review's two rounds of fixes are done, and re-checked 2026-10-11; see [`H-status.md`](H-status.md)
 and [`../stages/STAGE-H.md`](../stages/STAGE-H.md).
 
-**Now: Stage I, set 2026-10-12** — the rename to **Bifrost** (Heimdall becomes **Vidar**, Mímir
-becomes **Mimir**), the turn loop moved into the shared crate, and **Hugin**, a terminal agent on
-it. See [`../stages/STAGE-I.md`](../stages/STAGE-I.md) and [`I-status.md`](I-status.md). The
-checks by hand for Stage G still wait in [`PENDING-CHECKS.md`](PENDING-CHECKS.md).
+**Now: Stage I, set 2026-10-12.** I0, the rename, is done: ODIN is now **Bifrost**, Heimdall
+**Vidar**, and Mímir **Mimir** (§0b). Next come the colors and badges (I0b), the turn loop moved
+into the shared crate, and **Hugin**, a terminal agent on it. See
+[`../stages/STAGE-I.md`](../stages/STAGE-I.md) and [`I-status.md`](I-status.md). The checks by
+hand for Stage G still wait in [`PENDING-CHECKS.md`](PENDING-CHECKS.md).
 
 **Repo root:** `C:\Users\you\source\repos\odin` *(renamed from `warden` on 2026-09-25, the same
 day the GitHub repo became `LuisZarate17/odin`)*
 
-> **Names, since this document predates them.** **ODIN** is the project; **Warden** is the overlay
-> this packet was originally written about; **Citadel** is the chat app. Settled in §0b. Where the
-> text below says "Warden" it means the overlay unless it says otherwise.
+> **Names, since this document predates them.** **Bifrost** is the project (it was **ODIN** until
+> 2026-10-12); **Warden** is the overlay this packet was originally written about, now **Vidar**;
+> **Citadel** is the chat app, now **Mimir**. Settled in §0b. Where the text below says "Warden" it
+> means the overlay unless it says otherwise.
 
 ---
 
@@ -39,21 +41,36 @@ Fixed:
 - **A platform eventually, one tool right now.**
 - **Summoned, never ambient.**
 - **Local for privacy, cost, and ownership — all three. No cloud fallback, ever.**
+  *Amended once, on purpose, 2026-10-12:* Bifrost never calls the cloud on its own. The single
+  exception is Stage I's **Check with Claude** button in Mimir (I6) — off by default, only on a
+  click, and it says what it sends before it sends it. Claude Code calling `hugin -p` is Claude's
+  side reaching in; Hugin itself stays local. See [`../stages/STAGE-I.md`](../stages/STAGE-I.md).
 
 ---
 
-## 0b. Names — settled 2026-09-18, apps renamed 2026-09-26
+## 0b. Names — settled 2026-09-18, renamed 2026-09-26 and 2026-10-12
 
-**ODIN — On-Device INference.** The project, and the command you type.
+**Bifrost** — the bridge between the realms. The project, and the command you type.
 
 | Piece | Name | Why |
 |---|---|---|
-| The project | **ODIN** | On-Device INference. What it is, in four letters |
-| The overlay | **Heimdall** (was Warden) | The watchman of the gods, who sees and hears everything — and this app looks at your screen when you call it |
-| The chat app | **Mímir** (was Citadel) | The wise counselor Odin goes to with questions, keeper of the well of wisdom. Files and the exe are `mimir` |
-| The CLI | `odin` | |
+| The project | **Bifrost** (was ODIN) | The bridge connecting the realms: the shared system that joins Vidar, Mimir and Hugin into one |
+| The overlay | **Vidar** (was Heimdall, first Warden) | A god of strength, resilience and silence: the quiet, always-available assistant that observes the screen and helps when called upon |
+| The chat app | **Mimir** (was Mímir, first Citadel) | Wisdom and knowledge: the main workspace, where the deeper thinking, conversation, coding and co-work happen |
+| The terminal agent | **Hugin** (planned, Stage I) | One of Odin's ravens, associated with thought, who travels the world bringing information back: an agent that works through the terminal |
+| The CLI | `bifrost` | |
 | The harness | `bench` | |
-| The shared crate | `odin-core` | |
+| The shared crate | `bifrost-core` | |
+
+**Renamed 2026-10-12, Stage I's I0: ODIN → Bifrost, Heimdall → Vidar, Mímir → Mimir.** The names
+are Luis's own set, chosen for how they feel rather than to avoid a clash, and Mimir drops the
+accent. The rename is full again: folders (`apps/vidar`, `crates/bifrost-core`,
+`crates/bifrost-cli`), packages (`@bifrost/ui`), exe names (`vidar.exe`, `bifrost.exe`), app
+identifiers (`com.bifrost.vidar`, `com.bifrost.mimir`), window titles, the tray, shortcuts, event
+names (`vidar://…`), the `VIDAR_*` switches and `BIFROST_NVML_PATH`. The data folder moved from
+`%APPDATA%\odin` to `%APPDATA%\bifrost`, once and whole, by whichever binary started first. History
+keeps the names it was written with: `stages/`, `docs/results/`, the H review, `evals/out/` and
+BUILD.md. So do the pinned benchmarks, which run on commits from before the rename.
 
 **Renamed 2026-09-26: Warden → Heimdall, Citadel → Mímir.** The icons became the Helm of Awe,
 split between the two apps as two badges that complete one mark, and the fortress names no longer

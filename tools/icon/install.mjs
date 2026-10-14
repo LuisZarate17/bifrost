@@ -4,7 +4,7 @@ import { png } from "./png.mjs";
 import { BADGES, renderBadge } from "./badge.mjs";
 import { ico, icns } from "./ico.mjs";
 
-//   node tools/icon/install.mjs <out-dir> <heimdall|mimir>
+//   node tools/icon/install.mjs <out-dir> <vidar|mimir>
 //
 // Writes one app's whole icon set: the PNGs tauri.conf.json names, the Store
 // logos Tauri scaffolded beside them, a multi-size .ico and an .icns.
