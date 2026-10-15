@@ -27,6 +27,7 @@
 //!
 //! Nothing here prints or panics. Callers format, and a tray has no stdout.
 
+pub mod agent;
 pub mod chat;
 pub mod check;
 pub mod colors;
