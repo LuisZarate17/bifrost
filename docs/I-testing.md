@@ -58,7 +58,9 @@ are still open.*
 
 **Shortcuts and the taskbar**
 
-- [ ] **Desktop and Start Menu.** **Expect:** **Vidar** and **Mimir**, each opening its own app,
+*Proven on 2026-10-14 by screenshots and readouts instead of by hand ([Gate 0 proof](https://claude.ai/artifact/SHLwWaH9PUycuynoG1fnR3)): the shortcuts and the data folder. Taskbar: the old pins are gone, and Vidar and Mimir are not pinned yet. Pinning cannot be done by a script.*
+
+- [x] **Desktop and Start Menu.** **Expect:** **Vidar** and **Mimir**, each opening its own app,
       and no **Heimdall** or **Mímir** left. The icons are still the old badges until I0b.
 - [ ] **The taskbar.** Windows does not let a script change pins. Right-click the old **Heimdall**
       and **Mímir** pins and choose *Unpin from taskbar*. Then, in the Start Menu, right-click
@@ -67,7 +69,7 @@ are still open.*
 
 **Where the data went**
 
-- [ ] **A look.** `%APPDATA%\bifrost` holds `config.json`, `conversations`, `attachments` and
+- [x] **A look.** `%APPDATA%\bifrost` holds `config.json`, `conversations`, `attachments` and
       `backups`. `%APPDATA%\odin` holds only `MOVED.txt`, which says where everything went.
       `%APPDATA%\odin-before-bifrost` is the copy taken before the move. Delete it once a few days
       of use have gone by without surprises.
@@ -76,25 +78,25 @@ are still open.*
 
 ## I0b — Colors and badges
 
-Both apps were rebuilt with the new icons on 2026-10-14. What was measured is in
+Both apps were rebuilt with the new icons on 2026-10-14. All five checks below were proven on 2026-10-14 by screenshots and readouts of the real apps, with a real error made in Vidar for the label ([Gate 0 proof](https://claude.ai/artifact/SHLwWaH9PUycuynoG1fnR3)). What was measured is in
 [I0b-results.md](results/I0b-results.md).
 
-- [ ] **The icons.** On the taskbar, the Desktop and the Start Menu:
+- [x] **The icons.** On the taskbar, the Desktop and the Start Menu:
       - **Vidar** is a red shield with dark quarters at the top left and bottom right;
       - **Mimir** is a blue shield with a dark ring;
       - both have a black edge.
 
       If the old icons still show, Windows is answering from its icon cache. Run
       `ie4uinit.exe -show`, or sign out and back in.
-- [ ] **Vidar's tray.** **Expect:** the small red shield.
-- [ ] **Vidar's popup.** Press `Ctrl+Alt+W`. **Expect:**
+- [x] **Vidar's tray.** **Expect:** the small red shield.
+- [x] **Vidar's popup.** Press `Ctrl+Alt+W`. **Expect:**
       - the word **Vidar** in the header is red (Wolf's Bane);
       - picking a block with `Ctrl+Alt`+wheel marks it with a red tint and a red line at its left;
       - if an error ever shows, it starts with the word **ERROR**, so the red is never the only
         signal.
-- [ ] **Mimir's badge.** **Expect:** in the sidebar and above "Good afternoon", a shield with a ring
+- [x] **Mimir's badge.** **Expect:** in the sidebar and above "Good afternoon", a shield with a ring
       in your accent. In the light theme it has a black outline; in the dark theme it has none.
-- [ ] **Mimir's accent.** Open Appearance. **Expect:**
+- [x] **Mimir's accent.** Open Appearance. **Expect:**
       - **Deep Well**, a lighter blue, is first;
       - Deep Well is selected if you never picked an accent since the rename;
       - **Sea** is still there.
