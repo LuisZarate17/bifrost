@@ -22,7 +22,7 @@ impl Calibration {
     }
 }
 
-/// What [`compact_for_send`] did, for the reply to carry.
+/// What [`compact_for_send`] (or [`send_whole`]) did, for the reply to carry.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sent {
     /// Characters actually sent, after anything was set aside.
@@ -93,6 +93,29 @@ pub fn compact_for_send(
     }
 }
 
+/// Send `messages` whole, setting nothing aside: the loop as it was before H7, which
+/// a probe turns [`compact_for_send`] off for to measure what it buys.
+///
+/// `fits` is whether the budget would have let it go **as it is** — the same plan
+/// [`compact_for_send`] makes, with nothing to set aside and the estimate within the
+/// hard limit. A conversation that would have needed trimming does not fit, since this
+/// one is not.
+pub fn send_whole(
+    messages: &[Message],
+    offered: &[chat::Tool],
+    num_ctx: u32,
+    calibration: Option<Calibration>,
+) -> Sent {
+    let budget = compact::Budget::new(num_ctx, calibration.map(|c| (c.chars, c.tokens)));
+    let plan = compact::compact(messages, offered, &budget);
+    Sent {
+        prompt_chars: compact::prompt_chars(messages, offered),
+        set_aside: Vec::new(),
+        replacements: Vec::new(),
+        fits: plan.fits && plan.set_aside.is_empty(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +161,23 @@ mod tests {
         assert!(sent.replacements[0].content.starts_with(compact::STUB_MARKER));
         assert_eq!(sent.prompt_chars, compact::prompt_chars(&messages, &[]));
         assert_eq!(messages[9].content.len(), 6000);
+    }
+
+    #[test]
+    fn sending_whole_sets_nothing_aside_and_says_whether_it_would_have_fit_as_it_is() {
+        let messages = long_turn();
+        let before = messages.clone();
+        // The conversation `compact_for_send` trims to fit 8192 goes whole, and so
+        // does not fit as it is.
+        let sent = send_whole(&messages, &[], 8192, None);
+        assert!(sent.set_aside().is_empty() && sent.replacements().is_empty());
+        assert!(!sent.fits());
+        assert_eq!(sent.prompt_chars(), compact::prompt_chars(&messages, &[]));
+        assert_eq!(messages, before, "the caller's conversation is not touched");
+        // The same conversation in a context with room for it.
+        let roomy = send_whole(&messages, &[], 32768, None);
+        assert!(roomy.set_aside().is_empty() && roomy.fits());
+        // What is counted as sent is the whole conversation, whatever the context.
+        assert_eq!(roomy.prompt_chars(), sent.prompt_chars());
     }
 }

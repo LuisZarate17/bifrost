@@ -16,7 +16,9 @@
 //!   show a card, ask for a decision, answer whether Stop was pressed
 //!
 //! **The bounds.** A turn is at most [`tools::MAX_ROUNDS`] rounds and at most
-//! `MAX_ROUNDS + MAX_FREE_CALLS` requests. **A call that cannot change anything is
+//! `MAX_ROUNDS + MAX_FREE_CALLS` requests. ([`run_turn`] passes `MAX_ROUNDS`;
+//! [`run_turn_with`] takes the round bound, so that a probe can run past it to
+//! record how many rounds a task really takes.) **A call that cannot change anything is
 //! not a round** (H10, R-03): an accepted task-list update, and an automatic read,
 //! listing or search that succeeded, give their round back. A failed automatic call,
 //! a rejected one and any call that asked still count, and `requests` counts
@@ -31,8 +33,9 @@
 //! again; nothing after the Stop is sent to the model.
 //!
 //! **Mimir runs it (I1).** Its `run_turn` command drives [`run_turn`] with the
-//! window as the [`Frontend`], and the webview only shows what it is told; 2c moves
-//! the probes onto it.
+//! window as the [`Frontend`], and the webview only shows what it is told. The probes
+//! (2c) drive [`run_turn_with`] with a frontend that approves everything and writes
+//! down what it is told.
 
 use serde::Serialize;
 
@@ -269,6 +272,7 @@ pub fn run_turn(
     run_turn_with(
         convo,
         calibration,
+        tools::MAX_ROUNDS,
         &mut |messages, calibration, closing| {
             let cfg = config::load();
             round(messages, model.unwrap_or(cfg.model.as_str()), &cfg, calibration, closing)
@@ -302,12 +306,17 @@ pub type Run<'a> = dyn FnMut(&str, &str, &str) -> Result<Ran, String> + 'a;
 /// The loop, with the model and the runner passed in: `ask` is one request to the
 /// model, `run` redeems an approved call's ticket and runs it.
 ///
+/// `bound` is the most rounds the turn may take: [`tools::MAX_ROUNDS`] in the app. A
+/// probe can pass more, to record how many rounds a task really takes; free calls
+/// still come on top of it, and the hard stop is `bound + MAX_FREE_CALLS` requests.
+///
 /// **Mirrors `askWithTools` step for step**, so that a review can walk the old
 /// TypeScript against this. Where a step sends something to the webview there, it
 /// calls `fe` here.
 pub fn run_turn_with(
     convo: &mut Vec<Message>,
     calibration: Option<Calibration>,
+    bound: usize,
     ask: &mut Ask<'_>,
     run: &mut Run<'_>,
     fe: &mut dyn Frontend,
@@ -317,7 +326,7 @@ pub fn run_turn_with(
     // and the only symptom is the app getting warm.
     let mut step = 0;
     let mut requests = 0;
-    while step < tools::MAX_ROUNDS && requests < tools::MAX_ROUNDS + tools::MAX_FREE_CALLS {
+    while step < bound && requests < bound + tools::MAX_FREE_CALLS {
         match turn.go()? {
             Flow::End => return Ok(()),
             // `requests` counts everything. `step` does not count a free call: the
@@ -330,7 +339,7 @@ pub fn run_turn_with(
             }
         }
     }
-    turn.close(step, requests)
+    turn.close(bound, step, requests)
 }
 
 /// The loop's state: the conversation, what the next round is calibrated from, and
@@ -438,8 +447,7 @@ impl Turn<'_> {
                 }
                 self.pair(raw_call, &name, result);
                 // Free when it worked (a search with no matches worked). `ok` is
-                // Rust's own word for it, the same test the probe's `free_round`
-                // makes.
+                // Rust's own word for it, and the probes' free rounds are this one.
                 self.last_ran = ok;
                 Ok(Flow::Again { free: ok })
             }
@@ -540,9 +548,9 @@ impl Turn<'_> {
 
     /// The loop ended at a bound. Say which, and not more than is true — after one
     /// more request with no tools, so the turn ends in the model's own words.
-    fn close(&mut self, step: usize, requests: usize) -> Result<(), String> {
-        let mut banner = if step >= tools::MAX_ROUNDS {
-            format!("Stopped after {} tool rounds.", tools::MAX_ROUNDS)
+    fn close(&mut self, bound: usize, step: usize, requests: usize) -> Result<(), String> {
+        let mut banner = if step >= bound {
+            format!("Stopped after {bound} tool rounds.")
         } else {
             format!("Stopped after {requests} tool calls.")
         };
@@ -764,8 +772,20 @@ mod tests {
 
     /// Run the loop on a script: the model's replies in order, and what each approved
     /// call comes to. Panics if the loop asks for more than the script holds, so a
-    /// request that should not have been made is a failure in itself.
+    /// request that should not have been made is a failure in itself. The app's bound.
     fn play(
+        convo: &mut Vec<Message>,
+        calibration: Option<Calibration>,
+        asks: Vec<Result<Round, String>>,
+        runs: Vec<Result<Ran, String>>,
+        fe: &mut Fake,
+    ) -> (Result<(), String>, Vec<Asked>) {
+        play_bounded(tools::MAX_ROUNDS, convo, calibration, asks, runs, fe)
+    }
+
+    /// [`play`], with a bound of the caller's own.
+    fn play_bounded(
+        bound: usize,
         convo: &mut Vec<Message>,
         calibration: Option<Calibration>,
         asks: Vec<Result<Round, String>>,
@@ -779,6 +799,7 @@ mod tests {
         let result = run_turn_with(
             convo,
             calibration,
+            bound,
             &mut |messages: &[Message], calibration: Option<Calibration>, closing: bool| {
                 log.borrow_mut().push(format!("ask:{}", if closing { "closing" } else { "open" }));
                 asked.push((closing, messages.len(), calibration));
@@ -994,6 +1015,35 @@ mod tests {
         assert_eq!(fe.errors, ["Stopped after 10 tool rounds."]);
     }
 
+    #[test]
+    fn a_bound_of_three_stops_the_turn_after_three_rounds_and_names_it() {
+        let mut fe = Fake::new();
+        let mut convo = vec![Message::user("fix it")];
+        let mut asks: Vec<_> = (0..3).map(rejected).collect();
+        asks.push(answer("I could not make the edit."));
+        let (result, asked) = play_bounded(3, &mut convo, None, asks, vec![], &mut fe);
+        assert_eq!(result, Ok(()));
+        assert_eq!(asked.len(), 4, "three rounds and the closing request");
+        assert!(asked[..3].iter().all(|(closing, ..)| !closing));
+        assert_eq!(asked[3], (true, 7, None));
+        assert_eq!(fe.answers, [("I could not make the edit.".to_string(), 0, 7)]);
+        assert_eq!(fe.errors, ["Stopped after 3 tool rounds."]);
+    }
+
+    #[test]
+    fn a_bound_of_three_still_lets_free_calls_come_on_top_of_it() {
+        let mut fe = Fake::new();
+        let mut convo = vec![Message::user("look around")];
+        // None of these uses a round up, so what ends the turn is the hard stop:
+        // the bound and the free calls together, 3 + 20.
+        let mut asks: Vec<_> = (0..23).map(|n| auto_search(n, true)).collect();
+        asks.push(answer("I looked at twenty-three things."));
+        let (result, asked) = play_bounded(3, &mut convo, None, asks, vec![], &mut fe);
+        assert_eq!(result, Ok(()));
+        assert_eq!(asked.len(), 24, "twenty-three calls and the closing request");
+        assert_eq!(fe.errors, ["Stopped after 23 tool calls. The last step ran — check the result."]);
+    }
+
     /// Ten approved calls, the last of which is `last`; whether it worked is `ok`.
     /// Returns the banner.
     fn banner_after_ten(last: &str, ok: bool) -> String {
@@ -1002,7 +1052,7 @@ mod tests {
         let mut asks: Vec<_> = (0..10).map(|n| asks_about(if n == 9 { last } else { "edit_file" }, "f.rs")).collect();
         asks.push(answer(""));
         let mut runs: Vec<_> = (0..9).map(|_| ran("Edited f.rs: 1 line removed, 1 added.")).collect();
-        runs.push(Ok(Ran { result: "the last one".into(), ok, stopped: false, undo: None }));
+        runs.push(Ok(Ran { result: "the last one".into(), ok, stopped: false, undo: None, check: None }));
         let (result, _) = play(&mut convo, None, asks, runs, &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(fe.errors.len(), 1);
@@ -1043,7 +1093,7 @@ mod tests {
         let mut convo = vec![Message::user("fix it")];
         let asks = vec![asks_about("edit_file", "a.rs"), asks_about("delete_file", "b.txt"), answer("Done.")];
         let said = "Edited a.rs: 1 line removed, 1 added.";
-        let runs = vec![Ok(Ran { result: said.into(), ok: true, stopped: false, undo: Some("ab12".into()) })];
+        let runs = vec![Ok(Ran { result: said.into(), ok: true, stopped: false, undo: Some("ab12".into()), check: None })];
         let (result, asked) = play(&mut convo, None, asks, runs, &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(asked.len(), 3);
@@ -1131,8 +1181,8 @@ mod tests {
         let refused = "error: a.rs changed since the diff was shown";
         let broken = "cargo check failed: 2 errors";
         let runs = vec![
-            Ok(Ran { result: refused.into(), ok: false, stopped: false, undo: None }),
-            Ok(Ran { result: broken.into(), ok: false, stopped: false, undo: None }),
+            Ok(Ran { result: refused.into(), ok: false, stopped: false, undo: None, check: None }),
+            Ok(Ran { result: broken.into(), ok: false, stopped: false, undo: None, check: None }),
         ];
         let (result, _) = play(&mut convo, None, asks, runs, &mut fe);
         assert_eq!(result, Ok(()));
@@ -1263,7 +1313,7 @@ mod tests {
         fe.stop_in_run = true;
         let mut convo = vec![Message::user("check it")];
         let result = "`cargo check` was stopped by the user";
-        let stopped_check = Ran { result: result.into(), ok: false, stopped: true, undo: None };
+        let stopped_check = Ran { result: result.into(), ok: false, stopped: true, undo: None, check: None };
         let asks = vec![asks_about("run_check", "cargo check")];
         let (done, asked) = play(&mut convo, None, asks, vec![Ok(stopped_check)], &mut fe);
         assert_eq!(done, Ok(()));
@@ -1279,7 +1329,7 @@ mod tests {
         let mut fe = Fake::deciding(&[Decision::Allow]);
         fe.stop_in_run = true;
         let mut convo = vec![Message::user("fix it")];
-        let written = Ran { result: "Edited a.rs".into(), ok: true, stopped: false, undo: Some("ab12".into()) };
+        let written = Ran { result: "Edited a.rs".into(), ok: true, stopped: false, undo: Some("ab12".into()), check: None };
         let (result, _) = play(&mut convo, None, vec![asks_about("edit_file", "a.rs")], vec![Ok(written)], &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(fe.cards[0].state, CardState::Ran);

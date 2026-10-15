@@ -19,10 +19,13 @@
 //!
 //! **Moved here unchanged (I1).** Mimir's old `ask_with_tools` command did this for
 //! its webview, one round per call; the loop over rounds is now [`super::turn`]'s,
-//! which Mimir runs through its `run_turn` command, and 2c moves the probes onto it.
+//! which Mimir runs through its `run_turn` command. The probes run it through
+//! [`round_in`], which is [`round`] in a setting of their own ([`Env`]) — Mimir's
+//! `round` is that with the app's, and does exactly what it did.
 
+use super::env::Env;
 use super::run::run_auto;
-use super::send::{compact_for_send, Calibration, Sent};
+use super::send::{compact_for_send, send_whole, Calibration, Sent};
 use super::stop::next_stop;
 use super::ticket::{arm, plan_name, DiffView, Find, Payload, PendingCall};
 use super::workspace;
@@ -116,10 +119,34 @@ pub enum Reply {
 /// `messages` is the caller's conversation, without the system prompt: this puts
 /// it in front when a folder is chosen. `cfg` is read by the caller for this round,
 /// so an edit to the config applies to the next one.
+///
+/// This is [`round_in`] in the app's own setting.
 pub fn round(
     messages: &[Message],
     model: &str,
     cfg: &config::Config,
+    calibration: Option<Calibration>,
+    closing: bool,
+) -> Result<Round, String> {
+    round_in(messages, model, cfg, &Env::default(), calibration, closing)
+}
+
+/// [`round`] in a setting of the caller's own: what `env` varies — the sampling, how
+/// the call travels, the tools offered, the system prompt, whether old results are set
+/// aside — and nothing else. With [`Env::default`] it is [`round`] exactly. A reply is
+/// judged by the same rules whatever `env` says.
+///
+/// `messages` is still the conversation without a system prompt; `env` supplies one
+/// if it has one, and then it goes in front **even with no folder**.
+///
+/// **`write_file` is planned only when `env` offers it.** The app never does, so a call
+/// to it is turned away as the tool that does not exist; a probe that offers it gets
+/// the call planned as a whole-file edit and asked about like any other edit.
+pub fn round_in(
+    messages: &[Message],
+    model: &str,
+    cfg: &config::Config,
+    env: &Env,
     calibration: Option<Calibration>,
     closing: bool,
 ) -> Result<Round, String> {
@@ -154,33 +181,55 @@ pub fn round(
     // there is still exactly one system message and `lead` below is unchanged. Only
     // when the user turned them on for this folder, and read fresh every turn: an
     // edited file applies to the next question.
+    //
+    // **A prompt the caller's `env` gives is used as it is** and goes in even with no
+    // folder; the app's own is made only when there is one.
     let mut messages = messages.to_vec();
-    if let Some(ws) = &ws {
-        let mut prompt = tools::system_prompt(ws, check.is_some());
-        if cfg.instructions_for(&ws.root_display())
-            && let Some(notes) = instructions::find(ws)
-        {
-            prompt = tools::with_notes(prompt, &notes);
+    let system = match (&env.system, &ws) {
+        (Some(prompt), _) => Some(prompt.clone()),
+        (None, Some(ws)) => {
+            let mut prompt = tools::system_prompt(ws, check.is_some());
+            if cfg.instructions_for(&ws.root_display())
+                && let Some(notes) = instructions::find(ws)
+            {
+                prompt = tools::with_notes(prompt, &notes);
+            }
+            Some(prompt)
         }
+        (None, None) => None,
+    };
+    // How many messages are in front of the caller's, for numbering what is set aside.
+    let lead = usize::from(system.is_some());
+    if let Some(prompt) = system {
         messages.insert(0, Message::system(prompt));
     }
 
     // Kept for counting repeats: the history the model has already seen.
     let history = messages.clone();
     let num_ctx = cfg.num_ctx;
+    let options = env.options.unwrap_or_else(|| Options::new(num_ctx));
     // Nothing is offered to a closing request, and compaction counts what is sent.
-    let offered = if closing { Vec::new() } else { tools::available(ws.is_some(), check_label.as_deref()) };
+    let offered = if closing {
+        Vec::new()
+    } else {
+        env.offered.clone().unwrap_or_else(|| tools::available(ws.is_some(), check_label.as_deref()))
+    };
 
     // Inside a turn the conversation only grows, and past `num_ctx` Ollama cuts
     // the middle of it without a word (H7). So old results are set aside here,
     // in the copy being sent, and the caller is told which so that its own copy
     // ends up identical — a prefix that changed would also cost the prompt cache.
-    let sent = compact_for_send(&mut messages, &offered, num_ctx, calibration, usize::from(ws.is_some()));
+    // A caller that turned that off (`env.compact`) sends all of it, as before H7.
+    let sent = if env.compact {
+        compact_for_send(&mut messages, &offered, num_ctx, calibration, lead)
+    } else {
+        send_whole(&messages, &offered, num_ctx, calibration)
+    };
     if closing {
         messages.push(Message::user(tools::CLOSING_NOTE));
         // `chat`, not `chat_tools`: with no tools there is nothing for the recovery
         // to turn text into, and a call the model writes anyway stays words.
-        let reply = chat::chat(model, &messages, &[], Options::new(num_ctx))?;
+        let reply = chat::chat(model, &messages, &[], options)?;
         return Ok(Round {
             reply: Reply::Answer { content: reply.message.content, eval_count: reply.eval_count },
             prompt_eval_count: reply.prompt_eval_count,
@@ -188,12 +237,18 @@ pub fn round(
             sent,
         });
     }
-    let reply = chat::chat_tools(model, &messages, &offered, Options::new(num_ctx))?;
+    let reply = if env.recover {
+        chat::chat_tools(model, &messages, &offered, options)?
+    } else {
+        chat::chat(model, &messages, &offered, options)?
+    };
+    let rewrite = env.offered.as_deref().is_some_and(|list| list.iter().any(|t| t.function.name == "write_file"));
     let cx = Context {
         history: &history,
         ws: ws.as_ref(),
         check: check.as_deref(),
         ask_every_call: cfg.ask_every_call,
+        rewrite,
         stop,
     };
     Ok(Round {
@@ -225,6 +280,9 @@ struct Context<'a> {
     /// The folder's check command, if one was chosen for it.
     check: Option<&'a [String]>,
     ask_every_call: bool,
+    /// `write_file` was among the tools offered, so a call to it is planned rather
+    /// than turned away. The app never offers it; only a probe's tool list does.
+    rewrite: bool,
     /// This round's place on the Stop counter, for an automatic search or listing.
     stop: u64,
 }
@@ -387,13 +445,14 @@ fn classify(
         tools::Request::Plan { .. } => {
             return reject("update_plan", "", "error: the task list could not be read".into());
         }
-        tools::Request::Rewrite { path, .. } => {
+        tools::Request::Rewrite { path, .. } if !cx.rewrite => {
             return reject("write_file", &path, "no such tool: write_file — use edit_file".into());
         }
         tools::Request::Edit { .. }
         | tools::Request::Create { .. }
         | tools::Request::Delete { .. }
         | tools::Request::Move { .. }
+        | tools::Request::Rewrite { .. }
             if ws.is_none() =>
         {
             return reject(
@@ -407,6 +466,15 @@ fn classify(
             match tools::plan_edit(ws, &path, &old_text, &new_text, cx.ask_every_call) {
                 Ok(p) => ("edit_file", p.display.clone(), Some(Payload::Edit(p))),
                 Err(e) => return reject("edit_file", request_path(&call), format!("error: {e}")),
+            }
+        }
+        tools::Request::Rewrite { path, content } => {
+            let ws = ws.expect("checked above");
+            match edit::plan_rewrite(ws, &path, &content) {
+                // The model called `write_file`, but the plan is an `Op::Edit`: armed
+                // under its own name, `edit_file`, which is what `run_approved` redeems.
+                Ok(p) => ("edit_file", p.display.clone(), Some(Payload::Edit(p))),
+                Err(e) => return reject("write_file", request_path(&call), format!("error: {e}")),
             }
         }
         tools::Request::Create { path, content } => {
@@ -560,8 +628,20 @@ mod tests {
         check: Option<&[String]>,
         ask_every_call: bool,
     ) -> (Reply, Armed) {
+        judge_offering(reply, history, ws, check, ask_every_call, false)
+    }
+
+    /// [`judge`], with `write_file` among the tools offered or not.
+    fn judge_offering(
+        reply: &ChatReply,
+        history: &[Message],
+        ws: Option<&edit::Workspace>,
+        check: Option<&[String]>,
+        ask_every_call: bool,
+        rewrite: bool,
+    ) -> (Reply, Armed) {
         let mut armed = Armed::new();
-        let cx = Context { history, ws, check, ask_every_call, stop: u64::MAX };
+        let cx = Context { history, ws, check, ask_every_call, rewrite, stop: u64::MAX };
         let reply = classify(reply, &cx, &mut |name: &str, path: &str, payload: Option<Payload>| {
             armed.push((name.to_string(), path.to_string(), payload));
             format!("ticket-{}", armed.len())
@@ -577,6 +657,11 @@ mod tests {
         ask_every_call: bool,
     ) -> (Reply, Armed) {
         judge(&said("", vec![call]), &[], ws, check, ask_every_call)
+    }
+
+    /// One call, judged when the tools offered include `write_file`.
+    fn judge_rewrite(call: ToolCall, ws: Option<&edit::Workspace>) -> (Reply, Armed) {
+        judge_offering(&said("", vec![call]), &[], ws, None, false, true)
     }
 
     fn kind(reply: &Reply) -> &'static str {
@@ -698,6 +783,51 @@ mod tests {
                 "write_file".to_string(),
                 "a.rs".to_string(),
                 "error: no such tool: write_file — use edit_file".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn write_file_offered_by_a_probe_is_planned_and_asked_about_as_an_edit() {
+        let s = Sandbox::new("rewrite");
+        s.write("project/a.txt", "one\ntwo\n");
+        let ws = s.ws();
+        let args = json!({ "path": "a.txt", "content": "one\n2\n" });
+        let (card, (name, path, payload)) = asking(judge_rewrite(call("write_file", args.clone()), Some(&ws)));
+        // The plan is an edit, armed under the name `run_approved` redeems it by.
+        assert_eq!((card.name.as_str(), card.path.as_str()), ("edit_file", "a.txt"));
+        assert_eq!((name.as_str(), path.as_str()), ("edit_file", "a.txt"));
+        let Some(Payload::Edit(plan)) = payload else { panic!("a rewrite is armed with its plan") };
+        assert_eq!(plan_name(&plan), "edit_file");
+        let diff = card.diff.expect("the diff to approve");
+        assert_eq!((diff.added, diff.removed, diff.create), (1, 1, false));
+        assert_eq!(diff.hunks, plan.hunks, "what is approved is what is written");
+
+        // The conversation still shows the call as the model made it.
+        let (reply, _) = judge_rewrite(call("write_file", args.clone()), Some(&ws));
+        let Reply::Call { raw_call, .. } = reply else { panic!("not a call") };
+        assert_eq!(raw_call, call("write_file", args));
+    }
+
+    #[test]
+    fn write_file_offered_is_still_off_with_no_folder_and_needs_a_file_that_exists() {
+        let write = call("write_file", json!({ "path": "a.txt", "content": "x" }));
+        assert_eq!(
+            rejection(judge_rewrite(write.clone(), None)),
+            (
+                "write_file".to_string(),
+                "a.txt".to_string(),
+                "error: editing is off: the user has not chosen a project folder".to_string()
+            )
+        );
+        let s = Sandbox::new("norewrite");
+        let ws = s.ws();
+        assert_eq!(
+            rejection(judge_rewrite(write, Some(&ws))),
+            (
+                "write_file".to_string(),
+                "a.txt".to_string(),
+                "error: a.txt does not exist in the project folder".to_string()
             )
         );
     }

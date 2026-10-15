@@ -2,7 +2,7 @@
 //!
 //! A turn is the model asking for a tool, a person or a rule deciding, the tool
 //! running and its result going back, round after round until the model answers.
-//! Mimir drives it today; Hugin and the probes will drive it later. All of them
+//! Mimir and the probes drive it today; Hugin will later. All of them
 //! need the same rules — what a ticket allows, what Stop reaches, what is set
 //! aside when the prompt outgrows the context — or the probes would measure
 //! something other than what ships.
@@ -15,6 +15,9 @@
 //!   and the lock every write to the folder takes
 //! - [`send`] — setting old tool results aside from the prompt before it is sent,
 //!   and saying which
+//! - [`env`](mod@env) — what a turn takes from where it runs, beyond the config: the sampling,
+//!   the tools and system prompt, where backups go. The app's own is the default, so
+//!   a probe can change what it measures with and nothing else
 //! - [`round`] — one request to the model, and what it wants sorted into a
 //!   [`round::Reply`]: an answer, a call to ask about, one already run, or one
 //!   turned away
@@ -27,9 +30,12 @@
 //! they do or to the JSON the webview sees. [`round`] and [`turn`] are the second
 //! commit's: the body of Mimir's old `ask_with_tools` command without the Tauri, and
 //! the loop `App.tsx` ran over it. Mimir runs every tool turn through
-//! [`turn::run_turn`] now, its window only showing what the loop says; 2c moves the
-//! probes onto it.
+//! [`turn::run_turn`] now, its window only showing what the loop says. The probes
+//! (2c) run [`turn::run_turn_with`] over [`round::round_in`] and
+//! [`run::run_approved_in`], which take an [`env::Env`]; `round` and `run_approved`
+//! are those with the app's.
 
+pub mod env;
 pub mod round;
 pub mod run;
 pub mod send;

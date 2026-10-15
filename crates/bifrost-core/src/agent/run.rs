@@ -1,11 +1,13 @@
 //! Running a call: a read, a listing or a search, whether the card was approved
 //! or the call needed no approval. What a run produced is a [`Ran`].
 //!
-//! [`run_approved`] runs a call somebody approved, by spending its ticket; the
-//! other functions are what it and the automatic calls share.
+//! [`run_approved`] runs a call somebody approved, by spending its ticket
+//! ([`run_approved_in`] does it in another [`Env`]); the other functions are what it
+//! and the automatic calls share.
 
 use serde::Serialize;
 
+use super::env::Env;
 use super::stop::stopped;
 use super::ticket::{plan_name, redeem, Find, Payload};
 use crate::{check, edit, search, tools};
@@ -25,6 +27,11 @@ pub struct Ran {
     /// For an edit that was written: the handle to undo it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub undo: Option<String>,
+    /// For a check that ran: how it ended, and what it wrote. Kept for a probe's
+    /// counts — a check that timed out told the model nothing about its code — and
+    /// **never serialized**: Mimir does not read it, and the webview is not sent it.
+    #[serde(skip)]
+    pub check: Option<check::Outcome>,
 }
 
 impl Ran {
@@ -34,7 +41,7 @@ impl Ran {
     /// itself begins that way is given a header so it does not.
     pub fn text(result: String) -> Self {
         let ok = !result.trim_start().starts_with("error:");
-        Self { result, ok, stopped: false, undo: None }
+        Self { result, ok, stopped: false, undo: None, check: None }
     }
 }
 
@@ -106,6 +113,13 @@ pub fn run_auto(
 ///
 /// Blocking: an edit waits for [`edits_lock`], and a check runs to its end.
 pub fn run_approved(name: &str, path: &str, token: &str) -> Result<Ran, String> {
+    run_approved_in(name, path, token, &Env::default())
+}
+
+/// [`run_approved`] in another setting: an edit's backups go where `env` says, and a
+/// check runs with `env`'s additions to its environment. What is run, and the ticket
+/// that must allow it, are the same.
+pub fn run_approved_in(name: &str, path: &str, token: &str, env: &Env) -> Result<Ran, String> {
     // Before anything touches the disk. The ticket was issued when the UI was
     // shown this exact call, and is spent here - so what runs is what was
     // approved, and it runs once.
@@ -116,7 +130,7 @@ pub fn run_approved(name: &str, path: &str, token: &str) -> Result<Ran, String> 
             if plan_name(&plan) != name {
                 return Err(format!("this approval was for {}, not {name}", plan_name(&plan)));
             }
-            let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
+            let backups = env.backups.clone().or_else(edit::backups_dir).ok_or("APPDATA is not set")?;
             let _edits = edits_lock();
             // A file changed since the diff was shown is refused, not written:
             // the model is told, and can read it again.
@@ -135,15 +149,17 @@ pub fn run_approved(name: &str, path: &str, token: &str) -> Result<Ran, String> 
                     ok: false,
                     stopped: true,
                     undo: None,
+                    check: None,
                 });
             }
             let root = std::path::PathBuf::from(root);
-            Ok(match check::run(&root, &argv, check::timeout_for(&argv), &[], || stopped(stop)) {
+            Ok(match check::run(&root, &argv, check::timeout_for(&argv), &env.check_env, || stopped(stop)) {
                 Ok(o) => Ran {
                     result: check::for_model(&argv, &o),
                     ok: o.passed(),
                     stopped: o.ended == check::Ended::Stopped,
                     undo: None,
+                    check: Some(o),
                 },
                 Err(e) => Ran::text(format!("error: {e}")),
             })

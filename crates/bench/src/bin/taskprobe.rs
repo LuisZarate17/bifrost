@@ -1505,7 +1505,8 @@ mod tests {
     /// **The model cannot read its way to the answer.** A worktree's `.git`
     /// names the repo it came from, and that repo holds every reference
     /// solution; with reads confined, neither is reachable — inside the folder,
-    /// reading works as ever.
+    /// reading works as ever. The shared loop asks the app's rule whether a read
+    /// needs a card and the probe's whether to allow it: this is the second.
     #[test]
     fn reads_are_confined_to_the_worktree() {
         let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
@@ -1517,25 +1518,10 @@ mod tests {
         std::fs::write(base.join("answer.rs"), "the reference solution\n").unwrap();
 
         let ws = Workspace::open(&tree).unwrap();
-        let backups = base.join("backups");
-        let setup = Setup { ws: &ws, backups: &backups, check: None, confine_reads: true, compact: true };
-        let read = |path: &str| {
-            let call = bifrost_core::chat::ToolCall {
-                id: None,
-                function: bifrost_core::chat::FunctionCall {
-                    name: "read_file".into(),
-                    arguments: serde_json::json!({ "path": path }),
-                },
-            };
-            probe::execute(&call, &setup)
-        };
-
-        assert!(read("src/lib.rs").text.contains("pub fn inside"));
-        let outside = read(&base.join("answer.rs").to_string_lossy());
-        assert!(outside.failed && !outside.text.contains("reference"), "{}", outside.text);
-        assert!(read("../answer.rs").failed);
-        let git = read(".git");
-        assert!(git.failed && !git.text.contains("gitdir"), "{}", git.text);
+        assert!(probe::read_allowed(&ws, "src/lib.rs"));
+        assert!(!probe::read_allowed(&ws, &base.join("answer.rs").to_string_lossy()));
+        assert!(!probe::read_allowed(&ws, "../answer.rs"));
+        assert!(!probe::read_allowed(&ws, ".git"));
         let _ = std::fs::remove_dir_all(&base);
     }
 
