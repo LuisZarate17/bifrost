@@ -14,8 +14,8 @@ and [`../stages/STAGE-H.md`](../stages/STAGE-H.md).
 
 **Now: Stage I, set 2026-10-12.** I0, the rename, is done: ODIN is now **Bifrost**, Heimdall
 **Vidar**, and Mímir **Mimir** (§0b). The colors and badges (I0b) are done, and so is I1: Mimir's
-turn loop now lives in the shared crate, where the probes run it too. Next is Gate 1, then **Hugin**,
-a terminal agent on that loop. See
+turn loop now lives in the shared crate, where the probes run it too. Gate 1 was skipped on Luis's
+word, and **Hugin** (I2), a terminal agent on that loop, is built. Next: its shell commands (I3). See
 [`../stages/STAGE-I.md`](../stages/STAGE-I.md) and [`I-status.md`](I-status.md). The checks by
 hand for Stage G still wait in [`PENDING-CHECKS.md`](PENDING-CHECKS.md).
 

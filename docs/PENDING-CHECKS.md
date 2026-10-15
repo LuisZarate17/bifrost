@@ -11,6 +11,15 @@ worksheet, with exact text to type and what should happen. This file keeps the r
 > command is `bifrost`, and the data folder is `%APPDATA%\bifrost`. The open checks below use
 > the new names; anything already checked keeps the names it was checked under.
 
+## Open — I2, Hugin in the terminal, 2026-10-15
+
+The packet's "done when" for I2 is a person's: **a real coding task in Hugin from start to finish,
+in Windows Terminal and in VS Code's terminal.** Windows Terminal was driven by script through
+its console's own input and read back from its screen, so the keys, the colors and Stop are
+known to work there; VS Code's terminal was not driven, because it is the editor the work happens
+in, and it is the one that cannot tell Shift+Enter from Enter. The checks are in
+[I-testing.md](I-testing.md) §I2; the reasoning in [I2-results.md](results/I2-results.md).
+
 ## Open — I1, the shared turn loop, 2026-10-15
 
 Gate 1 is **a day of real use**: Mimir's tool turns run in Rust now, and nothing should look or

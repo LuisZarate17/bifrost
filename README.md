@@ -5,7 +5,7 @@ Local AI tools that share one model and one machine. Nothing leaves the computer
 | | |
 |---|---|
 | **Mimir** | The main workspace: a local chat app that reads, finds and edits code in a folder you pick, runs the folder's check, and decides which model is loaded. **Built through Stage H** |
-| **Hugin** | A terminal agent on Mimir's engine, in the spirit of Claude Code, and one Claude Code can hand work to. **Planned** — [stages/STAGE-I.md](stages/STAGE-I.md) |
+| **Hugin** | A coding agent inline in the terminal, in the spirit of Claude Code, on Mimir's engine. **Built** (I2): reads, searches, edits and the folder's check, approved inline. Shell commands, launching and `hugin -p` come next — [docs/I-status.md](docs/I-status.md) |
 | **`bifrost`** | Vidar's pipeline from the command line, plus `warm` / `off` / `status` power control |
 
 Things with an icon get a name; things you type get a description (PLAN.md §0b). Bifrost is the
@@ -15,8 +15,8 @@ bridge between them.
 answer into the popup. What is left of the original plan is one afternoon of testing, see
 [docs/BUILD.md](docs/BUILD.md). **Stages G and H are built** — Mimir chats, edits files in a folder
 you pick, finds code, runs the folder's check and undoes a whole turn; Stage G's checks by hand
-still wait in [docs/G-testing.md](docs/G-testing.md). **Now: Stage I** — the rename is done, and
-Hugin comes next; see [docs/I-status.md](docs/I-status.md).
+still wait in [docs/G-testing.md](docs/G-testing.md). **Now: Stage I** — the rename is done, Mimir's turn loop
+is now the shared engine's, and Hugin runs on it in the terminal; see [docs/I-status.md](docs/I-status.md).
 
 ## The apps
 
@@ -25,6 +25,8 @@ npm run app:vidar              # build Vidar
 npm run app:mimir              # build Mimir
 target/debug/vidar.exe         # or the Desktop / Start Menu shortcuts
 target/debug/mimir.exe
+cargo build -p hugin           # Hugin is a plain console app: cargo is right for it
+target/debug/hugin.exe         # run from a project folder, or pass --folder <path>
 ```
 
 **Build the apps with `npm run`, not `cargo build`.** Cargo alone bakes `devUrl` into the binary,
@@ -91,7 +93,8 @@ each kind, and a single `node_modules`.
 bifrost/
 ├── apps/
 │   ├── vidar/          the overlay — hotkey, popup, tray (src-tauri/ + its React frontend)
-│   └── mimir/          the chat app — conversations, models, reading and editing files
+│   ├── mimir/          the chat app — conversations, models, reading and editing files
+│   └── hugin/          the terminal agent — inline in the terminal, on the same turn loop
 ├── packages/
 │   └── ui/             @bifrost/ui — the Markdown renderer both apps share
 ├── crates/

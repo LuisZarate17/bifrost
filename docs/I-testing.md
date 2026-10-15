@@ -124,6 +124,26 @@ use. Rebuild Mimir first if it is older than the I1 commits (`npm run app:mimir`
 
 ---
 
+## I2 — Hugin in the terminal
+
+Hugin is built (`cargo build -p hugin`) and runs from any folder as
+`C:\Users\you\source\repos\odin\target\debug\hugin.exe` — a shortcut and `hugin` on your PATH
+come in I4. Windows Terminal was checked by script; **the finish line is yours**: a real task, start
+to finish, in both terminals ([I2-results.md](results/I2-results.md)).
+
+- [ ] **Windows Terminal.** Open it in a project folder and run Hugin. **Expect:** one line
+      `hugin · <folder> · <branch>, <n> changed · qwen3-coder:30b`, then a `›` prompt. Ask for a
+      real change. **Expect:** reads and searches run as `●` lines on their own; an edit shows its
+      diff (green and red) and `approve? [y/n/a]`; `y` writes it; the answer ends the turn.
+- [ ] **VS Code's terminal.** The same task there. A new line in a prompt is **Alt+Enter**, **Ctrl+J**
+      or a `\` at the end of the line — VS Code may send on Shift+Enter.
+- [ ] **Stop.** Ask for something long and press **Esc** while it thinks. **Expect:** `· stopped`
+      within a few seconds, and the prompt back.
+- [ ] **Leaving.** Ctrl+D. **Expect:** the terminal as it was, the conversation above it left in the
+      scrollback.
+
+---
+
 ## After this
 
 - Anything that failed goes back to the chunk, with what you saw.

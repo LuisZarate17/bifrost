@@ -166,6 +166,22 @@ package from G1, so **one renderer means one security review rather than two tha
 > `check:inert` SSR-builds `Answer` and runs the output under plain `node`, where a CSS import
 > would fail outright.
 
+### `apps/hugin/` — Hugin, the terminal agent
+
+A plain console app (no Tauri), built with `cargo build -p hugin`.
+
+- **What it learns on start** — `start.rs`: the folder, git branch and changed files, the coding
+  model, warming it
+- **One turn, over the shared loop** — `session.rs` → `turn()`: the config read fresh each round
+  with Hugin's folder and notes, in memory only; sessions saved marked `app: "hugin"`
+- **The seam both interfaces sit on** — `ui.rs` (`Event`, `Approval`, `trait Ui`), with
+  `frontend.rs` turning the loop's cards into it and `view.rs` wording them
+- **The line mode, for scripts** — `line.rs`: `› `, `approve? [y/n/a] `, `/stop`, `· stopped`
+- **The inline interface** — `inline.rs` (ratatui's inline viewport, the worker thread, the
+  terminal put back on any exit), `render.rs` (what each event looks like), `input.rs` (the
+  input box)
+- **Stop** — `stop.rs`: one handle for the keyboard, the session and the loop
+
 ### `crates/bifrost-cli/` — the CLI, binary `bifrost`
 
 - **Capture, encode, stream, print** — `src/main.rs`
