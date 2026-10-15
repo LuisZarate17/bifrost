@@ -11,6 +11,14 @@ worksheet, with exact text to type and what should happen. This file keeps the r
 > command is `bifrost`, and the data folder is `%APPDATA%\bifrost`. The open checks below use
 > the new names; anything already checked keeps the names it was checked under.
 
+## Open — I1, the shared turn loop, 2026-10-15
+
+Gate 1 is **a day of real use**: Mimir's tool turns run in Rust now, and nothing should look or
+behave differently. The scripts covered the mechanics — every end-to-end script, and Stop at every
+point including a reload — so what is left is the feel of real work. The checks, with what to
+expect, are in [I-testing.md](I-testing.md) §I1; the reasoning is in
+[I1-results.md](results/I1-results.md).
+
 ## Stage H's checks, run 2026-10-12
 
 Every item below for H1–H10 was run against the real app and model, driven over CDP (the way

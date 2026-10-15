@@ -103,6 +103,27 @@ Both apps were rebuilt with the new icons on 2026-10-14. All five checks below w
 
 ---
 
+## I1 — The shared turn loop (Gate 1)
+
+Mimir's tool turns now run in Rust, in the loop Hugin and the probes share; the window only shows
+what it is told. **Nothing should look or behave differently.** The nine end-to-end scripts and a
+Stop scenario covered the mechanics ([I1-results.md](results/I1-results.md)); what is left is real
+use. Rebuild Mimir first if it is older than the I1 commits (`npm run app:mimir`).
+
+- [ ] **A day of real use, with Tools on.** Ask for real work in a project folder: reads, searches,
+      edits, a check. **Expect:** cards appear as before, Allow and Deny answer them, and an edit
+      shows its diff and writes only after Allow.
+- [ ] **Stop while a card waits.** Ask for an edit; when its card shows, press Stop (or Esc).
+      **Expect:** the window frees at once, the card says *denied*, nothing is written.
+- [ ] **Stop during a check.** Allow a check that takes a while. Press Stop while it runs.
+      **Expect:** the card says *stopped* within a second.
+- [ ] **Undo all.** After a turn that made two or more edits, use Undo all. **Expect:** every edit
+      of that turn is undone together, as before.
+- [ ] **A reload mid-turn.** While a card waits, press `Ctrl+R`. **Expect:** the window reloads; the
+      next request works normally, and its card waits for you — nothing answers it on its own.
+
+---
+
 ## After this
 
 - Anything that failed goes back to the chunk, with what you saw.

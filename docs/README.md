@@ -187,8 +187,8 @@ package from G1, so **one renderer means one security review rather than two tha
 - **Can it do real work?** — `crates/bench/src/bin/taskprobe.rs` (H3): sixteen tasks — four real
   commits and twelve function bodies removed — scored by the project's own hidden tests.
   `--selfcheck` proves every task solvable and not already solved, without a model
-- **The loop they all share** — `crates/bench/src/probe.rs`: the app's tool loop with every call
-  approved, so a probe measures what ships
+- **The loop they all share** — `crates/bench/src/probe.rs`: the app's own turn loop
+  (`bifrost_core::agent::turn`, since I1) with every call approved, so a probe measures what ships
 - **Mimir's file editing, end to end** — `tools/e2e/mimir-edit.mjs`. Drives the running app
   over its WebView2 debug port with the real model; 16 checks, leaves nothing behind
 - **The check and finding code, end to end** — `tools/e2e/mimir-check.mjs`: approval, denial,
