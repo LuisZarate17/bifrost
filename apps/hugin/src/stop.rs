@@ -24,10 +24,13 @@ struct Flags {
 pub struct Stopper(Arc<Flags>);
 
 impl Stopper {
-    /// A turn begins: a Stop from an earlier one does not carry over.
+    /// A turn begins: a Stop from an earlier one does not carry over. **Beginning again
+    /// before the turn ends changes nothing**: a turn is begun as its prompt is taken
+    /// and again as the session starts it, and a Stop that lands between must hold.
     pub fn begin(&self) {
-        self.0.stopped.store(false, Ordering::SeqCst);
-        self.0.running.store(true, Ordering::SeqCst);
+        if !self.0.running.swap(true, Ordering::SeqCst) {
+            self.0.stopped.store(false, Ordering::SeqCst);
+        }
     }
 
     /// The turn is over; a `/stop` now has nothing to stop.

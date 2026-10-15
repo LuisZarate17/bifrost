@@ -273,8 +273,14 @@ enum Phase {
     Idle,
     /// A turn is running: what it waits for, since when.
     Turn { what: String, since: Instant },
-    Approval { ask: Approval, reply: Sender<Decision> },
+    /// An approval on screen. `armed` is when it starts taking answers: keys typed
+    /// before it showed, still on their way, must not answer something nobody has seen.
+    Approval { ask: Approval, reply: Sender<Decision>, armed: Instant },
 }
+
+/// How long an approval ignores y, n and a after it arrives. Long enough for keys typed
+/// ahead to be read and for the card to be drawn; short enough that nobody notices.
+const ARMING: Duration = Duration::from_millis(300);
 
 const THINKING: &str = "thinking";
 
@@ -297,6 +303,9 @@ impl App {
         match self.phase {
             Phase::Idle => At::Idle,
             Phase::Turn { .. } => At::Turn,
+            // Until it is armed an approval takes keys as the turn did: typed ahead, they
+            // were meant for the input, and answer nothing.
+            Phase::Approval { armed, .. } if Instant::now() < armed => At::Turn,
             Phase::Approval { .. } => At::Approval,
         }
     }
@@ -341,14 +350,14 @@ impl App {
             }
             Msg::Ask(ask, reply) => {
                 self.pending.extend(render::approval(&ask, &self.theme, width));
-                self.phase = Phase::Approval { ask, reply };
+                self.phase = Phase::Approval { ask, reply, armed: Instant::now() + ARMING };
             }
         }
     }
 
     /// The person answers an approval, and the turn carries on.
     fn answer(&mut self, decision: Decision) {
-        if let Phase::Approval { ask, reply } = std::mem::replace(&mut self.phase, Phase::Idle) {
+        if let Phase::Approval { ask, reply, .. } = std::mem::replace(&mut self.phase, Phase::Idle) {
             let _ = reply.send(decision);
             let running = ask.name == "check" && decision != Decision::Deny;
             let what = if running { format!("running {}", ask.target) } else { THINKING.to_string() };

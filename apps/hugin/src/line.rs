@@ -34,6 +34,9 @@ struct Lines {
     queued: VecDeque<String>,
     /// Input has ended: nothing more will arrive.
     ended: bool,
+    /// A `/stop` came while a prompt was still waiting here: that prompt's turn is
+    /// stopped as it begins.
+    stop_next: bool,
 }
 
 /// The lines stdin has delivered and nobody has used yet.
@@ -57,6 +60,60 @@ impl Queue {
             l.queued.push_back(line);
         }
         self.arrived.notify_all();
+    }
+
+    /// A `/stop` read from input. A turn that runs is stopped there and then; a turn whose
+    /// prompt is still waiting here is stopped as it begins; with neither, it stops
+    /// nothing and is dropped — kept, it would answer some later approval no.
+    ///
+    /// **Decided under the lock [`Queue::prompt`] hands a prompt out under**, so a `/stop`
+    /// sent right behind its prompt cannot fall between the prompt leaving the queue and
+    /// its turn beginning.
+    fn stop(&self, stopper: &Stopper) {
+        let Ok(mut l) = self.lines.lock() else { return };
+        if stopper.running() {
+            stopper.stop();
+        } else if l.queued.iter().any(|q| !matches!(q.trim(), "" | "/exit")) {
+            l.stop_next = true;
+        }
+    }
+
+    /// The next prompt, or `None` to leave: `/exit`, or the end of input. A line ending
+    /// in `\` goes on to the next, the two joined with a newline; empty lines are
+    /// ignored. **Its turn begins here**, under the queue's lock (see [`Queue::stop`]).
+    fn prompt(&self, stopper: &Stopper) -> Option<String> {
+        let Ok(mut l) = self.lines.lock() else { return None };
+        let mut text = String::new();
+        loop {
+            let Some(line) = l.queued.pop_front() else {
+                if l.ended {
+                    return (!text.is_empty()).then(|| begin(&mut l, stopper, text));
+                }
+                l = match self.arrived.wait(l) {
+                    Ok(l) => l,
+                    Err(_) => return None,
+                };
+                continue;
+            };
+            let line = line.trim_end();
+            if text.is_empty() {
+                match line.trim() {
+                    "" | "/stop" => continue,
+                    "/exit" => return None,
+                    _ => {}
+                }
+            }
+            match line.strip_suffix('\\') {
+                Some(more) => {
+                    text.push_str(more);
+                    text.push('\n');
+                }
+                None => {
+                    text.push_str(line);
+                    return Some(begin(&mut l, stopper, text));
+                }
+            }
+        }
     }
 
     fn end(&self) {
@@ -88,17 +145,16 @@ impl Queue {
     }
 }
 
-/// Read `input` on a thread of its own. **A `/stop` while a turn runs is not queued**:
-/// it stops the turn there and then. Outside a turn it is queued like any line, and the
-/// prompt ignores it.
+/// Read `input` on a thread of its own. **A `/stop` is never queued**: it stops the turn
+/// that runs, or the one whose prompt is waiting ([`Queue::stop`]).
 pub fn feed<R: BufRead + Send + 'static>(input: R, stopper: Stopper) -> Arc<Queue> {
     let queue = Arc::new(Queue::default());
     let reading = queue.clone();
     std::thread::spawn(move || {
         for line in input.lines() {
             let Ok(line) = line else { break };
-            if line.trim() == "/stop" && stopper.running() {
-                stopper.stop();
+            if line.trim() == "/stop" {
+                reading.stop(&stopper);
             } else {
                 reading.push(line);
             }
@@ -131,36 +187,11 @@ impl<W: Write> Line<W> {
         let _ = self.out.flush();
     }
 
-    /// The next prompt, or `None` to leave: `/exit`, or the end of input. A line ending
-    /// in `\` goes on to the next, the two joined with a newline; empty lines are
-    /// ignored.
+    /// The next prompt, or `None` to leave; see [`Queue::prompt`]. Its turn has begun
+    /// when this returns.
     pub fn read_prompt(&mut self) -> Option<String> {
         self.say(PROMPT);
-        let mut text = String::new();
-        loop {
-            let line = match self.queue.next(|| false) {
-                Next::Line(line) => line,
-                Next::Ended | Next::GaveUp => return (!text.is_empty()).then_some(text),
-            };
-            let line = line.trim_end();
-            if text.is_empty() {
-                match line.trim() {
-                    "" | "/stop" => continue,
-                    "/exit" => return None,
-                    _ => {}
-                }
-            }
-            match line.strip_suffix('\\') {
-                Some(more) => {
-                    text.push_str(more);
-                    text.push('\n');
-                }
-                None => {
-                    text.push_str(line);
-                    return Some(text);
-                }
-            }
-        }
+        self.queue.prompt(&self.stopper)
     }
 
     /// What `/stop` or end of input at an approval comes to: no, and the turn ends.
@@ -238,6 +269,15 @@ impl<W: Write> Ui for Line<W> {
     }
 }
 
+/// A prompt leaves the queue: its turn begins, stopped already if a `/stop` came for it.
+fn begin(l: &mut Lines, stopper: &Stopper, text: String) -> String {
+    stopper.begin();
+    if std::mem::take(&mut l.stop_next) {
+        stopper.stop();
+    }
+    text
+}
+
 /// `[x] step` for one that is done, `[ ] step` for the others.
 fn plan_line(step: &PlanStep) -> String {
     let mark = if step.status == PlanStatus::Done { 'x' } else { ' ' };
@@ -263,5 +303,34 @@ pub fn run<R: BufRead + Send + 'static, W: Write>(
         }
         let Some(prompt) = ui.read_prompt() else { return };
         session.turn(&prompt, &mut ui);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `/stop` that the reading thread sees before the prompt it follows has been taken
+    /// stops that prompt's turn as it begins; one with nothing waiting stops nothing, and
+    /// is not kept to answer a later approval (review I2, finding 2).
+    #[test]
+    fn a_stop_before_its_prompt_is_taken_stops_that_turn_and_a_stray_one_is_dropped() {
+        let (queue, stopper) = (Queue::default(), Stopper::default());
+        queue.push("fix it".into());
+        queue.stop(&stopper);
+        assert!(!stopper.stopped(), "nothing runs yet");
+        assert_eq!(queue.prompt(&stopper).as_deref(), Some("fix it"));
+        assert!(stopper.running() && stopper.stopped(), "the turn begins stopped");
+        // The session begins it again; the Stop holds.
+        stopper.begin();
+        assert!(stopper.stopped());
+        stopper.end();
+
+        // Idle, nothing waiting: dropped, so the next turn is not stopped by it.
+        queue.stop(&stopper);
+        queue.push("next".into());
+        assert_eq!(queue.prompt(&stopper).as_deref(), Some("next"));
+        assert!(!stopper.stopped());
+        assert!(queue.lines.lock().unwrap().queued.is_empty(), "no `/stop` was queued");
     }
 }

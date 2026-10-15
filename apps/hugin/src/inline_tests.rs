@@ -144,6 +144,21 @@ fn n_declines_and_the_turn_goes_on() {
     assert!(has_run(&seen, &["● edit a.rs +1 −1 → declined", "Understood."]), "{seen:#?}");
 }
 
+/// A key typed while the model thinks — or in the moment an approval arrives, before
+/// anyone could have read it — goes to the input and answers nothing: only a key pressed
+/// once the approval is armed does (review I2, finding 1).
+#[test]
+fn a_y_typed_ahead_never_answers_an_approval() {
+    let keys = Keystrokes::new()
+        .typed(At::Idle, "fix it")
+        .enter(At::Idle)
+        .typed(At::Turn, "y")
+        .typed(At::Approval, "n")
+        .quit();
+    let seen = play(keys, session(vec![edit(), answer("Understood.")], vec![], Duration::from_millis(30)));
+    assert!(has_run(&seen, &["● edit a.rs +1 −1 → declined", "Understood."]), "{seen:#?}");
+}
+
 #[test]
 fn esc_during_a_turn_stops_it() {
     let keys = Keystrokes::new()

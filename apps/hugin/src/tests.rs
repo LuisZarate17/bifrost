@@ -398,6 +398,17 @@ fn stop_typed_while_the_model_is_thinking_ends_the_turn() {
     assert!(p.ran.is_empty());
 }
 
+/// A script that pipes its prompt and `/stop` together: the turn is stopped, whichever of
+/// the two threads gets there first (review I2, finding 2).
+#[test]
+fn stop_sent_with_its_prompt_stops_that_turn() {
+    let mut script = Script::new(&["fix it\n/stop"]).model(vec![answer("never shown")]);
+    script.during = Box::new(|_, _| std::thread::sleep(Duration::from_millis(300)));
+    let p = play(script);
+    assert!(p.out.contains("· stopped\n"), "{}", p.out);
+    assert!(!p.out.contains("never shown"), "{}", p.out);
+}
+
 #[test]
 fn a_line_typed_during_a_turn_is_the_next_prompt() {
     let mut script = Script::new(&["first"]).model(vec![answer("one"), answer("two")]);
