@@ -34,9 +34,10 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
  * two processes that happen to share a model, and either alone is fully usable —
  * so they get two shortcuts rather than one launcher with a menu.
  *
- * Their icons come from `tools/icon/`, one badge per app. Two identical icons on
+ * Each shortcut shows its exe's own icon, which the build embeds from the app's
+ * `icon.ico`, drawn by `tools/icon/`: one shield per app. Two identical icons on
  * the Desktop is worse than no icon at all, and color alone is too little to tell
- * two icons apart at taskbar size.
+ * two icons apart at taskbar size, so the shields differ in pattern too.
  */
 const APPS = [
   {

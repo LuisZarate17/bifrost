@@ -13,8 +13,12 @@
 //   on the soft accent wash laid over that bubble.
 //
 // The result is written as --u-* custom properties on <html>. App.css reads them
-// with the default sea as fallback, so nothing stored still draws correctly, and
-// public/theme-boot.js replays the stored copy before the first paint.
+// with the default Deep Well as fallback, so nothing stored still draws correctly,
+// and public/theme-boot.js replays the stored copy before the first paint.
+
+// `with { type: "json" }` is what lets plain node load this file too; Vite and
+// tsc accept it as they do the bare import.
+import colors from "@bifrost/ui/colors.json" with { type: "json" };
 
 export type Mode = "dark" | "light";
 export type Scheme = "system" | "dark" | "light";
@@ -38,12 +42,16 @@ export type Theme = {
   vars: Record<string, string>;
 };
 
-/** Sea: the color of Mimir's own badge, so the window and its icon match. */
-export const DEFAULT_SEED = "#1f8a8a";
+/**
+ * Deep Well: Mimir's color in the suite's shared colors (packages/ui/src/colors.json,
+ * which the Rust side reads too), so the window and its icon match.
+ */
+export const DEFAULT_SEED = colors.mimir.dark;
 export const STORE_KEY = "mimir.theme";
 
-/** In hue order from the default. Every one passes both themes (see derive). */
+/** The default first, then hue order from Sea. Every one passes both themes (see derive). */
 export const PRESETS: { name: string; seed: string }[] = [
+  { name: "Deep Well", seed: DEFAULT_SEED },
   { name: "Sea", seed: "#1f8a8a" },
   { name: "Blue", seed: "#2275e8" },
   { name: "Violet", seed: "#824fea" },
@@ -217,7 +225,7 @@ export function themeVars(seed: string): Record<string, string> {
 /**
  * localStorage, not a file: it is synchronous, and only something synchronous
  * can be read before the first paint. A file would need an IPC round trip and the
- * default sea would flash first. The accent is cosmetic and per-machine, so it
+ * default accent would flash first. The accent is cosmetic and per-machine, so it
  * does not belong in the config Vidar and the CLI share.
  */
 export function loadTheme(): Theme | null {

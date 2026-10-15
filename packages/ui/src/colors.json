@@ -1,0 +1,7 @@
+{
+  "vidar": { "name": "Wolf's Bane", "dark": "#e0525e", "light": "#a8273a" },
+  "mimir": { "name": "Deep Well", "dark": "#5b9fe0", "light": "#1f5f9e" },
+  "hugin": { "name": "Raven Violet", "dark": "#8b7cf8", "light": "#5a47d1" },
+  "ink": "#141414",
+  "ivory": "#ecebe6"
+}

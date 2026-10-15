@@ -4,23 +4,39 @@ import { png } from "./png.mjs";
 import { BADGES, renderBadge } from "./badge.mjs";
 import { ico, icns } from "./ico.mjs";
 
-//   node tools/icon/install.mjs <out-dir> <vidar|mimir>
+//   node tools/icon/install.mjs <out-dir> <vidar|mimir|hugin|bifrost>
+//   node tools/icon/install.mjs --preview <dir>
 //
-// Writes one app's whole icon set: the PNGs tauri.conf.json names, the Store
-// logos Tauri scaffolded beside them, a multi-size .ico and an .icns.
+// The first form writes one icon set: the PNGs tauri.conf.json names, the Store
+// logos Tauri scaffolded beside them, a multi-size .ico and an .icns. Vidar's and
+// Mimir's go into apps/<app>/src-tauri/icons; the build embeds icon.ico in the
+// exe, so the taskbar, the shortcuts and Vidar's tray all show it after a rebuild.
+// Hugin has no window to carry an icon yet, and the Bifrost mark is not an app.
 //
-// The two apps share one mark split in half — the Helm of Awe, see badge.mjs —
-// so they read as one project, while their silhouettes inside the disc (arms on
-// the diagonals, arms on the compass points) and their colors keep them apart at
-// 16px, where shape carries identity and hue alone does not.
-const [out, which] = process.argv.slice(2);
+// The second writes every badge at 16, 32, 64 and 256 px, and sheet.png: all of
+// them on a dark and a light ground, with the 16px row enlarged six times so its
+// pixels can be judged. Nothing in the repo changes.
+const [first, second] = process.argv.slice(2);
 
-if (!out || !BADGES[which]) {
+const SIZES = [16, 32, 64, 256];
+
+if (first === "--preview" && second) {
+  fs.mkdirSync(second, { recursive: true });
+  for (const [name, badge] of Object.entries(BADGES)) {
+    for (const size of SIZES) fs.writeFileSync(path.join(second, `${name}-${size}.png`), png(size, size, renderBadge(badge, size)));
+  }
+  fs.writeFileSync(path.join(second, "sheet.png"), sheet());
+  console.log(`wrote ${Object.keys(BADGES).length * SIZES.length} previews and sheet.png into ${second}`);
+  process.exit(0);
+}
+
+if (!first || !BADGES[second]) {
   console.error(`usage: node tools/icon/install.mjs <out-dir> <${Object.keys(BADGES).join("|")}>`);
+  console.error("       node tools/icon/install.mjs --preview <dir>");
   process.exit(2);
 }
 
-const badge = BADGES[which];
+const badge = BADGES[second];
 const pngAt = (size) => png(size, size, renderBadge(badge, size));
 const image = (size) => ({ size, rgba: renderBadge(badge, size), png: pngAt(size) });
 
@@ -31,8 +47,60 @@ const files = {
   "Square150x150Logo.png": 150, "Square284x284Logo.png": 284, "Square310x310Logo.png": 310,
   "StoreLogo.png": 50,
 };
-for (const [name, size] of Object.entries(files)) fs.writeFileSync(path.join(out, name), pngAt(size));
+for (const [name, size] of Object.entries(files)) fs.writeFileSync(path.join(first, name), pngAt(size));
 
-fs.writeFileSync(path.join(out, "icon.ico"), ico([16, 20, 24, 32, 40, 48, 64, 128, 256].map(image)));
-fs.writeFileSync(path.join(out, "icon.icns"), icns([32, 64, 128, 256, 512, 1024].map(image)));
-console.log(`wrote ${Object.keys(files).length + 2} ${which} icons into ${out}`);
+fs.writeFileSync(path.join(first, "icon.ico"), ico([16, 20, 24, 32, 40, 48, 64, 128, 256].map(image)));
+fs.writeFileSync(path.join(first, "icon.icns"), icns([32, 64, 128, 256, 512, 1024].map(image)));
+console.log(`wrote ${Object.keys(files).length + 2} ${second} icons into ${first}`);
+
+/**
+ * One PNG with every badge, on a dark band and a light one: 256, 64, 32 and 16 px
+ * as drawn, then the 16px drawing enlarged six times, pixel for pixel.
+ */
+function sheet() {
+  const names = Object.keys(BADGES);
+  const ZOOM = 6, GAP = 16, PAD = 20;
+  const cells = [256, 64, 32, 16, 16 * ZOOM];
+  const colWidth = cells.reduce((a, b) => a + b + GAP, 0) - GAP;
+  const width = PAD * 2 + colWidth;
+  const band = PAD * 2 + names.length * (256 + GAP) - GAP;
+  const height = band * 2;
+  const rgba = Buffer.alloc(width * height * 4);
+  const grounds = [[0x1c, 0x1c, 0x1f], [0xec, 0xee, 0xf0]];
+
+  grounds.forEach(([r, g, b], gi) => {
+    for (let y = gi * band; y < (gi + 1) * band; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        rgba[i] = r; rgba[i + 1] = g; rgba[i + 2] = b; rgba[i + 3] = 255;
+      }
+    }
+  });
+
+  /** Lay one drawing over the ground at (ox, oy), each pixel repeated `zoom` times. */
+  const place = (pixels, size, ox, oy, zoom = 1) => {
+    for (let y = 0; y < size * zoom; y++) {
+      for (let x = 0; x < size * zoom; x++) {
+        const s = (Math.floor(y / zoom) * size + Math.floor(x / zoom)) * 4;
+        const a = pixels[s + 3] / 255;
+        if (a === 0) continue;
+        const d = ((oy + y) * width + (ox + x)) * 4;
+        for (let k = 0; k < 3; k++) rgba[d + k] = Math.round(pixels[s + k] * a + rgba[d + k] * (1 - a));
+      }
+    }
+  };
+
+  grounds.forEach((_, gi) => {
+    names.forEach((name, ni) => {
+      const top = gi * band + PAD + ni * (256 + GAP);
+      let left = PAD;
+      cells.forEach((cell, ci) => {
+        const size = ci === cells.length - 1 ? 16 : cell;
+        const zoom = ci === cells.length - 1 ? ZOOM : 1;
+        place(renderBadge(BADGES[name], size), size, left, top + Math.floor((256 - cell) / 2), zoom);
+        left += cell + GAP;
+      });
+    });
+  });
+  return png(width, height, rgba);
+}

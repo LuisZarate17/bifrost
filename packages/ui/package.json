@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./answer.css": "./src/answer.css"
+    "./answer.css": "./src/answer.css",
+    "./colors.json": "./src/colors.json"
   },
   "scripts": {
     "check:inert": "vite build --ssr src/Answer.inert-check.tsx --outDir node_modules/.cache/inert --logLevel error && node node_modules/.cache/inert/Answer.inert-check.js"

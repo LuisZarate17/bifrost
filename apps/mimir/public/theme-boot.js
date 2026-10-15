@@ -1,5 +1,5 @@
 // Runs before the stylesheet draws anything: puts the saved accent and theme on
-// <html>, so a chosen colour never flashes the default sea on startup.
+// <html>, so a chosen colour never flashes the default accent on startup.
 //
 // A separate file rather than an inline <script> because the CSP is
 // `script-src 'self'`. It only replays what src/accent.ts computed and stored;

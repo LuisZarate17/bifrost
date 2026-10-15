@@ -100,6 +100,8 @@ names don't, so grep the name if a number has gone stale.
 - **Finding code in the folder** — `search.rs` → `list()`, `search()` (literal, smart-case),
   `validate()` (an impossible call is refused before its card). Skips `.git`, `target`,
   `node_modules`, links; capped at 8 KB
+- **The suite's colors, for the Rust side** — `colors.rs` → `palette()`, which reads
+  `packages/ui/src/colors.json` at compile time. Hugin's Raven Violet comes from here.
 
 > Everything here is **blocking by design**. Calling it from an `async` Tauri command drops a tokio
 > runtime inside an async context and kills the worker. Go through `spawn_blocking`.
@@ -151,6 +153,10 @@ package from G1, so **one renderer means one security review rather than two tha
 - **Syntax highlighting** — `src/CodeBlock.tsx`, Shiki, lazy, JS regex engine so no WASM
 - **The renderer's styles** — `src/answer.css`
 - **Proof the refusals hold** — `src/Answer.inert-check.tsx`, run by `npm run check:inert`
+- **The suite's colors** — `src/colors.json`, exported as `@bifrost/ui/colors.json`. Each app's
+  color for dark and light grounds, plus ink and ivory. Read by Mimir's default accent, by
+  `bifrost-core::colors` and by `tools/icon/`, which draws the shields for each app's `icon.ico`
+  (`node tools/icon/install.mjs --preview <dir>` to look at them all).
 
 > **The component does not import its own CSS; the consumer does** — `import "@bifrost/ui/answer.css"`.
 > `check:inert` SSR-builds `Answer` and runs the output under plain `node`, where a CSS import

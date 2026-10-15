@@ -72,6 +72,17 @@ names (`vidar://…`), the `VIDAR_*` switches and `BIFROST_NVML_PATH`. The data 
 keeps the names it was written with: `stages/`, `docs/results/`, the H review, `evals/out/` and
 BUILD.md. So do the pinned benchmarks, which run on commits from before the rename.
 
+**Colors and badges, 2026-10-14 (I0b).**
+- **The colors.** Each app has a color with one value for dark grounds and one for light, kept in
+  `packages/ui/src/colors.json`, which the icons, both apps and the Rust side read:
+  - **Vidar, Wolf's Bane:** #e0525e / #a8273a.
+  - **Mimir, Deep Well:** #5b9fe0 / #1f5f9e.
+  - **Hugin, Raven Violet:** #8b7cf8 / #5a47d1.
+- **The badges.** Each app's icon is a round shield in its color with one painted pattern: Vidar's
+  quarters, Mimir's ring, Hugin's diagonal half. The Bifrost mark cuts a third from each shield
+  and sets the three pieces around one boss.
+- **The outline.** On light backgrounds every badge has a black outline.
+
 **Renamed 2026-09-26: Warden → Heimdall, Citadel → Mímir.** The icons became the Helm of Awe,
 split between the two apps as two badges that complete one mark, and the fortress names no longer
 matched a Norse umbrella and a Norse logo. The rename is full: folders (`apps/heimdall`,

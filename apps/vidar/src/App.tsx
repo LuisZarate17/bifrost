@@ -594,7 +594,12 @@ function App() {
       </header>
 
       {status && <p className="status">{status}</p>}
-      {error && <pre className="error">{error}</pre>}
+      {error && (
+        <div className="error" role="alert">
+          <span className="error-tag">Error</span>
+          <pre>{error}</pre>
+        </div>
+      )}
 
       {hasContent && (
         <div className="scroll" ref={scrollRef} onScroll={onScroll}>

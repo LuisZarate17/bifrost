@@ -74,6 +74,33 @@ are still open.*
 
 ---
 
+## I0b — Colors and badges
+
+Both apps were rebuilt with the new icons on 2026-10-14. What was measured is in
+[I0b-results.md](results/I0b-results.md).
+
+- [ ] **The icons.** On the taskbar, the Desktop and the Start Menu:
+      - **Vidar** is a red shield with dark quarters at the top left and bottom right;
+      - **Mimir** is a blue shield with a dark ring;
+      - both have a black edge.
+
+      If the old icons still show, Windows is answering from its icon cache. Run
+      `ie4uinit.exe -show`, or sign out and back in.
+- [ ] **Vidar's tray.** **Expect:** the small red shield.
+- [ ] **Vidar's popup.** Press `Ctrl+Alt+W`. **Expect:**
+      - the word **Vidar** in the header is red (Wolf's Bane);
+      - picking a block with `Ctrl+Alt`+wheel marks it with a red tint and a red line at its left;
+      - if an error ever shows, it starts with the word **ERROR**, so the red is never the only
+        signal.
+- [ ] **Mimir's badge.** **Expect:** in the sidebar and above "Good afternoon", a shield with a ring
+      in your accent. In the light theme it has a black outline; in the dark theme it has none.
+- [ ] **Mimir's accent.** Open Appearance. **Expect:**
+      - **Deep Well**, a lighter blue, is first;
+      - Deep Well is selected if you never picked an accent since the rename;
+      - **Sea** is still there.
+
+---
+
 ## After this
 
 - Anything that failed goes back to the chunk, with what you saw.

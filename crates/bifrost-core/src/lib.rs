@@ -29,6 +29,7 @@
 
 pub mod chat;
 pub mod check;
+pub mod colors;
 pub mod compact;
 pub mod config;
 pub mod edit;

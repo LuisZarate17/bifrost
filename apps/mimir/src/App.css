@@ -13,9 +13,9 @@
    white, so "Allow once" never reads as a destructive action; the accent marks
    only what is yours to act on or notice — sending, focus, the badge, the GPU
    meter, the Tools toggle, a request waiting for approval. It is whichever
-   colour the user picked, sea by default (Mimir's own badge color): src/accent.ts derives every shade
+   colour the user picked, Deep Well by default (Mimir's own badge color): src/accent.ts derives every shade
    from one seed with its contrast checked and writes them as --u-* properties,
-   which the tokens below read with the default sea as fallback. Errors are
+   which the tokens below read with the default Deep Well as fallback. Errors are
    orange-red, so an error and the default accent never share a colour.
 
    The theme is data-theme on <html>, set before the first paint by
@@ -56,12 +56,13 @@
   --border-2: rgba(255, 255, 255, 0.14);
   --border-3: rgba(255, 255, 255, 0.24);
 
-  /* The fallbacks are what accent.ts derives from the default sea. */
-  --accent: var(--u-accent-d, #108283);
-  --accent-hover: var(--u-hover-d, #007676);
-  --accent-press: var(--u-press-d, #006969);
+  /* The fallbacks are what accent.ts derives from the default Deep Well. A first
+     run has nothing stored, so no --u-* property is ever set and these are what draw. */
+  --accent: var(--u-accent-d, #3478b7);
+  --accent-hover: var(--u-hover-d, #276caa);
+  --accent-press: var(--u-press-d, #18619d);
   --on-accent: var(--u-on-d, #ffffff);
-  --accent-text: var(--u-text-d, #4fb0b0);
+  --accent-text: var(--u-text-d, #60a4e5);
   --accent-soft: color-mix(in oklab, var(--accent) 16%, transparent);
   --accent-line: color-mix(in oklab, var(--accent) 50%, transparent);
   /* Solid, and at least 4.5:1 on every surface. The old ring was the accent at
@@ -139,11 +140,11 @@
   --border-2: rgba(0, 0, 0, 0.13);
   --border-3: rgba(0, 0, 0, 0.24);
 
-  --accent: var(--u-accent-l, #067f7f);
-  --accent-hover: var(--u-hover-l, #007272);
-  --accent-press: var(--u-press-l, #006566);
+  --accent: var(--u-accent-l, #2d72b0);
+  --accent-hover: var(--u-hover-l, #2066a3);
+  --accent-press: var(--u-press-l, #0f5b97);
   --on-accent: var(--u-on-l, #ffffff);
-  --accent-text: var(--u-text-l, #007071);
+  --accent-text: var(--u-text-l, #2268a5);
   --accent-soft: color-mix(in oklab, var(--accent) 10%, transparent);
   --accent-line: color-mix(in oklab, var(--accent) 45%, transparent);
 
@@ -401,8 +402,9 @@ kbd {
   gap: 10px;
   min-width: 0;
 }
-/* The badge (Badge.tsx): a disc in the accent with the mark in its label color,
-   so it stays readable on any accent the user picks. */
+/* The badge (Badge.tsx): a disc in the accent with the shield's rings and boss in
+   its label color, so it stays readable on any accent the user picks. The boss's
+   core is a second accent disc on top. */
 .brand-mark {
   flex: none;
   display: block;
@@ -413,8 +415,17 @@ kbd {
 .badge-mark {
   stroke: var(--on-accent);
 }
-.badge-eye {
+.badge-boss {
   fill: var(--on-accent);
+}
+/* Light theme only: a black outline at the edge. On a white page a pale accent
+   (Amber, Sky) has no edge of its own; on the black page it does. */
+.badge-outline {
+  display: none;
+  stroke: #000;
+}
+:root[data-theme="light"] .badge-outline {
+  display: inline;
 }
 .brand-name {
   font-family: var(--font-display);

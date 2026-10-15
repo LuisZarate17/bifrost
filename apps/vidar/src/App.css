@@ -38,6 +38,12 @@ body,
   border-radius: 10px;
 }
 
+/* Wolf's Bane: Vidar's color, the dark value in packages/ui/src/colors.json (the
+   popup is always dark). Used for Vidar's name and the copy pick. */
+:root {
+  --accent: #e0525e;
+}
+
 header {
   display: flex;
   align-items: baseline;
@@ -46,6 +52,7 @@ header {
 }
 
 .mark {
+  color: var(--accent);
   font-weight: 600;
   letter-spacing: 0.02em;
   opacity: 0.85;
@@ -69,8 +76,8 @@ header {
    of the answer around every time the pick moves, which is the one thing a
    selection marker must not do. */
 .answer > .copy-pick {
-  background: rgba(120, 170, 255, 0.13);
-  box-shadow: inset 2px 0 0 rgba(140, 185, 255, 0.85);
+  background: rgba(224, 82, 94, 0.14);
+  box-shadow: inset 2px 0 0 var(--accent);
   border-radius: 3px;
 }
 
@@ -142,9 +149,28 @@ header {
   font-variant-numeric: tabular-nums;
 }
 
+/* The tag says "Error" in words, so the red is never the only signal. It shares
+   the message's first line rather than taking one of its own: the window is only
+   as tall as its content asks. */
 .error {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
   margin: 0;
   color: #ff9b9b;
+}
+.error-tag {
+  flex: none;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  user-select: none;
+}
+.error pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
   font-size: 11px;
   white-space: pre-wrap;
   user-select: text;
