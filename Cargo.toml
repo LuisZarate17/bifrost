@@ -15,6 +15,7 @@ members = [
     "crates/bench",
     "apps/vidar/src-tauri",
     "apps/mimir/src-tauri",
+    "apps/hugin",
 ]
 
 # What a bare `cargo build` at the root builds: the crates, never the two apps. Building an app
@@ -23,7 +24,10 @@ members = [
 # target/debug/*.exe the Desktop shortcuts open, replacing the working one. That happened to
 # Mimir on 2026-09-24. Apps build with `npm run app:vidar` / `npm run app:mimir`; `--workspace` still
 # reaches everything, so `cargo test --workspace` and `cargo clippy --workspace` are unchanged.
-default-members = ["crates/bifrost-core", "crates/bifrost-cli", "crates/bench"]
+#
+# Hugin is the exception: a plain console app, with no custom-protocol trap, so a bare
+# `cargo build` may build it.
+default-members = ["crates/bifrost-core", "crates/bifrost-cli", "crates/bench", "apps/hugin"]
 
 # evals/fixtures/frametest is the E0502 fixture that C1b and fixcheck.mjs are built
 # around. It is *meant* not to compile, it is built on its own rather than with the

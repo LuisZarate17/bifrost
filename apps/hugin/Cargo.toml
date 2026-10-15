@@ -1,0 +1,13 @@
+[package]
+name = "hugin"
+version = "0.1.0"
+description = "A terminal agent that works in a folder. Every token stays on this machine."
+authors = ["LuisZarate17"]
+edition = "2024"
+
+# A plain console app: no Tauri, no window. The model, the tools and the turn loop are
+# bifrost-core's, the same ones Mimir runs; this crate is only what a terminal adds.
+
+[dependencies]
+bifrost-core = { path = "../../crates/bifrost-core" }
+serde_json = "1"

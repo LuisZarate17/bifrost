@@ -107,6 +107,12 @@ pub struct Conversation {
     pub updated_at: String,
     #[serde(default)]
     pub messages: Vec<StoredMessage>,
+
+    /// Which app the conversation belongs to. `None` is Mimir's, which is every file
+    /// written before this field existed — so it is left out of the file rather than
+    /// written as `null`, and an old file reads back as Mimir's without a migration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
 }
 
 impl Conversation {
@@ -118,7 +124,14 @@ impl Conversation {
             created_at: now.clone(),
             updated_at: now,
             messages: Vec::new(),
+            app: None,
         }
+    }
+
+    /// A new conversation that belongs to `app` (Hugin's is `"hugin"`), so Mimir's
+    /// sidebar does not list it.
+    pub fn for_app(app: &str) -> Self {
+        Self { app: Some(app.to_string()), ..Self::new() }
     }
 
     /// A title taken from the first thing asked, when none was set by hand.
@@ -184,24 +197,39 @@ fn path_for(id: &str) -> Option<PathBuf> {
     Some(dir()?.join(format!("{id}.json")))
 }
 
-/// Every conversation, newest first.
+/// Mimir's conversations, newest first: those that belong to no other app.
 ///
 /// **A file that will not parse is skipped, not fatal.** One bad file should
 /// cost you that conversation, not the list.
 pub fn list() -> Result<Vec<Summary>, String> {
-    let Some(dir) = dir() else {
-        return Ok(Vec::new());
-    };
+    list_where(None)
+}
+
+/// The conversations that belong to `app`, newest first, skipped the same way.
+pub fn list_for(app: &str) -> Result<Vec<Summary>, String> {
+    list_where(Some(app))
+}
+
+fn list_where(app: Option<&str>) -> Result<Vec<Summary>, String> {
+    match dir() {
+        Some(dir) => list_in(&dir, app),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// [`list`] and [`list_for`] over a given folder, so tests need not touch `%APPDATA%`.
+fn list_in(dir: &std::path::Path, app: Option<&str>) -> Result<Vec<Summary>, String> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
 
-    let entries = std::fs::read_dir(&dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("reading {}: {e}", dir.display()))?;
     let mut out: Vec<Summary> = entries
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
         .filter_map(|e| std::fs::read_to_string(e.path()).ok())
         .filter_map(|text| serde_json::from_str::<Conversation>(&text).ok())
+        .filter(|c| c.app.as_deref() == app)
         .map(|c| Summary {
             title: c.display_title(),
             id: c.id,
@@ -428,6 +456,49 @@ mod tests {
         let t = c.display_title();
         assert_eq!(t.chars().count(), 61); // 60 plus the ellipsis
         assert!(t.ends_with('…'));
+    }
+
+    /// A conversation file written into `dir`, as `save` would write it.
+    fn write_into(dir: &std::path::Path, c: &Conversation) {
+        std::fs::write(dir.join(format!("{}.json", c.id)), serde_json::to_string(c).unwrap()).unwrap();
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("bifrost-store-{name}-{}", new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_old_file_belongs_to_mimir_and_says_nothing_of_it() {
+        let c: Conversation = serde_json::from_str(
+            r#"{"id":"a","title":"t","created_at":"x","updated_at":"y"}"#,
+        )
+        .unwrap();
+        assert_eq!(c.app, None);
+        assert!(!serde_json::to_string(&c).unwrap().contains("app"));
+        let h = Conversation::for_app("hugin");
+        assert!(serde_json::to_string(&h).unwrap().contains(r#""app":"hugin""#));
+    }
+
+    #[test]
+    fn each_list_holds_only_its_own_apps_conversations() {
+        let dir = scratch("lists");
+        let (mut mimir, mut hugin, mut other) =
+            (Conversation::new(), Conversation::for_app("hugin"), Conversation::for_app("other"));
+        mimir.title = "mine".into();
+        hugin.title = "hers".into();
+        other.title = "theirs".into();
+        for c in [&mimir, &hugin, &other] {
+            write_into(&dir, c);
+        }
+        std::fs::write(dir.join("junk.json"), "not json").unwrap();
+
+        let titles = |v: Vec<Summary>| v.into_iter().map(|s| s.title).collect::<Vec<_>>();
+        assert_eq!(titles(list_in(&dir, None).unwrap()), ["mine"]);
+        assert_eq!(titles(list_in(&dir, Some("hugin")).unwrap()), ["hers"]);
+        assert!(list_in(&dir.join("missing"), Some("hugin")).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

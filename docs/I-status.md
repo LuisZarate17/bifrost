@@ -11,8 +11,8 @@ every chunk**, alongside its results doc. Last updated 2026-10-15, after I1.
 | | I0b | Colors and badges: Wolf's Bane, Deep Well, Raven Violet; three badges and one mark | ✅ Done · local (e0fd5ed) | A shield per app and a three-piece Bifrost mark, outlined on light; every accent shade 4.5:1 or better — [I0b](results/I0b-results.md) |
 | | Gate 0 | Everything works under the new names | ✅ Passed | Every I0 and I0b check proven by screenshots of the real apps; pinning to the taskbar is left to you — [proof](https://claude.ai/artifact/SHLwWaH9PUycuynoG1fnR3) |
 | **1. One engine** | I1 | The turn loop moves from Mimir's webview into bifrost-core | ✅ Done · local (c2eb5c9, 478273d, 692b1a1) | Mimir and every probe run one Rust loop; e2e 9/9; taskprobe 30/48, findprobe 50/54, fixprobe identical to the old loop — [I1](results/I1-results.md) |
-| | Gate 1 | Mimir unchanged on the shared loop | ⏳ Next: a day of real use ([I-testing.md](I-testing.md) §I1) | |
-| **2. Hugin** | I2 | The terminal | Not started | |
+| | Gate 1 | Mimir unchanged on the shared loop | ⏭ Skipped, 2026-10-15 — its day of real use stays open in [I-testing.md](I-testing.md) §I1 | The measured half passed with I1 |
+| **2. Hugin** | I2 | The terminal | ⏳ In progress | |
 | | I3 | Shell commands | Not started | |
 | | I4 | Launching: Ctrl+Alt+H, PATH, the last folder | Not started | |
 | | I5 | Print mode for Claude Code (`hugin -p`) | Not started | |
