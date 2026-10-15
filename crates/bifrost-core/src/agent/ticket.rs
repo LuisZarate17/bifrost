@@ -16,7 +16,7 @@ pub struct PendingCall {
     pub path: String,
     /// A single-use ticket for exactly this call.
     ///
-    /// **Without it `run_tool` would be a filesystem operation that takes
+    /// **Without it `run_approved` would be a filesystem operation that takes
     /// arguments.** The approval would live entirely in the frontend, and
     /// `tools.rs` would be promising a guarantee Rust could not enforce. With
     /// it, the only thing the webview can do is redeem what it was shown.
@@ -47,7 +47,7 @@ pub struct PendingCall {
     pub size: Option<u64>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffView {
     pub hunks: Vec<edit::Hunk>,
@@ -59,7 +59,7 @@ pub struct DiffView {
 /// A call that is waiting for a decision.
 ///
 /// **For an edit, the whole plan lives here** — resolved path, exact bytes to
-/// write, the hash of the file it was planned against. `run_tool` redeems the
+/// write, the hash of the file it was planned against. `run_approved` redeems the
 /// ticket and applies *this*. Nothing about the edit is taken back from the
 /// webview, so a compromised or buggy page cannot approve one thing and write
 /// another. **For a check, the folder and the exact argv live here**, for the
@@ -89,7 +89,7 @@ pub fn plan_name(p: &edit::Plan) -> &'static str {
 pub enum Payload {
     Edit(edit::Plan),
     /// A read that asked: the file the card showed, as `read_target` resolved
-    /// it, and the lines the card showed. `run_tool` opens **this**, never a path
+    /// it, and the lines the card showed. `run_approved` opens **this**, never a path
     /// or a range from the webview — so an approved `src/a.rs` cannot become a
     /// read of something else, nor lines 1–50 a read of the whole file.
     Read { real: std::path::PathBuf, range: Option<tools::Lines> },

@@ -7,11 +7,19 @@ use crate::compact;
 /// The previous round of a tool turn, as the webview remembers it: how many
 /// characters were sent and how many tokens Ollama counted for them. It is what
 /// turns "characters" into "tokens" for the next round's budget.
-#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Calibration {
     chars: u64,
     tokens: u32,
+}
+
+impl Calibration {
+    /// A round's own numbers: the characters it sent and the tokens Ollama counted
+    /// for them.
+    pub fn new(chars: u64, tokens: u32) -> Self {
+        Self { chars, tokens }
+    }
 }
 
 /// What [`compact_for_send`] did, for the reply to carry.
@@ -28,13 +36,24 @@ pub struct Sent {
 }
 
 impl Sent {
-    pub fn into_fields(self) -> serde_json::Map<String, serde_json::Value> {
-        let mut m = serde_json::Map::new();
-        m.insert("promptChars".into(), self.prompt_chars.into());
-        m.insert("setAside".into(), self.set_aside.into());
-        m.insert("setAsideMessages".into(), serde_json::to_value(self.replacements).unwrap_or_default());
-        m.insert("fits".into(), self.fits.into());
-        m
+    /// Characters actually sent, after anything was set aside.
+    pub fn prompt_chars(&self) -> u64 {
+        self.prompt_chars
+    }
+
+    /// Indices into the frontend's conversation, oldest first.
+    pub fn set_aside(&self) -> &[usize] {
+        &self.set_aside
+    }
+
+    /// What each of those messages now is, in the same order.
+    pub fn replacements(&self) -> &[Message] {
+        &self.replacements
+    }
+
+    /// Whether the prompt fits the context once those were set aside.
+    pub fn fits(&self) -> bool {
+        self.fits
     }
 }
 

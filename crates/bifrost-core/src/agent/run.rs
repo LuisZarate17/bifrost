@@ -1,11 +1,14 @@
 //! Running a call: a read, a listing or a search, whether the card was approved
 //! or the call needed no approval. What a run produced is a [`Ran`].
+//!
+//! [`run_approved`] runs a call somebody approved, by spending its ticket; the
+//! other functions are what it and the automatic calls share.
 
 use serde::Serialize;
 
 use super::stop::stopped;
-use super::ticket::Find;
-use crate::{edit, search, tools};
+use super::ticket::{plan_name, redeem, Find, Payload};
+use crate::{check, edit, search, tools};
 
 /// What running an approved call produced.
 #[derive(Serialize)]
@@ -90,13 +93,104 @@ pub fn run_auto(
     }
 }
 
+/// Run a call somebody has just approved.
+///
+/// Redeems the ticket and runs **what the ticket holds** — for a read, the file
+/// the card showed; for an edit, the plan computed when the diff was shown; for a
+/// check, the folder and argv the card showed. The caller names the call it
+/// approved; it never supplies what to write or what to run.
+///
+/// **A check can be stopped.** Its ticket holds a number from the same counter as
+/// a streamed answer, so the Stop button that ends an answer ends a check too —
+/// including one stopped before it had started.
+///
+/// Blocking: an edit waits for [`edits_lock`], and a check runs to its end.
+pub fn run_approved(name: &str, path: &str, token: &str) -> Result<Ran, String> {
+    // Before anything touches the disk. The ticket was issued when the UI was
+    // shown this exact call, and is spent here - so what runs is what was
+    // approved, and it runs once.
+    let payload = redeem(token, name, path)?;
+    match (name, payload) {
+        ("read_file", Some(Payload::Read { real, range })) => Ok(run_read(&real, range)),
+        ("edit_file" | "create_file" | "delete_file" | "move_file", Some(Payload::Edit(plan))) => {
+            if plan_name(&plan) != name {
+                return Err(format!("this approval was for {}, not {name}", plan_name(&plan)));
+            }
+            let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
+            let _edits = edits_lock();
+            // A file changed since the diff was shown is refused, not written:
+            // the model is told, and can read it again.
+            Ok(match edit::apply(&plan, &backups) {
+                Ok(done) => {
+                    let said = tools::applied_message(&done);
+                    Ran { undo: Some(done.id), ..Ran::text(said) }
+                }
+                Err(e) => Ran::text(format!("error: {e}")),
+            })
+        }
+        ("run_check", Some(Payload::Check { root, argv, stop })) => {
+            if stopped(stop) {
+                return Ok(Ran {
+                    result: format!("`{}` was stopped by the user before it ran.", check::label(&argv)),
+                    ok: false,
+                    stopped: true,
+                    undo: None,
+                });
+            }
+            let root = std::path::PathBuf::from(root);
+            Ok(match check::run(&root, &argv, check::timeout_for(&argv), &[], || stopped(stop)) {
+                Ok(o) => Ran {
+                    result: check::for_model(&argv, &o),
+                    ok: o.passed(),
+                    stopped: o.ended == check::Ended::Stopped,
+                    undo: None,
+                },
+                Err(e) => Ran::text(format!("error: {e}")),
+            })
+        }
+        ("list_files" | "search", Some(Payload::Find { root, find, stop })) => Ok(run_find(&root, &find, stop)),
+        (other, _) => Err(format!("no such tool: {other}")),
+    }
+}
+
+/// Every write to a project file — an edit, an undo, a turn's undo — takes this
+/// first, so two of them never touch the same file at once. Two undos from two
+/// clicks, or an undo while the next edit is being applied, would otherwise each
+/// pass their own "is the file still what I expect" check and then write over
+/// one another. It lives with the code that applies an approved edit rather than
+/// in `edit.rs` because the tests and probes there apply edits in parallel on
+/// purpose.
+static EDITS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A panic while holding the lock leaves nothing half-written that the next
+/// holder's own checks would not catch, so a poisoned lock is simply taken.
+pub fn edits_lock() -> std::sync::MutexGuard<'static, ()> {
+    EDITS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agent::stop::{next_stop, STREAMS_STOPPED};
     use std::sync::atomic::Ordering;
 
-    /// Run as `run_tool` runs it, the ticket's range is what is read.
+    /// The lock is what keeps two writers off one file, so a second taker must
+    /// wait while the first holds it, and a panic in a holder must not wedge it.
+    #[test]
+    fn the_edits_lock_is_exclusive_and_survives_a_panicking_holder() {
+        {
+            let _held = edits_lock();
+            assert!(EDITS.try_lock().is_err(), "a second writer got in while the lock was held");
+        }
+        let _ = std::thread::spawn(|| {
+            let _held = edits_lock();
+            panic!("a writer died holding the lock");
+        })
+        .join();
+        drop(edits_lock());
+    }
+
+    /// Run as `run_approved` runs it, the ticket's range is what is read.
     #[test]
     fn run_read_gives_the_ticket_range_and_the_whole_file_with_none() {
         let dir = std::env::temp_dir().join(format!("mimir-range-{}", std::process::id()));

@@ -11,21 +11,31 @@
 //!   Stop that reaches every number taken so far
 //! - [`ticket`] — the single-use approval for one call, and the exact plan, file
 //!   or command it hands back when spent
-//! - [`run`] — running a call, for an approved card and for an automatic call alike
+//! - [`run`] — running a call, for an approved card and for an automatic call alike,
+//!   and the lock every write to the folder takes
 //! - [`send`] — setting old tool results aside from the prompt before it is sent,
 //!   and saying which
+//! - [`round`] — one request to the model, and what it wants sorted into a
+//!   [`round::Reply`]: an answer, a call to ask about, one already run, or one
+//!   turned away
+//! - [`turn`] — the loop over rounds, behind a [`turn::Frontend`] that shows a card,
+//!   asks for a decision and says whether Stop was pressed
 //! - [`workspace`] — the project folder the config names, if it still exists
 //!
-//! **Moved here unchanged (I1).** The first commit of I1 lifted these out of
-//! Mimir's backend, `apps/mimir/src-tauri/src/lib.rs`, with no change to what they
-//! do or to the JSON the webview sees. The loop itself comes next: `run_turn`,
-//! behind a `Frontend` trait that streams text, shows a card, asks for a decision
-//! and says whether Stop was pressed.
+//! **Moved here unchanged (I1).** The first commit of I1 lifted the plain pieces out
+//! of Mimir's backend, `apps/mimir/src-tauri/src/lib.rs`, with no change to what
+//! they do or to the JSON the webview sees. [`round`] and [`turn`] are the second
+//! commit's: the body of Mimir's old `ask_with_tools` command without the Tauri, and
+//! the loop `App.tsx` ran over it. Mimir runs every tool turn through
+//! [`turn::run_turn`] now, its window only showing what the loop says; 2c moves the
+//! probes onto it.
 
+pub mod round;
 pub mod run;
 pub mod send;
 pub mod stop;
 pub mod ticket;
+pub mod turn;
 
 use crate::{config, edit};
 

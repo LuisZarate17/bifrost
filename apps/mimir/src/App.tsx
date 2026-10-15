@@ -139,18 +139,6 @@ type Folder = {
   notes?: { name: string; on: boolean; cut: boolean } | null;
 };
 
-/** Matches bifrost_core::tools::MAX_ROUNDS. G7 measured a two-file change taking
- *  five rounds, one more than G6's old bound of four allowed. A call that costs no
- *  round (an accepted task-list update, an automatic read, listing or search that
- *  succeeded) does not count toward it. */
-const MAX_ROUNDS = 10;
-
-/** Matches bifrost_core::tools::MAX_FREE_CALLS. The calls that cost no round a turn
- *  may make on top of MAX_ROUNDS: the loop below stops at MAX_ROUNDS + this many
- *  requests whatever Rust says. Not a budget to use up but the ceiling that stops
- *  a model reading in circles. */
-const MAX_FREE_CALLS = 20;
-
 /** The list as the model wrote it, one step to a line: what a replay sends. */
 export function planText(items: PlanItem[]): string {
   return items
@@ -230,15 +218,10 @@ const ARM_MIN_MS = 400;
 /** The "Undo N changes?" question lapses after this long. */
 const ARM_MAX_MS = 4000;
 
-/** What the model is told when you say no, in terms of what it asked for. */
-function refusalFor(name: string, path: string): string {
-  if (name === "delete_file") return `The user declined to delete ${path}. Nothing was deleted.`;
-  if (name === "move_file") return `The user declined to move ${path}. Nothing was moved.`;
-  if (isChange(name)) return `The user declined this change to ${path}. Nothing was written.`;
-  if (name === "run_check") return `The user declined to run \`${path}\`. Nothing was run.`;
-  if (name === "search" || name === "list_files") return `The user declined to let you ${name === "search" ? "search for" : "list"} ${path}.`;
-  return `The user declined to let you read ${path}.`;
-}
+/** This page's own name, made when it loads. A Stop names the request it stops by
+ *  page and number (`STOPPED_REQUEST` in lib.rs), and a reload starts the numbers
+ *  again, so the page is part of the name. */
+const PAGE = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
 /** The arguments to replay for a call: the model's own, for the calls whose
  *  arguments are what they were about — a check's, a search's. Not an edit's,
@@ -383,48 +366,19 @@ function Thumbs({ names }: { names: string[] }) {
   );
 }
 
-/** What `ask_with_tools` answers with, whichever kind it is. */
-type ToolReply = (
-  | { kind: "answer"; content: string; evalCount: number }
-  | {
-      kind: "call";
-      call: {
-        name: string;
-        path: string;
-        token: string;
-        diff?: DiffView;
-        range?: LineRange;
-        changedBuildFiles?: string[];
-        to?: string;
-        folders?: string[];
-        size?: number;
-      };
-      rawCall: Record<string, unknown>;
-    }
-  | { kind: "rejected"; name: string; path: string; error: string; rawCall: Record<string, unknown> }
-  | {
-      kind: "auto";
-      name: string;
-      path: string;
-      range?: LineRange | null;
-      result: string;
-      ok: boolean;
-      stopped: boolean;
-      /** Only for `update_plan`: the list, parsed. */
-      plan?: PlanItem[];
-      rawCall: Record<string, unknown>;
-    }
-  | { kind: "stuck"; error: string }
-) & {
-  // Every reply says what the prompt it answered cost, and which of the messages
-  // it was sent were set aside to fit (Rust did the setting aside;
-  // `setAsideMessages` is what they now are).
-  promptEvalCount: number;
-  promptChars: number;
-  setAside: number[];
-  setAsideMessages: Array<Record<string, unknown>>;
-  fits: boolean;
-};
+/** A tool card as Rust sends it: the thread's tool entry, without its `kind`. */
+type ToolEntry = Extract<Entry, { kind: "tool" }>;
+
+/** What a tool turn sends up as it happens (`TurnEvent` in lib.rs), in order. */
+type TurnEvent =
+  | { event: "status"; data: { text: string } }
+  | { event: "round"; data: { promptEvalCount: number; promptChars: number; setAside: number; fits: boolean } }
+  | { event: "answer"; data: { content: string; promptEvalCount: number; evalCount: number } }
+  | { event: "error"; data: { text: string } }
+  | { event: "card"; data: { id: number; card: Omit<ToolEntry, "kind"> } }
+  | { event: "update"; data: { id: number; patch: Partial<ToolEntry> } }
+  | { event: "save" }
+  | { event: "end" };
 
 function App() {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -485,10 +439,11 @@ function App() {
   /** Bumped by each send and by Stop. A request whose number is no longer the
    *  current one has been stopped, and anything it still receives is dropped. */
   const activeRequest = useRef(0);
-  /** Resolved by the Allow/Deny buttons; the tool loop awaits it. Bound to its
-   *  card by `at`, the card's position in the thread: a button on any other card
-   *  does nothing, so an old card can never answer a later request's call. */
-  const pendingDecision = useRef<{ at: number; resolve: (ok: boolean) => void } | null>(null);
+  /** The card a tool turn is waiting on: its position in the thread (`at`) and the
+   *  id Rust gave it. The Allow/Deny buttons answer it through `decide`, and only
+   *  from that card: a button on any other one does nothing, so an old card can never
+   *  answer a later request's call. */
+  const pendingCard = useRef<{ at: number; id: number } | null>(null);
   /** The live thread, for saving after a turn completes.
    *
    *  persist() used to be called from inside a setEntries updater to read the
@@ -1079,312 +1034,152 @@ function App() {
   );
 
   /**
-   * The tool loop: ask, show what was requested, wait, run, continue.
+   * One tool turn: the loop in `bifrost_core::agent::turn`, run by Rust and shown
+   * here — the same loop Hugin and the probes run.
    *
-   * Deliberately **not** streamed. A tool call arrives whole or not at all —
-   * you cannot act on half of one — and the loop needs the complete `tool_calls`
-   * array before it can do anything. The conversational turns still stream.
+   * Rust asks the model, shows each call as a card, waits on a card that needs you,
+   * runs what you allow and sends it back, round after round, until the model
+   * answers, a bound is hit or Stop is pressed, and says each thing as it happens.
+   * This applies what it says, **strictly in order**, by the rules the loop kept when
+   * it lived here: only this turn's thread gets its cards, an answer lands only while
+   * the turn is live, and a Stop that lands with a card on screen saves it.
+   *
+   * Deliberately **not** streamed. A tool call arrives whole or not at all — you
+   * cannot act on half of one. The conversational turns still stream.
    */
-  const askWithTools = useCallback(
-    async (history: Array<Record<string, unknown>>, live: () => boolean) => {
-      let convo = [...history];
-      // The previous round's own numbers, so the next round's budget counts
-      // tokens from what Ollama measured instead of guessing a ratio.
-      let calibration: { chars: number; tokens: number } | null = lastCalibration.current;
-      let setAside = 0;
-      // The thread this turn belongs to. Once Stop has freed the window,
-      // another conversation can be opened in its place.
+  const runTurn = useCallback(
+    async (history: Array<Record<string, unknown>>, live: () => boolean, request: number) => {
+      // Stopped while the request was being put together — storing an image can take
+      // a moment: Rust never hears of it. Nothing below waits before `run_turn` is
+      // sent, so a Stop from here on reaches it, by number if not in time.
+      if (!live()) return;
+      // The thread this turn belongs to. Once Stop has freed the window, another
+      // conversation can be opened in its place.
       const gen = threadGen.current;
+      const mine = () => threadGen.current === gen;
+      let setAside = 0;
+      // Rust's card ids → positions in this thread. A card is placed by position,
+      // not as "the last entry": a result that lands after Stop can find a new
+      // request's turns after it.
+      const at = new Map<number, number>();
+      // Everything each card has been told since it went up, shown or not, and the
+      // last card anything was said about: a Save after Stop, with another
+      // conversation open, puts that card's into the stopped thread's own file.
+      const patches = new Map<number, Partial<ToolEntry>>();
+      let last: number | null = null;
+      const patchAt = (all: Entry[], index: number, patch: Partial<ToolEntry>) =>
+        all.map((e, i) => (i === index && e.kind === "tool" ? { ...e, ...patch } : e));
 
-      // Rust starts Ollama itself before the first round; this only says why that
-      // round is waiting, the way `send`'s path does.
-      if (!(await invoke<boolean>("ollama_running"))) {
-        if (!live()) return;
-        setStatus("Starting Ollama…");
-      }
-
-      // A bound, not a timeout. Without one, a model that keeps asking loops
-      // forever and the only symptom is the app getting warm.
-      //
-      // **A call that cannot change anything is not a round** (H10, R-03): an
-      // accepted task-list update, and an automatic read, listing or search that
-      // succeeded, get their round back in the `auto` branch below. A failed
-      // automatic call, a rejected one and any call that asked still count.
-      // `requests` counts everything and stops the loop at MAX_ROUNDS +
-      // MAX_FREE_CALLS whatever Rust says.
-      //
-      // When the loop ends at either bound the model is asked once more with no
-      // tools, so the turn ends in its own words, and the banner says which bound
-      // it was and whether the last step ran.
-      let step = 0;
-      let requests = 0;
-      // Whether the last call actually ran: an automatic call that did, or an
-      // approved one that did. A check that found errors still ran.
-      let lastRan = false;
-      const addAnswer = (out: { content: string; promptEvalCount: number; evalCount: number }) => {
-        setEntries((prev) => {
-          const next: Entry[] = [
-            ...prev,
-            {
-              kind: "turn",
-              role: "assistant",
-              content: out.content,
-              ...(model ? { model } : {}),
-            },
-          ];
-          entriesRef.current = next;
-          return next;
-        });
-        setStats(`${out.promptEvalCount} in · ${out.evalCount} out · tool turn`);
-      };
-      for (; step < MAX_ROUNDS && requests < MAX_ROUNDS + MAX_FREE_CALLS; step++, requests++) {
-        // Stopped: a tool round is not streamed, so it cannot be cut short, but
-        // nothing after the stop is shown or acted on.
-        if (!live()) return;
-        const out: ToolReply = await invoke<ToolReply>("ask_with_tools", { messages: convo, model, calibration });
-        // The server is up now (if "Starting Ollama…" was showing, it is done).
-        setStatus("");
-        // `convo` must end up exactly what was sent, or the next round's prefix
-        // differs and Ollama's prompt cache is lost.
-        out.setAside.forEach((at, k) => {
-          convo[at] = out.setAsideMessages[k];
-        });
-        setAside += out.setAside.length;
-        // Only for the thread this turn belongs to: after Stop another
-        // conversation can be open, and its meter is not this turn's.
-        if (threadGen.current === gen) {
-          if (out.promptEvalCount > 0) {
-            calibration = { chars: out.promptChars, tokens: out.promptEvalCount };
-            lastCalibration.current = calibration;
-            setSpent(out.promptEvalCount);
-          }
-          // Every round, so a round that did not fit and a later one that does
-          // (the first round guesses; the next is measured) clears the warning.
-          setSqueeze({ aside: setAside, fits: out.fits });
-        }
-
-        // An automatic call has already run by the time it comes back, so Stop
-        // pressed meanwhile still gets its card — the branch below shows and
-        // saves it, and sends nothing on — as long as this thread is on screen.
-        if (!live() && !(out.kind === "auto" && threadGen.current === gen)) return;
-
-        if (out.kind === "answer") {
-          addAnswer(out);
-          return;
-        }
-
-        if (out.kind === "stuck") {
-          // The third identical failure. The file has not changed, so another
-          // try cannot go differently — better to stop and say so.
-          setError(out.error);
-          return;
-        }
-
-        if (out.kind === "rejected") {
-          // It could never have worked — an edit whose text is not in the file,
-          // say. Not your decision to make, so it goes straight back to the
-          // model with the reason, and is shown here so nothing happens unseen.
-          setEntries((prev) => {
-            const next: Entry[] = [
-              ...prev,
-              { kind: "tool", name: out.name, path: out.path, state: "rejected", error: out.error },
-            ];
-            entriesRef.current = next;
-            return next;
-          });
-          convo = [
-            ...convo,
-            { role: "assistant", content: "", tool_calls: [out.rawCall] },
-            { role: "tool", content: out.error, tool_name: out.name },
-          ];
-          lastRan = false;
-          continue;
-        }
-
-        if (out.kind === "auto") {
-          // Already run, in Rust, because the rule says a read, listing or search
-          // inside the project folder needs no approval. Shown as a ran card
-          // marked `auto` so nothing happens unseen, and sent back to the model
-          // exactly as an approved call would be.
-          const { name, path, range, result, ok, stopped, plan } = out;
-          const args =
-            (out.rawCall as { function?: { arguments?: Record<string, unknown> } }).function?.arguments ?? {};
-          await settle((prev) => [
-            ...prev,
-            {
-              kind: "tool",
-              name,
-              path,
-              args,
-              state: stopped ? "stopped" : "ran",
-              ok,
-              result,
-              auto: true,
-              ...(range ? { range } : {}),
-              ...(plan ? { plan } : {}),
-            },
-          ]);
-          // Stopped while the card went up: Stop's own save may have missed it,
-          // so the thread is saved again as it now stands — behind that save, so
-          // the two cannot race. The result is not sent to the model.
-          if (!live()) {
-            await saving.current;
-            if (threadGen.current === gen) await persist(await settle((a) => a), convoIdRef.current);
+      const handle = async (m: TurnEvent) => {
+        switch (m.event) {
+          case "status":
+            // Cleared after every round; a wait is named only while the turn is live.
+            if (!m.data.text || live()) setStatus(m.data.text);
+            return;
+          case "round": {
+            // Only for the thread this turn belongs to: after Stop another
+            // conversation can be open, and its meter is not this turn's.
+            if (!mine()) return;
+            const d = m.data;
+            if (d.promptEvalCount > 0) {
+              // The next turn's first round counts tokens from what Ollama
+              // measured instead of guessing a ratio.
+              lastCalibration.current = { chars: d.promptChars, tokens: d.promptEvalCount };
+              setSpent(d.promptEvalCount);
+            }
+            // Every round, so a round that did not fit and a later one that does
+            // (the first round guesses; the next is measured) clears the warning.
+            setAside += d.setAside;
+            setSqueeze({ aside: setAside, fits: d.fits });
             return;
           }
-          convo = [
-            ...convo,
-            { role: "assistant", content: "", tool_calls: [out.rawCall] },
-            { role: "tool", content: result, tool_name: name },
-          ];
-          // Free when it worked (a search with no matches worked). `ok` is Rust's own
-          // word for it, the same test the probe's `free_round` makes.
-          lastRan = ok;
-          if (ok) step--;
-          continue;
-        }
-
-        // Show exactly what would happen — the path for a read, the diff for an
-        // edit, the command for a check — and stop. Nothing is read, written or
-        // run until it is approved, and what is approved is what runs: the
-        // ticket carries the whole plan.
-        const { name, path, token, diff, range, changedBuildFiles, to, folders, size } = out.call;
-        // Always an object: a call with no arguments at all (a check, say) is
-        // replayed as `{}`, not rebuilt as `{path}`.
-        const args =
-          (out.rawCall as { function?: { arguments?: Record<string, unknown> } }).function?.arguments ?? {};
-        const card: Entry = {
-          kind: "tool",
-          name,
-          path,
-          state: "pending",
-          args,
-          ...(diff ? { diff } : {}),
-          ...(range ? { range } : {}),
-          ...(changedBuildFiles?.length ? { changedBuildFiles } : {}),
-          ...(to ? { to } : {}),
-          ...(folders?.length ? { folders } : {}),
-          ...(size != null ? { size } : {}),
-        };
-        // The card is updated by its position, not as "the last entry": a
-        // result that lands after Stop can find a new request's turns after it.
-        // And only while its own thread is on screen — the same position in a
-        // conversation opened since is someone else's card.
-        const at = (await settle((prev) => [...prev, card])).length - 1;
-        type Patch = Partial<Extract<Entry, { kind: "tool" }>>;
-        const patchAt = (all: Entry[], patch: Patch) =>
-          all.map((e, i) => (i === at && e.kind === "tool" ? { ...e, ...patch } : e));
-        const update = (patch: Patch) =>
-          threadGen.current === gen ? settle((prev) => patchAt(prev, patch)) : Promise.resolve(entriesRef.current);
-
-        // Stop pressed while the card was going up: `stop()` found no resolver to
-        // answer, so waiting here would leave a live card wired to the next request.
-        if (!live()) {
-          const all = await update({ state: "stopped" });
-          await saving.current;
-          if (threadGen.current === gen) await persist(all, convoIdRef.current);
-          return;
-        }
-        const approved = await new Promise<boolean>((resolve) => {
-          pendingDecision.current = { at, resolve };
-        });
-        if (pendingDecision.current?.at === at) pendingDecision.current = null;
-
-        if (!approved) {
-          await update({ state: "denied" });
-          // The model is told, rather than left waiting on a call that silently
-          // never happened. The assistant turn that asked has to go back too, or
-          // the refusal answers a question it cannot see itself having asked.
-          convo = [
-            ...convo,
-            out.rawCall
-              ? { role: "assistant", content: "", tool_calls: [out.rawCall] }
-              : { role: "assistant", content: "" },
-            { role: "tool", content: refusalFor(name, path), tool_name: name },
-          ];
-          lastRan = false;
-          continue;
-        }
-
-        // Stopped between Allow and here: nothing has run, and nothing will.
-        if (!live()) {
-          await update({ state: "stopped" });
-          return;
-        }
-        // The buttons go at once. A check can take minutes, and a card still
-        // offering Allow would invite a second click on a spent ticket.
-        await update({ state: "running" });
-        let ran: { result: string; ok: boolean; stopped: boolean; undo?: string };
-        try {
-          ran = await invoke("run_tool", { name, path, token });
-        } catch (e) {
-          // It could not be run at all. The card says so rather than spinning.
-          await update({ state: "failed", ok: false, error: String(e) });
-          throw e;
-        }
-        // An edit refused at the last moment — the file changed after the diff
-        // was shown — is failed: nothing was written. A check that finds errors
-        // is not: it ran, and `ok` says it did not pass.
-        const failed = isChange(name) && !ran.ok;
-        const patch: Patch = {
-          state: ran.stopped ? "stopped" : failed ? "failed" : "ran",
-          ok: ran.ok,
-          result: ran.result,
-          ...(failed ? { error: ran.result } : {}),
-          ...(ran.undo ? { undo: ran.undo } : {}),
-        };
-
-        // Stopped while it ran. What is left is saving the result — an edit
-        // that was written has an undo handle worth keeping — behind the save
-        // Stop already started, so the two cannot race into two files.
-        if (!live()) {
-          await saving.current;
-          if (threadGen.current === gen) {
-            // Still on screen: the card shows it, and the thread is saved as
-            // it now stands.
-            await persist(await update(patch), convoIdRef.current);
-          } else if (stopSave.current?.gen === gen) {
-            // Another conversation is open. It is not touched; the stopped one
-            // is saved again, as Stop left it plus this result, to its own file.
-            const snap = stopSave.current;
-            const id = await snap.saved;
-            if (id) await persist(patchAt(snap.entries, patch), id, false);
+          case "answer": {
+            if (!live() || !mine()) return;
+            const d = m.data;
+            await settle((prev) => [
+              ...prev,
+              { kind: "turn", role: "assistant", content: d.content, ...(model ? { model } : {}) },
+            ]);
+            setStats(`${d.promptEvalCount} in · ${d.evalCount} out · tool turn`);
+            return;
           }
-          return;
+          case "error":
+            if (live()) setError(m.data.text);
+            return;
+          case "card": {
+            // Only while its own thread is on screen: the same position in a
+            // conversation opened since is someone else's.
+            const { id, card } = m.data;
+            last = id;
+            if (!mine()) return;
+            const index = (await settle((prev) => [...prev, { kind: "tool", ...card }])).length - 1;
+            at.set(id, index);
+            if (card.state === "pending") pendingCard.current = { at: index, id };
+            return;
+          }
+          case "update": {
+            const { id, patch } = m.data;
+            // Answered, stopped or under way: its buttons go at once. A check can take
+            // minutes, and a card still offering Allow would invite a second click.
+            if (pendingCard.current?.id === id && patch.state && patch.state !== "pending") pendingCard.current = null;
+            patches.set(id, { ...(patches.get(id) ?? {}), ...patch });
+            last = id;
+            const index = at.get(id);
+            if (mine() && index !== undefined) await settle((prev) => patchAt(prev, index, patch));
+            return;
+          }
+          case "save": {
+            // Stopped with a card on screen: Stop's own save may have missed it, so
+            // the thread is saved again as it now stands — behind that save, so the
+            // two cannot race into two files.
+            await saving.current;
+            if (mine()) {
+              await persist(await settle((a) => a), convoIdRef.current);
+            } else if (stopSave.current?.gen === gen && last !== null) {
+              // Another conversation is open. It is not touched; the stopped one is
+              // saved again, as Stop left it plus this result, to its own file.
+              const snap = stopSave.current;
+              const index = at.get(last);
+              const patch = patches.get(last);
+              const id = await snap.saved;
+              if (id && index !== undefined && patch) await persist(patchAt(snap.entries, index, patch), id, false);
+            }
+            return;
+          }
+          case "end":
+            return;
         }
-        await update(patch);
+      };
 
-        // assistant(tool_calls) then tool(result) - the pair Ollama expects.
-        // Sending only the result left the model looking at an answer to a
-        // question it could not see itself having asked, so it asked again
-        // until the round bound tripped. The G6 probe did this correctly; the
-        // app did not, which is exactly the gap a probe can hide.
-        convo = [
-          ...convo,
-          out.rawCall
-            ? { role: "assistant", content: "", tool_calls: [out.rawCall] }
-            : { role: "assistant", content: "" },
-          { role: "tool", content: ran.result, tool_name: name },
-        ];
-        lastRan = !failed;
-      }
-
-      // The loop ended at a bound. Say which, and not more than is true.
-      const banner =
-        (step >= MAX_ROUNDS ? `Stopped after ${MAX_ROUNDS} tool rounds.` : `Stopped after ${requests} tool calls.`) +
-        (lastRan ? " The last step ran — check the result." : "");
-      if (!live()) return;
-      // One more request with no tools, so the turn ends in the model's own words.
-      let why = "";
+      // One after another, in the order Rust sent them. `end` comes last of all, so
+      // once it has been handled every event of the turn has.
+      let chain: Promise<void> = Promise.resolve();
+      let ended: () => void = () => {};
+      const end = new Promise<void>((resolve) => (ended = resolve));
+      const onEvent = new Channel<TurnEvent>();
+      onEvent.onmessage = (m) => {
+        chain = chain
+          .then(() => handle(m))
+          .catch((e) => console.error(e))
+          .then(() => {
+            if (m.event === "end") ended();
+          });
+      };
       try {
-        const out = await invoke<ToolReply>("ask_with_tools", { messages: convo, model, calibration, closing: true });
-        if (!live()) return;
-        if (out.kind === "answer" && out.content.trim() && threadGen.current === gen) addAnswer(out);
-      } catch (e) {
-        why = ` The closing request failed: ${String(e)}`;
+        await invoke("run_turn", {
+          messages: history,
+          model,
+          calibration: lastCalibration.current,
+          page: PAGE,
+          request,
+          onEvent,
+        });
+      } finally {
+        // A large event can still be on its way when the command returns. Wait for
+        // `end` — or, should Rust have died without sending it, not for long.
+        await Promise.race([end, new Promise((resolve) => setTimeout(resolve, 3000))]);
+        await chain;
       }
-      if (!live()) return;
-      setError(banner + why);
     },
     [model, settle, persist],
   );
@@ -1444,7 +1239,7 @@ function App() {
       // The tool path is its own turn: not streamed, because a call arrives
       // whole and half of one cannot be acted on.
       try {
-        await askWithTools(await toWire(sendable), live);
+        await runTurn(await toWire(sendable), live, req);
       } catch (e) {
         if (live()) setError(String(e));
       } finally {
@@ -1520,7 +1315,7 @@ function App() {
       });
       await persist(out, convoId);
     }
-  }, [draft, streaming, entries, model, card, planSend, staged, persist, settle, convoId, toolsOn, askWithTools, toWire, disarm, switchingModel]);
+  }, [draft, streaming, entries, model, card, planSend, staged, persist, settle, convoId, toolsOn, runTurn, toWire, disarm, switchingModel]);
 
   /**
    * Stop the answer being written, and keep what has arrived.
@@ -1528,14 +1323,15 @@ function App() {
    * The window lets go at once: the request is marked stale, so late tokens and
    * results are dropped, and the thread is saved as it stands. Rust is told as
    * well, and closes the stream at its next token so the model stops working.
-   * A request waiting on your approval is answered with a refusal, which the
-   * stale tool loop then drops rather than sending.
+   * A tool turn waiting on your approval is answered by Rust with a refusal, which
+   * the stopped loop drops rather than sending. Rust is told which request this
+   * was, so a tool turn whose start has not reached it yet is stopped when it does.
    */
   const stop = useCallback(() => {
     if (!streaming) return;
+    const stopping = activeRequest.current;
     activeRequest.current++;
-    void invoke("stop").catch(() => {});
-    pendingDecision.current?.resolve(false);
+    void invoke("stop", { page: PAGE, request: stopping }).catch(() => {});
 
     const cur = entriesRef.current;
     const out = [...cur];
@@ -1770,8 +1566,14 @@ function App() {
         <ToolCard
           key={"t" + i}
           entry={entry}
-          onAllow={() => pendingDecision.current?.at === i && pendingDecision.current.resolve(true)}
-          onDeny={() => pendingDecision.current?.at === i && pendingDecision.current.resolve(false)}
+          onAllow={() => {
+            const p = pendingCard.current;
+            if (p?.at === i) void invoke("decide", { card: p.id, allow: true }).catch(() => {});
+          }}
+          onDeny={() => {
+            const p = pendingCard.current;
+            if (p?.at === i) void invoke("decide", { card: p.id, allow: false }).catch(() => {});
+          }}
           onUndo={() => entry.undo && void undoEdit(entry.undo)}
           disabled={streaming || undoing !== null}
         />

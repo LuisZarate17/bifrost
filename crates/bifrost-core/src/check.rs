@@ -50,7 +50,7 @@ const POLL: Duration = Duration::from_millis(100);
 /// How long to wait for the last output once the command has ended.
 ///
 /// A grandchild that outlives its parent can hold the pipe open for ever, and
-/// `run_tool` would hang with it. Past this, the output so far is what the
+/// `run_approved` would hang with it. Past this, the output so far is what the
 /// model gets.
 const DRAIN: Duration = Duration::from_secs(2);
 

@@ -100,6 +100,10 @@ names don't, so grep the name if a number has gone stale.
 - **Finding code in the folder** — `search.rs` → `list()`, `search()` (literal, smart-case),
   `validate()` (an impossible call is refused before its card). Skips `.git`, `target`,
   `node_modules`, links; capped at 8 KB
+- **One agent turn, the loop every frontend runs** — `agent/turn.rs` → `run_turn()`, behind a
+  `Frontend` that shows cards, asks for decisions and reports Stop; `agent/round.rs` → `round()`
+  (one request, its reply sorted); `agent/run.rs` → `run_approved()` (redeems a ticket). Mimir's
+  `run_turn` command drives it and its window only shows what it says (I1)
 - **The suite's colors, for the Rust side** — `colors.rs` → `palette()`, which reads
   `packages/ui/src/colors.json` at compile time. Hugin's Raven Violet comes from here.
 

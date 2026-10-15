@@ -19,13 +19,14 @@ use base64::prelude::*;
 use serde::Serialize;
 use tauri::ipc::Channel;
 
-use bifrost_core::agent::run::{run_auto, run_find, run_read, Ran};
-use bifrost_core::agent::send::{compact_for_send, Calibration};
+use bifrost_core::agent::run::edits_lock;
+use bifrost_core::agent::send::Calibration;
 use bifrost_core::agent::stop::{next_stop, stop_all, stopped};
-use bifrost_core::agent::ticket::{arm, plan_name, redeem, DiffView, Find, Payload, PendingCall};
+use bifrost_core::agent::ticket::PendingCall;
+use bifrost_core::agent::turn::{self, Card, Decision, Frontend, Patch, RoundNumbers};
 use bifrost_core::agent::workspace;
 use bifrost_core::chat::{self, Message, Options, StreamChunk};
-use bifrost_core::{check, config, edit, instructions, ollama, search, store, tools, vram};
+use bifrost_core::{check, config, edit, instructions, ollama, store, vram};
 
 /// One message pushed up to the UI.
 ///
@@ -63,9 +64,9 @@ enum StreamEvent {
 ///
 /// Ollama has no autostart and does not survive a reboot (A1), so the first
 /// request after a restart would otherwise fail rather than wait. `send` passes its
-/// channel so the window can say what the wait is; `ask_with_tools` has none (the
-/// front end asks [`ollama_running`] first and names the wait itself), but starts
-/// Ollama all the same, so a tool turn never depends on the front end for it.
+/// channel so the window can say what the wait is. A tool turn does not come through
+/// here: `bifrost_core::agent::turn` says why its first round waits, and the round
+/// starts Ollama itself.
 async fn start_ollama(on_event: Option<&Channel<StreamEvent>>) -> Result<(), String> {
     let running = tauri::async_runtime::spawn_blocking(ollama::is_running)
         .await
@@ -80,16 +81,6 @@ async fn start_ollama(on_event: Option<&Channel<StreamEvent>>) -> Result<(), Str
         }
     }
     Ok(())
-}
-
-/// Whether Ollama is answering right now, so the window can say "Starting Ollama…"
-/// before a tool turn's first round instead of looking stuck. Only a hint: the turn
-/// starts Ollama itself either way.
-#[tauri::command]
-async fn ollama_running() -> bool {
-    tauri::async_runtime::spawn_blocking(ollama::is_running)
-        .await
-        .unwrap_or(false)
 }
 
 /// Send the conversation and stream the reply back.
@@ -184,9 +175,55 @@ const STOPPED: &str = "stopped";
 /// Takes effect at the next token. The window stops showing the answer at once
 /// either way, so a model still loading — which cannot be interrupted — only
 /// costs the load, not a wait.
+///
+/// `page` and `request` name the request being stopped (see [`STOPPED_REQUEST`]),
+/// so a tool turn whose `run_turn` has not reached Rust yet is stopped all the same.
 #[tauri::command]
-fn stop() {
+fn stop(page: Option<String>, request: Option<u64>) {
+    // Named before anything else, so a turn that starts after this finds it.
+    if let (Some(page), Some(request)) = (page, request) {
+        name_stopped(page, request);
+    }
     stop_all();
+    // A tool turn waiting on a card is answered with a refusal, which the loop —
+    // seeing Stop — sends nowhere. What the webview's own `resolve(false)` did when
+    // the loop was still there.
+    answer_waiting();
+}
+
+/// The last request a Stop named: the page that sent it — a name each page load
+/// makes for itself — and that page's number for the request.
+///
+/// **A Stop can reach Rust before the turn it stops has begun.** The window frees at
+/// once, while a `run_turn` sent a moment earlier may still be on its way, and a turn
+/// that takes its place on the Stop counter after the Stop never sees it on the
+/// counter — it would run on with nobody watching, its cards still answerable. So a
+/// turn also asks whether its own request was named, which holds whichever of the
+/// two messages arrives first. The page is part of the name because a reload starts
+/// its numbering again.
+static STOPPED_REQUEST: std::sync::Mutex<Option<(String, u64)>> = std::sync::Mutex::new(None);
+
+/// Write down that `page`'s `request` was stopped. A page's requests only count up,
+/// so the highest one stopped is all there is to remember.
+fn name_stopped(page: String, request: u64) {
+    let mut last = STOPPED_REQUEST.lock().unwrap_or_else(|e| e.into_inner());
+    if !matches!(&*last, Some((p, r)) if *p == page && *r >= request) {
+        *last = Some((page, request));
+    }
+}
+
+fn request_stopped(page: &str, request: u64) -> bool {
+    matches!(
+        &*STOPPED_REQUEST.lock().unwrap_or_else(|e| e.into_inner()),
+        Some((p, r)) if p == page && *r >= request
+    )
+}
+
+/// Answer the card a tool turn is waiting on, if one is, with a refusal.
+fn answer_waiting() {
+    if let Some((_, decision)) = waiting().take() {
+        let _ = decision.send(Decision::Deny);
+    }
 }
 
 #[derive(Serialize)]
@@ -532,491 +569,162 @@ async fn delete_conversation(id: String) -> Result<bool, String> {
 
 // ── tools ───────────────────────────────────────────────────────────────────
 
-/// Ask the model, offering the tools, and report back what it wants.
+/// What a tool turn tells the window, as it happens, in the order the loop does
+/// things. Sent through a `Channel` like [`StreamEvent`], and applied by the
+/// window strictly one after another.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "event", content = "data")]
+enum TurnEvent {
+    /// What the turn is waiting for, such as `Starting Ollama…`; empty clears it.
+    Status { text: String },
+    /// What a round cost: the meter, the calibration the next turn starts from, and
+    /// how many old results were set aside to fit **this** round.
+    Round { prompt_eval_count: u32, prompt_chars: u64, set_aside: usize, fits: bool },
+    /// The model's words.
+    Answer { content: String, prompt_eval_count: u32, eval_count: u32 },
+    /// Something to tell the person: why the turn stopped, or the bound it hit.
+    Error { text: String },
+    /// A tool card to show. `id` is how `Update` and [`decide`] name it.
+    /// Boxed: a card is far larger than every other event.
+    Card { id: usize, card: Box<Card> },
+    /// A change to a card shown earlier.
+    Update { id: usize, patch: Patch },
+    /// Save the thread as it now stands: a Stop landed with a card on screen that
+    /// the Stop's own save may have missed.
+    Save,
+    /// The turn is over and nothing more will come. Sent last of all, so the window
+    /// can wait for it before it saves: the channel keeps its order, but a large
+    /// event can still be on its way when the command itself returns.
+    End,
+}
+
+/// The card a tool turn is waiting on, and where to send what the person decides.
+/// One for the whole process, like the ticket it guards: a turn waits on one card
+/// at a time.
+static WAITING: std::sync::Mutex<Option<(usize, std::sync::mpsc::Sender<Decision>)>> =
+    std::sync::Mutex::new(None);
+
+/// Card ids, for the whole process rather than per turn, so a click on a card from
+/// an earlier turn can never answer a new one.
+static CARD_IDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+fn waiting() -> std::sync::MutexGuard<'static, Option<(usize, std::sync::mpsc::Sender<Decision>)>> {
+    WAITING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The window, as the tool turn's [`Frontend`]: everything the loop shows goes up the
+/// channel, and a decision comes back through [`decide`].
+struct Webview {
+    events: Channel<TurnEvent>,
+    /// The Stop number taken when the turn began: a Stop pressed since has stopped it.
+    stop: u64,
+    /// The page that started the turn, and its number for the request: a Stop that
+    /// named them stopped it, even one that reached Rust first.
+    page: String,
+    request: u64,
+}
+
+impl Frontend for Webview {
+    fn stopped(&self) -> bool {
+        stopped(self.stop) || request_stopped(&self.page, self.request)
+    }
+
+    fn status(&mut self, text: &str) {
+        let _ = self.events.send(TurnEvent::Status { text: text.to_string() });
+    }
+
+    fn round(&mut self, numbers: RoundNumbers) {
+        if numbers.recovered {
+            println!("[mimir] a malformed tool call was recovered through the raw retry");
+        }
+        let _ = self.events.send(TurnEvent::Round {
+            prompt_eval_count: numbers.prompt_eval_count,
+            prompt_chars: numbers.prompt_chars,
+            set_aside: numbers.set_aside,
+            fits: numbers.fits,
+        });
+    }
+
+    fn answer(&mut self, content: &str, prompt_eval_count: u32, eval_count: u32) {
+        let _ = self.events.send(TurnEvent::Answer { content: content.to_string(), prompt_eval_count, eval_count });
+    }
+
+    fn error(&mut self, message: &str) {
+        let _ = self.events.send(TurnEvent::Error { text: message.to_string() });
+    }
+
+    fn card(&mut self, card: Card) -> usize {
+        let id = CARD_IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let _ = self.events.send(TurnEvent::Card { id, card: Box::new(card) });
+        id
+    }
+
+    fn update(&mut self, card: usize, patch: Patch) {
+        let _ = self.events.send(TurnEvent::Update { id: card, patch });
+    }
+
+    fn decide(&mut self, card: usize, _call: &PendingCall) -> Decision {
+        let (send, receive) = std::sync::mpsc::channel();
+        *waiting() = Some((card, send));
+        // A Stop that landed before the slot was filled found nothing to answer.
+        if self.stopped() {
+            waiting().take();
+            return Decision::Deny;
+        }
+        // A sender dropped without a word is a refusal, never an approval.
+        receive.recv().unwrap_or(Decision::Deny)
+    }
+
+    fn save(&mut self) {
+        let _ = self.events.send(TurnEvent::Save);
+    }
+}
+
+/// Run one tool turn: the loop in `bifrost_core::agent::turn`, shared with Hugin and
+/// the probes, with this window as its frontend.
 ///
-/// **What it runs itself is only what `tools::approval` calls automatic** — a
-/// read inside the project folder of a file the listing would show, a listing, a
-/// search (H5; `ask_every_call` in the config turns it off), and the task list
-/// (`update_plan`, H10, which touches nothing and works even with no folder or
-/// with `ask_every_call` on). Those come back as `"auto"`, already run. Everything
-/// else it returns as an answer, a request to approve, or — for a request that
-/// could never succeed, like an edit whose text is not in the file — a rejection,
-/// which goes straight back to the model so it can read the file again and retry
-/// without the user being asked about something impossible.
+/// The model is asked, a call it makes is shown as a card, a call that needs a person
+/// waits for [`decide`], and what ran goes back to the model — round after round,
+/// until it answers, a bound is hit or Stop is pressed. Everything the window shows
+/// comes up `on_event` as it happens. `Err` is a request that could not be made or a
+/// call that could not be run at all; the window shows it, as it shows any failed
+/// request.
 ///
-/// **`closing` is the last request of a turn that hit its bound (R-03).** It
-/// offers no tools, adds [`tools::CLOSING_NOTE`] as one last user message, runs
-/// nothing, and returns an `"answer"` whatever the reply holds — so the turn ends
-/// in the model's own words about what was done. Ollama is still started and the
-/// conversation still compacted, since it may be the largest request of the turn;
-/// the note is added **after** compaction, so it is never in `setAside` and the
-/// webview's copy stays a prefix of what was sent.
+/// `page` and `request` are the window's names for this request, which a Stop
+/// repeats ([`STOPPED_REQUEST`]).
 #[tauri::command]
-async fn ask_with_tools(
-    mut messages: Vec<Message>,
+async fn run_turn(
+    messages: Vec<Message>,
     model: Option<String>,
     calibration: Option<Calibration>,
-    closing: Option<bool>,
-) -> Result<serde_json::Value, String> {
-    let closing = closing.unwrap_or(false);
-    // Taken **before the model is asked**, for an automatic search or listing:
-    // there is no card to take it at, and a Stop pressed while the model is
-    // still answering must reach the walk that follows.
+    page: String,
+    request: u64,
+    on_event: Channel<TurnEvent>,
+) -> Result<(), String> {
+    // Taken before anything is awaited, so a Stop pressed at once still reaches it.
     let stop = next_stop();
-    let cfg = tauri::async_runtime::spawn_blocking(config::load)
-        .await
-        .unwrap_or_default();
-    let model = model.unwrap_or(cfg.model.clone());
-
-    // The capability check below ignores an error, so without this a stopped Ollama
-    // would pass it and fail later with a raw connection error — after a reboot,
-    // with nothing else having started it.
-    start_ollama(None).await?;
-
-    // Offering tools to a model that cannot carry them wastes a round trip and
-    // produces a confusing prose answer instead of a call. Better to say so.
-    let tag = model.clone();
-    let can = tauri::async_runtime::spawn_blocking(move || bifrost_core::ollama::show_cached(&tag))
-        .await
-        .map_err(|e| format!("capability check failed: {e}"))?;
-    if let Ok(detail) = can {
-        if !detail.has("tools") {
-            return Err(format!("{model} cannot call tools — pick one with the tools badge"));
-        }
-    }
-
-    let ws = tauri::async_runtime::spawn_blocking({
-        let cfg = cfg.clone();
-        move || workspace(&cfg)
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut window = Webview { events: on_event, stop, page, request };
+        let mut convo = messages;
+        let done = turn::run_turn(&mut convo, model.as_deref(), calibration, &mut window);
+        let _ = window.events.send(TurnEvent::End);
+        done
     })
     .await
-    .unwrap_or(None);
-    // The folder's check command, if one was chosen for it. Read with the folder,
-    // so a check can never be offered for a folder other than the one in force.
-    let check: Option<Vec<String>> =
-        ws.as_ref().and_then(|ws| cfg.check_for(&ws.root_display()).cloned());
-    let check_label = check.as_deref().map(check::label);
-
-    // The folder and the read-before-edit habit, stated once. Added here rather
-    // than stored in the thread, so it always names the folder chosen *now*.
-    //
-    // **The project's notes ride in that same message** (H10), after the prompt, so
-    // there is still exactly one system message and `lead` below is unchanged. Only
-    // when the user turned them on for this folder, and read fresh every turn: an
-    // edited file applies to the next question.
-    if let Some(ws) = &ws {
-        let mut prompt = tools::system_prompt(ws, check.is_some());
-        if cfg.instructions_for(&ws.root_display()) {
-            let notes = tauri::async_runtime::spawn_blocking({
-                let ws = ws.clone();
-                move || instructions::find(&ws)
-            })
-            .await
-            .unwrap_or(None);
-            if let Some(notes) = notes {
-                prompt = tools::with_notes(prompt, &notes);
-            }
-        }
-        messages.insert(0, Message::system(prompt));
-    }
-
-    // Kept for counting repeats: the history the model has already seen.
-    let history = messages.clone();
-    let num_ctx = cfg.num_ctx;
-    // Nothing is offered to a closing request, and compaction counts what is sent.
-    let offered = if closing { Vec::new() } else { tools::available(ws.is_some(), check_label.as_deref()) };
-
-    // Inside a turn the conversation only grows, and past `num_ctx` Ollama cuts
-    // the middle of it without a word (H7). So old results are set aside here,
-    // in the copy being sent, and the webview is told which so that its own copy
-    // ends up identical — a prefix that changed would also cost the prompt cache.
-    let sent = compact_for_send(&mut messages, &offered, num_ctx, calibration, usize::from(ws.is_some()));
-    if closing {
-        messages.push(Message::user(tools::CLOSING_NOTE));
-        // `chat`, not `chat_tools`: with no tools there is nothing for the recovery
-        // to turn text into, and a call the model writes anyway stays words.
-        let reply = tauri::async_runtime::spawn_blocking(move || {
-            chat::chat(&model, &messages, &[], Options::new(num_ctx))
-        })
-        .await
-        .map_err(|e| format!("closing request failed: {e}"))??;
-        let mut body = serde_json::Map::new();
-        body.insert("kind".into(), "answer".into());
-        body.insert("content".into(), reply.message.content.into());
-        body.insert("promptEvalCount".into(), reply.prompt_eval_count.into());
-        body.insert("evalCount".into(), reply.eval_count.into());
-        body.extend(sent.into_fields());
-        return Ok(serde_json::Value::Object(body));
-    }
-    let reply = tauri::async_runtime::spawn_blocking(move || {
-        chat::chat_tools(&model, &messages, &offered, Options::new(num_ctx))
-    })
-    .await
-    .map_err(|e| format!("tool turn failed: {e}"))??;
-    if reply.recovered {
-        println!("[mimir] a malformed tool call was recovered through the raw retry");
-    }
-
-    // The reply is built inside a block so that every kind of it — answer, call,
-    // auto, rejected, stuck — leaves through the one place that adds the prompt's
-    // numbers, instead of each of a dozen returns remembering to.
-    let mut outcome: Result<serde_json::Value, String> = async {
-        // The first call only; a model that asks for several at once gets the rest
-        // dropped and asks again. That was because each needed its own approval;
-        // since H5 an automatic one does not, so several could run in one round.
-        // Left as it is (review R-34): Qwen3-Coder asks for one call per reply.
-        let Some(call) = reply.tool_calls().first().cloned() else {
-            return Ok(serde_json::json!({
-                "kind": "answer",
-                "content": reply.message.content,
-                "promptEvalCount": reply.prompt_eval_count,
-                "evalCount": reply.eval_count,
-            }));
-        };
-
-        // A call that has already failed identically, twice, ends the turn: the file
-        // has not changed, so a third try cannot go differently, and each one costs
-        // a round. Measured at G7 - the model once repeated one impossible edit
-        // eight times running.
-        let prior = tools::prior_failures(&history, &call);
-        if prior + 1 >= tools::MAX_IDENTICAL_FAILURES {
-            return Ok(serde_json::json!({
-                "kind": "stuck",
-                "error": format!(
-                    "the model kept repeating a call to {} that could not be carried out, so it was stopped",
-                    call.function.name
-                ),
-            }));
-        }
-
-        // Rejected without asking anyone: the reason goes back to the model. The raw
-        // call goes with it, so the conversation shows the model its own attempt.
-        //
-        // **Every rejection starts `error:` (R-20)**: the unreadable call, the refusals of
-        // `interpret`, the 7th plan update. The repeat rule counts only results that start
-        // that way, and the probe's results do.
-        let reject = |name: &str, path: &str, why: String| {
-            let why = tools::failure(&why);
-            let why = if prior > 0 { format!("{why}{}", tools::repeated_note(name)) } else { why };
-            serde_json::json!({
-                "kind": "rejected",
-                "name": name,
-                "path": path,
-                "error": why,
-                "rawCall": call,
-            })
-        };
-
-        if call.function.name == chat::INVALID_TOOL_CALL {
-            let why = call.function.arguments["error"].as_str().unwrap_or("unreadable").to_string();
-            return Ok(reject("tool call", "", format!("{why}. Send the call again as valid JSON.")));
-        }
-        let request = match tools::interpret(&call) {
-            Ok(r) => r,
-            Err(e) => return Ok(reject(&call.function.name, request_path(&call), e)),
-        };
-
-        // A finding call that could never run — a pattern outside the folder, text
-        // over several lines — goes back to the model with the reason, without
-        // asking anyone to approve something that can only fail.
-        if let (Some(ws), tools::Request::List { pattern } | tools::Request::Search { pattern, .. }) = (&ws, &request) {
-            let text = match &request {
-                tools::Request::Search { text, .. } => Some(text.as_str()),
-                _ => None,
-            };
-            if let Err(e) = search::validate(ws, text, pattern.as_deref()) {
-                return Ok(reject(request.name(), "", format!("error: {e}")));
-            }
-        }
-
-        // The task list: at most 6 updates a turn, by the rule the probes share. The
-        // 7th goes back to the model and costs a round like any rejected call.
-        if matches!(request, tools::Request::Plan { .. }) && tools::plan_updates(&history) >= tools::MAX_PLAN_UPDATES {
-            return Ok(reject("update_plan", "", tools::PLAN_LIMIT_NOTE.to_string()));
-        }
-
-        // What may run without a card. Decided here, once, by the one rule the probe
-        // shares — and on a blocking thread, because it walks the folder.
-        let decided = {
-            let (ws, request, ask_every_call) = (ws.clone(), request.clone(), cfg.ask_every_call);
-            tauri::async_runtime::spawn_blocking(move || tools::approval(ws.as_ref(), &request, ask_every_call))
-                .await
-                .map_err(|e| format!("deciding the call failed: {e}"))?
-        };
-        match decided {
-            tools::Approval::Reject(why) => {
-                return Ok(reject(request.name(), request.path(), format!("error: {why}")));
-            }
-            // Touches nothing, so there is nothing to run: the card is the list itself.
-            // It is not a round (the webview does not count it), and works with no
-            // folder or with `ask_every_call`, as `approval` says.
-            tools::Approval::Auto(tools::Auto::Plan { steps }) => {
-                return Ok(serde_json::json!({
-                    "kind": "auto",
-                    "name": "update_plan",
-                    "path": "",
-                    "range": null,
-                    "result": tools::plan_message(&steps),
-                    "ok": true,
-                    "stopped": false,
-                    "plan": steps,
-                    "rawCall": call,
-                }));
-            }
-            tools::Approval::Auto(auto) => {
-                let ws = ws.clone().expect("a call is only automatic inside a project folder");
-                let ran = tauri::async_runtime::spawn_blocking(move || run_auto(&ws, auto, stop))
-                    .await
-                    .map_err(|e| format!("running the call failed: {e}"))?;
-                // `None`: the read could not be made safely, so it asks like any other.
-                if let Some((name, path, range, mut ran)) = ran {
-                    if !ran.ok && prior > 0 {
-                        ran.result.push_str(tools::repeated_note(name));
-                    }
-                    // **Never `arm`s a ticket and never touches PENDING**: nothing
-                    // here awaits a decision, so nothing may replace or leave one.
-                    return Ok(serde_json::json!({
-                        "kind": "auto",
-                        "name": name,
-                        "path": path,
-                        "range": range,
-                        "result": ran.result,
-                        "ok": ran.ok,
-                        "stopped": ran.stopped,
-                        "rawCall": call,
-                    }));
-                }
-            }
-            tools::Approval::Ask => {}
-        }
-
-        let (name, path, payload) = match request {
-            tools::Request::Read { path, range } => {
-                let (open, shown) = tools::read_target(&path, ws.as_ref());
-                ("read_file", shown, Some(Payload::Read { real: open, range }))
-            }
-            tools::Request::List { .. } | tools::Request::Search { .. } if ws.is_none() => {
-                return Ok(reject(
-                    request.name(),
-                    "",
-                    "error: there is no project folder to search — the user has not chosen one".into(),
-                ));
-            }
-            tools::Request::List { pattern } => {
-                let ws = ws.as_ref().expect("checked above");
-                let shown = search::describe_list(pattern.as_deref());
-                let find = Find::List { pattern };
-                ("list_files", shown, Some(Payload::Find { root: ws.root_display(), find, stop: next_stop() }))
-            }
-            tools::Request::Search { text, pattern } => {
-                let ws = ws.as_ref().expect("checked above");
-                let shown = search::describe_search(&text, pattern.as_deref());
-                let find = Find::Search { text, pattern };
-                ("search", shown, Some(Payload::Find { root: ws.root_display(), find, stop: next_stop() }))
-            }
-            // The model can call it from history, or invent it. Either way there is
-            // only something to run when a person chose a command for this folder.
-            tools::Request::Check => match (&ws, &check) {
-                (Some(ws), Some(argv)) => (
-                    "run_check",
-                    check::label(argv),
-                    Some(Payload::Check { root: ws.root_display(), argv: argv.clone(), stop: next_stop() }),
-                ),
-                _ => {
-                    return Ok(reject(
-                        "run_check",
-                        "",
-                        format!("error: {}", tools::CHECK_UNAVAILABLE),
-                    ));
-                }
-            },
-            tools::Request::Plan { .. } => {
-                return Ok(reject("update_plan", "", "error: the task list could not be read".into()));
-            }
-            tools::Request::Rewrite { path, .. } => {
-                return Ok(reject("write_file", &path, "no such tool: write_file — use edit_file".into()));
-            }
-            tools::Request::Edit { .. }
-            | tools::Request::Create { .. }
-            | tools::Request::Delete { .. }
-            | tools::Request::Move { .. }
-                if ws.is_none() =>
-            {
-                return Ok(reject(
-                    request.name(),
-                    request.path(),
-                    "editing is off: the user has not chosen a project folder".into(),
-                ));
-            }
-            tools::Request::Edit { path, old_text, new_text } => {
-                let ws = ws.clone().expect("checked above");
-                let ask_every_call = cfg.ask_every_call;
-                let planned = tauri::async_runtime::spawn_blocking(move || {
-                    tools::plan_edit(&ws, &path, &old_text, &new_text, ask_every_call)
-                })
-                .await
-                .map_err(|e| format!("planning the edit failed: {e}"))?;
-                match planned {
-                    Ok(p) => ("edit_file", p.display.clone(), Some(Payload::Edit(p))),
-                    Err(e) => return Ok(reject("edit_file", request_path(&call), format!("error: {e}"))),
-                }
-            }
-            tools::Request::Create { path, content } => {
-                let ws = ws.clone().expect("checked above");
-                let planned =
-                    tauri::async_runtime::spawn_blocking(move || edit::plan_create(&ws, &path, &content))
-                        .await
-                        .map_err(|e| format!("planning the new file failed: {e}"))?;
-                match planned {
-                    Ok(p) => ("create_file", p.display.clone(), Some(Payload::Edit(p))),
-                    Err(e) => return Ok(reject("create_file", request_path(&call), format!("error: {e}"))),
-                }
-            }
-            tools::Request::Delete { path } => {
-                let ws = ws.clone().expect("checked above");
-                let planned = tauri::async_runtime::spawn_blocking(move || edit::plan_delete(&ws, &path))
-                    .await
-                    .map_err(|e| format!("planning the delete failed: {e}"))?;
-                match planned {
-                    Ok(p) => ("delete_file", p.display.clone(), Some(Payload::Edit(p))),
-                    Err(e) => return Ok(reject("delete_file", request_path(&call), format!("error: {e}"))),
-                }
-            }
-            tools::Request::Move { path, to } => {
-                let ws = ws.clone().expect("checked above");
-                let planned = tauri::async_runtime::spawn_blocking(move || edit::plan_move(&ws, &path, &to))
-                    .await
-                    .map_err(|e| format!("planning the move failed: {e}"))?;
-                match planned {
-                    Ok(p) => ("move_file", p.display.clone(), Some(Payload::Edit(p))),
-                    Err(e) => return Ok(reject("move_file", request_path(&call), format!("error: {e}"))),
-                }
-            }
-        };
-        // The plan's kind is the call's name; `run_tool` checks it again.
-        if let Some(Payload::Edit(p)) = &payload {
-            assert_eq!(plan_name(p), name, "a plan must be armed under its own tool name");
-        }
-        let (to, folders, size) = match &payload {
-            Some(Payload::Edit(p)) => (
-                p.to_display.clone(),
-                p.folders.clone(),
-                matches!(p.op, edit::Op::Delete | edit::Op::Move).then_some(p.size),
-            ),
-            _ => (None, Vec::new(), None),
-        };
-
-        let diff = match &payload {
-            Some(Payload::Edit(p)) => Some(DiffView {
-                hunks: p.hunks.clone(),
-                added: p.added,
-                removed: p.removed,
-                create: p.create,
-            }),
-            _ => None,
-        };
-        let range = match &payload {
-            Some(Payload::Read { range, .. }) => *range,
-            _ => None,
-        };
-        let changed_build_files =
-            if name == "run_check" { tools::build_files_changed(&history) } else { Vec::new() };
-        Ok(serde_json::json!({
-            "kind": "call",
-            "call": PendingCall {
-                token: arm(name, &path, payload),
-                name: name.to_string(),
-                path,
-                diff,
-                range,
-                changed_build_files,
-                to,
-                folders,
-                size,
-            },
-            // The raw call, so the caller can put the assistant turn that asked
-            // for it back into the conversation before the tool result.
-            //
-            // **Without it the loop does not close.** Ollama expects
-            // assistant(tool_calls) → tool(result); a tool message with no call in
-            // front of it answers a question the model cannot see itself asking.
-            "rawCall": call,
-        }))
-    }
-    .await;
-
-    // What every kind of reply also says about the prompt it answered: the
-    // numbers the next round is calibrated from, and what was set aside.
-    if let Ok(serde_json::Value::Object(body)) = &mut outcome {
-        body.insert("promptEvalCount".into(), reply.prompt_eval_count.into());
-        body.extend(sent.into_fields());
-    }
-    outcome
+    .map_err(|e| format!("tool turn failed: {e}"))?
 }
 
-fn request_path(call: &chat::ToolCall) -> &str {
-    call.function.arguments["path"].as_str().unwrap_or("")
-}
-
-/// Run a call the user has just approved.
-///
-/// Redeems the ticket and runs **what the ticket holds** — for a read, the file
-/// the card showed; for an edit, the plan computed when the diff was shown; for a
-/// check, the folder and argv the card showed. The webview names the call it approved; it never supplies what to
-/// write or what to run.
-///
-/// **A check can be stopped.** Its ticket holds a number from the same counter as
-/// a streamed answer, so the Stop button that ends an answer ends a check too —
-/// including one stopped before it had started.
+/// Answer the card a tool turn is waiting on. A click on any other card — one from an
+/// earlier turn, or one already answered — changes nothing.
 #[tauri::command]
-async fn run_tool(name: String, path: String, token: String) -> Result<Ran, String> {
-    // Before anything touches the disk. The ticket was issued when the UI was
-    // shown this exact call, and is spent here - so what runs is what was
-    // approved, and it runs once.
-    let payload = redeem(&token, &name, &path)?;
-    tauri::async_runtime::spawn_blocking(move || match (name.as_str(), payload) {
-        ("read_file", Some(Payload::Read { real, range })) => Ok(run_read(&real, range)),
-        ("edit_file" | "create_file" | "delete_file" | "move_file", Some(Payload::Edit(plan))) => {
-            if plan_name(&plan) != name {
-                return Err(format!("this approval was for {}, not {name}", plan_name(&plan)));
-            }
-            let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
-            let _edits = edits_lock();
-            // A file changed since the diff was shown is refused, not written:
-            // the model is told, and can read it again.
-            Ok(match edit::apply(&plan, &backups) {
-                Ok(done) => {
-                    let said = tools::applied_message(&done);
-                    Ran { undo: Some(done.id), ..Ran::text(said) }
-                }
-                Err(e) => Ran::text(format!("error: {e}")),
-            })
-        }
-        ("run_check", Some(Payload::Check { root, argv, stop })) => {
-            if stopped(stop) {
-                return Ok(Ran {
-                    result: format!("`{}` was stopped by the user before it ran.", check::label(&argv)),
-                    ok: false,
-                    stopped: true,
-                    undo: None,
-                });
-            }
-            let root = std::path::PathBuf::from(root);
-            Ok(match check::run(&root, &argv, check::timeout_for(&argv), &[], || stopped(stop)) {
-                Ok(o) => Ran {
-                    result: check::for_model(&argv, &o),
-                    ok: o.passed(),
-                    stopped: o.ended == check::Ended::Stopped,
-                    undo: None,
-                },
-                Err(e) => Ran::text(format!("error: {e}")),
-            })
-        }
-        ("list_files" | "search", Some(Payload::Find { root, find, stop })) => Ok(run_find(&root, &find, stop)),
-        (other, _) => Err(format!("no such tool: {other}")),
-    })
-    .await
-    .map_err(|e| format!("running the tool failed: {e}"))?
+fn decide(card: usize, allow: bool) {
+    let mut slot = waiting();
+    if !matches!(&*slot, Some((id, _)) if *id == card) {
+        return;
+    }
+    if let Some((_, decision)) = slot.take() {
+        let _ = decision.send(if allow { Decision::Allow } else { Decision::Deny });
+    }
 }
 
 /// Put a file back the way it was before one edit.
@@ -1032,20 +740,6 @@ async fn undo_edit(id: String) -> Result<String, String> {
     })
     .await
     .map_err(|e| format!("undo failed: {e}"))?
-}
-
-/// Every write to a project file — an edit, an undo, a turn's undo — takes this
-/// first, so two of them never touch the same file at once. Two undos from two
-/// clicks, or an undo while the next edit is being applied, would otherwise each
-/// pass their own "is the file still what I expect" check and then write over
-/// one another. It lives here rather than in `edit.rs` because the tests and
-/// probes there apply edits in parallel on purpose.
-static EDITS: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// A panic while holding the lock leaves nothing half-written that the next
-/// holder's own checks would not catch, so a poisoned lock is simply taken.
-fn edits_lock() -> std::sync::MutexGuard<'static, ()> {
-    EDITS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// More edits than this in one turn is not something the UI produces.
@@ -1448,9 +1142,19 @@ pub fn run() {
         // Used only from Rust, by choose_project_folder. The capability file grants
         // the webview no dialog permission, so a page cannot open a picker itself.
         .plugin(tauri_plugin_dialog::init())
+        // A page that loads — at start, or after a reload — owns nothing that was
+        // running: a turn, a stream or a check belonged to the page before it, whose
+        // channel is gone. Each is stopped, and a card left waiting is refused, as
+        // Stop does. Without this a turn waiting on a card would wait for ever, and
+        // the next turn's card would take its place and set it going again unwatched.
+        .on_page_load(|_, payload| {
+            if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
+                stop_all();
+                answer_waiting();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             send,
-            ollama_running,
             models,
             card,
             conversations,
@@ -1460,8 +1164,8 @@ pub fn run() {
             delete_conversation,
             put_attachment,
             get_attachment,
-            ask_with_tools,
-            run_tool,
+            run_turn,
+            decide,
             undo_edit,
             undo_turn,
             project_folder,
@@ -1496,20 +1200,20 @@ mod tests {
         assert!(err.contains("more than 64"), "{err}");
     }
 
-    /// The lock is what keeps two writers off one file, so a second taker must
-    /// wait while the first holds it, and a panic in a holder must not wedge it.
+    /// A Stop that reaches Rust before its turn does still stops it: the turn finds
+    /// its own request named. The page's next request, and another page's, are not.
     #[test]
-    fn the_edits_lock_is_exclusive_and_survives_a_panicking_holder() {
-        {
-            let _held = edits_lock();
-            assert!(EDITS.try_lock().is_err(), "a second writer got in while the lock was held");
-        }
-        let _ = std::thread::spawn(|| {
-            let _held = edits_lock();
-            panic!("a writer died holding the lock");
-        })
-        .join();
-        drop(edits_lock());
+    fn a_stop_that_arrives_before_its_turn_still_stops_it() {
+        name_stopped("page-a".into(), 3);
+        assert!(request_stopped("page-a", 3) && request_stopped("page-a", 2));
+        assert!(!request_stopped("page-a", 4), "the request after the stopped one");
+        assert!(!request_stopped("page-b", 3), "another page's numbering");
+        // An earlier request named late does not take back a later one.
+        name_stopped("page-a".into(), 1);
+        assert!(request_stopped("page-a", 3));
+        // After a reload the new page starts its numbering again.
+        name_stopped("page-b".into(), 1);
+        assert!(request_stopped("page-b", 1) && !request_stopped("page-b", 2));
     }
 
     // ── model_offer ─────────────────────────────────────────────────────────

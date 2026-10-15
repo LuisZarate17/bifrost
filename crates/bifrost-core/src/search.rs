@@ -967,7 +967,7 @@ mod tests {
         assert!(search_in(&s.ws(), "a\nb", None, None, &never).is_err());
     }
 
-    /// What `ask_with_tools` asks before showing a card: a call that could never
+    /// What `agent::round` asks before showing a card: a call that could never
     /// run is refused then, not after someone approved it.
     #[test]
     fn a_call_that_could_never_run_is_refused_before_it_is_shown() {

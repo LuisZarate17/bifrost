@@ -199,11 +199,20 @@ export function installPreviewIpc() {
       case "stop":
         stopAt = sends;
         return null;
-      case "ask_with_tools":
+      case "run_turn": {
+        // A tool turn that answers at once, through the real Channel, ending as the
+        // real one does.
+        const channel = args.onEvent as Channel<unknown>;
+        const emit = (m: unknown) => channel.onmessage(m);
         await sleep(600);
-        return { kind: "answer", content: "In preview, tools answer straight away.", promptEvalCount: 3_620, evalCount: 12 };
-      case "run_tool":
-        return { result: "(preview) nothing was read, written or run", ok: true, stopped: false };
+        emit({ event: "status", data: { text: "" } });
+        emit({ event: "round", data: { promptEvalCount: 3_620, promptChars: 14_480, setAside: 0, fits: true } });
+        emit({ event: "answer", data: { content: "In preview, tools answer straight away.", promptEvalCount: 3_620, evalCount: 12 } });
+        emit({ event: "end" });
+        return null;
+      }
+      case "decide":
+        return null;
       case "undo_edit":
         return "undone";
       case "undo_turn":

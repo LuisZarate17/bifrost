@@ -91,7 +91,7 @@ pub struct Ran {
     pub undo: Option<String>,
 }
 
-/// Run one call, approved. Mirrors what `run_tool` does in the app.
+/// Run one call, approved. Mirrors what `bifrost_core::agent::run::run_approved` does for the app.
 pub fn execute(call: &ToolCall, s: &Setup) -> Ran {
     let text = |t: String, failed: bool| Ran {
         text: t,
