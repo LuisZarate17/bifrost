@@ -59,12 +59,70 @@ pub fn outcome(card: &Card) -> String {
         CardState::Rejected => first_line(card.error.as_deref().unwrap_or("")),
         CardState::Pending | CardState::Running | CardState::Ran => {
             let text = card.result.as_deref().unwrap_or("");
-            if card.name == "read_file" && card.ok == Some(true) {
-                lines_read(text)
-            } else {
-                first_line(text)
+            let worked = card.ok == Some(true);
+            match card.name.as_str() {
+                "read_file" if worked => lines_read(text),
+                "edit_file" if worked => "applied".into(),
+                "create_file" if worked => "created".into(),
+                "delete_file" if worked => "deleted".into(),
+                "move_file" if worked => "moved".into(),
+                "list_files" if worked => counted(text, "file", "files").unwrap_or_else(|| first_line(text)),
+                "search" if worked => hits(text).unwrap_or_else(|| first_line(text)),
+                "run_check" => check_outcome(text).unwrap_or_else(|| first_line(text)),
+                _ => first_line(text),
             }
         }
+    }
+}
+
+/// The verb a tool goes by in a line: `read`, `edit`, `check`.
+pub fn verb(name: &str) -> String {
+    match name {
+        "read_file" => "read",
+        "list_files" => "list",
+        "search" => "search",
+        "edit_file" => "edit",
+        "create_file" => "create",
+        "delete_file" => "delete",
+        "move_file" => "move",
+        "run_check" => "check",
+        "update_plan" => "plan",
+        other => other,
+    }
+    .to_string()
+}
+
+/// `12 files`, from a first line that starts `12 files match …` (or `1 file matches …`).
+fn counted(text: &str, one: &str, many: &str) -> Option<String> {
+    let mut words = text.split_whitespace();
+    let n: usize = words.next()?.parse().ok()?;
+    words.next().filter(|w| w.starts_with(one))?;
+    Some(format!("{n} {}", if n == 1 { one } else { many }))
+}
+
+/// `6 hits` from `6 matches for … in 2 files:`, `no match` from `No matches for …`.
+fn hits(text: &str) -> Option<String> {
+    if text.starts_with("No matches") {
+        return Some("no match".into());
+    }
+    counted(text, "match", "matches").map(|c| {
+        let n = c.split(' ').next().unwrap_or("0");
+        format!("{n} hit{}", if n == "1" { "" } else { "s" })
+    })
+}
+
+/// `passed`, `failed (exit 2)` or `stopped`, from the sentence a check's result starts with.
+fn check_outcome(text: &str) -> Option<String> {
+    let head = text.lines().next()?;
+    if head.contains("` passed (") {
+        Some("passed".into())
+    } else if let Some((_, rest)) = head.split_once("` failed (exit ") {
+        let code = rest.split([',', ')']).next()?;
+        Some(format!("failed (exit {code})"))
+    } else if head.contains("` was stopped by the user") {
+        Some("stopped".into())
+    } else {
+        None
     }
 }
 
@@ -86,21 +144,40 @@ fn first_line(text: &str) -> String {
     format!("{cut}…")
 }
 
+/// `hugin · <folder> · <branch>, <n> changed · <model>`: the first line of a session. Outside
+/// a repository the branch and the count are left out.
+pub fn header(folder: &str, branch: Option<&str>, changed: Option<usize>, model: &str) -> String {
+    let name = std::path::Path::new(folder)
+        .file_name()
+        .map_or(folder.to_string(), |n| n.to_string_lossy().into_owned());
+    let git = match (branch, changed) {
+        (Some(b), Some(n)) => format!(" · {b}, {n} changed"),
+        (Some(b), None) => format!(" · {b}"),
+        _ => String::new(),
+    };
+    format!("hugin · {name}{git} · {model}")
+}
+
 /// The card as the line it ends as.
 pub fn tool_line(card: &Card) -> ToolLine {
-    ToolLine { name: card.name.clone(), target: target(card), outcome: outcome(card) }
+    ToolLine { name: verb(&card.name), target: target(card), outcome: outcome(card) }
 }
 
 /// The card, and the call that asked, as what a person reads before answering.
 pub fn approval(card: &Card, call: &PendingCall) -> Approval {
     let mut detail = Vec::new();
     if let Some(diff) = &call.diff {
-        let mut lines: Vec<String> = diff
-            .hunks
-            .iter()
-            .flat_map(|h| &h.lines)
-            .map(|l| format!("{}{}", if l.tag.is_empty() { " " } else { l.tag.as_str() }, l.text))
-            .collect();
+        let mut lines: Vec<String> = Vec::new();
+        for (n, hunk) in diff.hunks.iter().enumerate() {
+            if n > 0 {
+                lines.push("⋯".into());
+            }
+            lines.extend(
+                hunk.lines
+                    .iter()
+                    .map(|l| format!("{}{}", if l.tag.is_empty() { " " } else { l.tag.as_str() }, l.text)),
+            );
+        }
         if lines.len() > DIFF_LINES {
             let more = lines.len() - DIFF_LINES;
             lines.truncate(DIFF_LINES);
@@ -109,9 +186,11 @@ pub fn approval(card: &Card, call: &PendingCall) -> Approval {
         detail = lines;
     }
     match call.name.as_str() {
-        // The whole command, which the line above may have cut.
+        // The command is the target already; it is repeated only if they differ.
         "run_check" => {
-            detail.push(call.path.clone());
+            if call.path != target(card) {
+                detail.push(call.path.clone());
+            }
             if !call.changed_build_files.is_empty() {
                 detail.push(format!("runs build files changed this turn: {}", call.changed_build_files.join(", ")));
             }
@@ -127,7 +206,7 @@ pub fn approval(card: &Card, call: &PendingCall) -> Approval {
     if matches!(call.name.as_str(), "create_file" | "move_file") && !call.folders.is_empty() {
         detail.push(format!("makes folders: {}", call.folders.join(", ")));
     }
-    Approval { name: card.name.clone(), target: target(card), detail }
+    Approval { name: verb(&card.name), target: target(card), detail }
 }
 
 #[cfg(test)]
@@ -218,7 +297,61 @@ mod tests {
         let mut c = call("run_check", "cargo check --workspace");
         c.changed_build_files = vec!["Cargo.toml".into()];
         let a = approval(&Card::new("run_check", "cargo check --workspace", CardState::Pending), &c);
-        assert_eq!(a.detail[0], "cargo check --workspace");
-        assert!(a.detail[1].contains("Cargo.toml"));
+        // The command is the target, so it is not said twice.
+        assert_eq!((a.name.as_str(), a.target.as_str()), ("check", "cargo check --workspace"));
+        assert_eq!(a.detail.len(), 1);
+        assert!(a.detail[0].contains("Cargo.toml"));
+    }
+
+    #[test]
+    fn two_hunks_are_parted_by_an_ellipsis_line() {
+        let mut p = call("edit_file", "a.rs");
+        let hunks = vec![Hunk { lines: vec![diff_line("-", "a")] }, Hunk { lines: vec![diff_line("+", "b")] }];
+        p.diff = Some(DiffView { hunks, added: 1, removed: 1, create: false });
+        let a = approval(&Card::new("edit_file", "a.rs", CardState::Pending), &p);
+        assert_eq!(a.detail, ["-a", "⋯", "+b"]);
+    }
+
+    #[test]
+    fn tools_go_by_their_verbs() {
+        let names = ["read_file", "list_files", "search", "edit_file", "create_file", "delete_file", "move_file", "run_check", "update_plan"];
+        let verbs: Vec<_> = names.iter().map(|n| verb(n)).collect();
+        assert_eq!(verbs, ["read", "list", "search", "edit", "create", "delete", "move", "check", "plan"]);
+        assert_eq!(tool_line(&done("edit_file", "a.rs", "Edited a.rs.")).name, "edit");
+    }
+
+    #[test]
+    fn a_change_that_worked_says_what_became_of_the_file() {
+        for (name, said) in [("edit_file", "applied"), ("create_file", "created"), ("delete_file", "deleted"), ("move_file", "moved")] {
+            assert_eq!(outcome(&done(name, "a", "Done a.")), said);
+        }
+        assert_eq!(outcome(&done("edit_file", "a", "error: a.rs changed since the diff was shown")), "error: a.rs changed since the diff was shown");
+    }
+
+
+    #[test]
+    fn a_listing_and_a_search_say_how_many_and_otherwise_their_first_line() {
+        assert_eq!(outcome(&done("list_files", "x", "12 files match all files:\na.rs")), "12 files");
+        assert_eq!(outcome(&done("list_files", "x", "1 file matches *.rs:\na.rs")), "1 file");
+        assert_eq!(outcome(&done("list_files", "x", "No files match *.zz.")), "No files match *.zz.");
+        assert_eq!(outcome(&done("search", "x", "6 matches for \"x\" in 2 files:\na.rs:1: x")), "6 hits");
+        assert_eq!(outcome(&done("search", "x", "1 match for \"x\" in 1 file:\na.rs:1: x")), "1 hit");
+        assert_eq!(outcome(&done("search", "x", "No matches for \"x\".")), "no match");
+        assert_eq!(outcome(&done("search", "x", "something else\nmore")), "something else");
+    }
+
+    #[test]
+    fn a_check_passed_failed_or_was_stopped() {
+        assert_eq!(outcome(&done("run_check", "c", "`cargo check` passed (exit 0, 1.2 s).")), "passed");
+        assert_eq!(outcome(&done("run_check", "c", "`cargo check` failed (exit 101, 3.0 s). Output:\n\nerror")), "failed (exit 101)");
+        assert_eq!(outcome(&done("run_check", "c", "`cargo check` was stopped by the user after 0.4 s.")), "stopped");
+        let late = "`cargo check` ran for 600 s, past its time limit, and was stopped.";
+        assert_eq!(outcome(&done("run_check", "c", late)), late);
+    }
+
+    #[test]
+    fn the_header_names_the_folder_and_the_branch_only_inside_a_repository() {
+        assert_eq!(header(r"C:\work\demo", Some("main"), Some(2), "m"), "hugin · demo · main, 2 changed · m");
+        assert_eq!(header(r"C:\work\demo", None, None, "m"), "hugin · demo · m");
     }
 }

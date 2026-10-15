@@ -11,7 +11,6 @@
 
 use std::collections::VecDeque;
 use std::io::{BufRead, Write};
-use std::path::Path;
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -22,6 +21,7 @@ use bifrost_core::tools::{PlanStatus, PlanStep};
 use crate::session::Session;
 use crate::stop::Stopper;
 use crate::ui::{Approval, Event, ToolLine, Ui};
+use crate::view;
 
 const PROMPT: &str = "› ";
 const ASK: &str = "approve? [y/n/a] ";
@@ -174,14 +174,7 @@ impl<W: Write> Ui for Line<W> {
     fn show(&mut self, e: Event) {
         match e {
             Event::Header { folder, branch, changed, model } => {
-                let name = Path::new(&folder).file_name().map_or(folder.clone(), |n| n.to_string_lossy().into_owned());
-                let git = match (branch, changed) {
-                    (Some(b), Some(n)) => format!("{b}, {n} changed"),
-                    (Some(b), None) => b,
-                    _ => String::new(),
-                };
-                let git = if git.is_empty() { String::new() } else { format!(" · {git}") };
-                self.say(&format!("hugin · {name}{git} · {model}\n"));
+                self.say(&format!("{}\n", view::header(&folder, branch.as_deref(), changed, &model)));
             }
             Event::Prompt(text) => {
                 if self.echo {

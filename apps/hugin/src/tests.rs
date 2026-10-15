@@ -108,27 +108,27 @@ fn tap(prompts: &[&str], answers: &[&str]) -> (Tap, Feed, Sender<String>, Arc<Mu
 
 // ── what the model says ─────────────────────────────────────────────────────
 
-fn sent() -> Sent {
+pub(crate) fn sent() -> Sent {
     compact_for_send(&mut [], &[], 8192, None, 0)
 }
 
-fn round_with(reply: Reply, prompt_eval_count: u32) -> Result<Round, String> {
+pub(crate) fn round_with(reply: Reply, prompt_eval_count: u32) -> Result<Round, String> {
     Ok(Round { reply, prompt_eval_count, recovered: false, sent: sent() })
 }
 
-fn round_of(reply: Reply) -> Result<Round, String> {
+pub(crate) fn round_of(reply: Reply) -> Result<Round, String> {
     round_with(reply, 0)
 }
 
-fn raw(name: &str, arguments: serde_json::Value) -> chat::ToolCall {
+pub(crate) fn raw(name: &str, arguments: serde_json::Value) -> chat::ToolCall {
     chat::ToolCall { id: None, function: chat::FunctionCall { name: name.into(), arguments } }
 }
 
-fn answer(text: &str) -> Result<Round, String> {
+pub(crate) fn answer(text: &str) -> Result<Round, String> {
     round_of(Reply::Answer { content: text.into(), eval_count: 7 })
 }
 
-fn auto_search(result: &str) -> Result<Round, String> {
+pub(crate) fn auto_search(result: &str) -> Result<Round, String> {
     round_of(Reply::Auto {
         name: "search".into(),
         path: "\"x\"".into(),
@@ -141,7 +141,7 @@ fn auto_search(result: &str) -> Result<Round, String> {
     })
 }
 
-fn plan_update(steps: &[(&str, PlanStatus)]) -> Result<Round, String> {
+pub(crate) fn plan_update(steps: &[(&str, PlanStatus)]) -> Result<Round, String> {
     let plan = steps.iter().map(|(t, s)| PlanStep { text: t.to_string(), status: *s }).collect();
     round_of(Reply::Auto {
         name: "update_plan".into(),
@@ -155,12 +155,12 @@ fn plan_update(steps: &[(&str, PlanStatus)]) -> Result<Round, String> {
     })
 }
 
-fn dl(tag: &str, text: &str) -> DiffLine {
+pub(crate) fn dl(tag: &str, text: &str) -> DiffLine {
     DiffLine { tag: tag.into(), text: text.into(), old: None, new: None }
 }
 
 /// An edit of `a.rs` that replaces `old` with `new`, waiting for a decision.
-fn edit() -> Result<Round, String> {
+pub(crate) fn edit() -> Result<Round, String> {
     let hunk = Hunk { lines: vec![dl(" ", "fn a() {"), dl("-", "    old();"), dl("+", "    new();"), dl(" ", "}")] };
     round_of(Reply::Call {
         call: PendingCall {
@@ -178,9 +178,9 @@ fn edit() -> Result<Round, String> {
     })
 }
 
-const EDITED: &str = "Edited a.rs: 1 line removed, 1 added.";
+pub(crate) const EDITED: &str = "Edited a.rs: 1 line removed, 1 added.";
 
-fn edited() -> Result<Ran, String> {
+pub(crate) fn edited() -> Result<Ran, String> {
     Ok(Ran::text(EDITED.into()))
 }
 
@@ -240,7 +240,7 @@ struct Played {
     convo: Vec<Message>,
 }
 
-fn header() -> Event {
+pub(crate) fn header() -> Event {
     Event::Header { folder: "C:\\work\\demo".into(), branch: Some("main".into()), changed: Some(2), model: "m".into() }
 }
 
@@ -293,7 +293,7 @@ fn play(script: Script) -> Played {
     Played { out, saved, asked, ran, convo: session.conversation().to_vec() }
 }
 
-fn assistant(call: chat::ToolCall) -> Message {
+pub(crate) fn assistant(call: chat::ToolCall) -> Message {
     Message { role: "assistant".into(), content: String::new(), images: None, tool_calls: Some(vec![call]), tool_name: None }
 }
 
@@ -311,7 +311,7 @@ fn an_answer_is_echoed_and_shown_after_the_header() {
 
 #[test]
 fn an_automatic_search_is_one_line_with_its_first_line_of_result() {
-    let p = play(Script::new(&["find x"]).model(vec![auto_search("6 hits\nsrc/a.rs:3: x"), answer("Found it.")]));
+    let p = play(Script::new(&["find x"]).model(vec![auto_search("6 matches for \"x\" in 2 files:\nsrc/a.rs:3: x"), answer("Found it.")]));
     assert!(p.out.contains("● search \"x\" → 6 hits\n"), "{}", p.out);
     assert!(p.out.contains("Found it.\n"));
     assert!(p.ran.is_empty(), "an automatic call is not run again");
@@ -329,13 +329,13 @@ fn the_task_list_is_shown_as_checkboxes() {
 fn an_edit_approved_with_y_shows_its_diff_then_what_was_applied() {
     let p = play(Script::new(&["fix it"]).answering(&["y"]).model(vec![edit(), answer("Done.")]).running(vec![edited()]));
     let want = "› fix it\n\
-                ? edit_file a.rs +1 −1\n\
+                ? edit a.rs +1 −1\n\
                 \x20\x20 fn a() {\n\
                 \x20\x20-    old();\n\
                 \x20\x20+    new();\n\
                 \x20\x20 }\n\
                 approve? [y/n/a] y\n\
-                ● edit_file a.rs +1 −1 → Edited a.rs: 1 line removed, 1 added.\n\
+                ● edit a.rs +1 −1 → applied\n\
                 Done.\n";
     assert!(p.out.contains(want), "{}", p.out);
     assert_eq!(p.ran, ["edit_file:a.rs:t-a.rs"]);
@@ -345,7 +345,7 @@ fn an_edit_approved_with_y_shows_its_diff_then_what_was_applied() {
 #[test]
 fn an_edit_declined_with_n_is_declined_and_the_model_is_told() {
     let p = play(Script::new(&["fix it"]).answering(&["n"]).model(vec![edit(), answer("Understood.")]));
-    assert!(p.out.contains("approve? [y/n/a] n\n● edit_file a.rs +1 −1 → declined\n"), "{}", p.out);
+    assert!(p.out.contains("approve? [y/n/a] n\n● edit a.rs +1 −1 → declined\n"), "{}", p.out);
     assert!(p.ran.is_empty());
     assert_eq!(p.convo[1], assistant(raw("edit_file", json!({ "path": "a.rs" }))));
     assert_eq!(
@@ -358,7 +358,7 @@ fn an_edit_declined_with_n_is_declined_and_the_model_is_told() {
 fn a_runs_the_call_and_anything_else_asks_again() {
     let p = play(Script::new(&["fix it"]).answering(&["maybe", "a"]).model(vec![edit(), answer("Done.")]).running(vec![edited()]));
     assert_eq!(p.out.matches("approve? [y/n/a] ").count(), 2);
-    assert!(p.out.contains("→ Edited a.rs"));
+    assert!(p.out.contains("→ applied"));
     assert_eq!(p.ran.len(), 1);
 }
 
@@ -379,7 +379,7 @@ fn stop_at_an_approval_denies_it_and_ends_the_turn() {
     let p = play(Script::new(&["fix it"]).answering(&["/stop"]).model(vec![edit()]));
     // The reading thread takes `/stop` the moment it arrives, so the question is
     // answered by the flag, not by a line.
-    assert!(p.out.contains("approve? [y/n/a] \n● edit_file a.rs +1 −1 → declined\n· stopped\n"), "{}", p.out);
+    assert!(p.out.contains("approve? [y/n/a] \n● edit a.rs +1 −1 → declined\n· stopped\n"), "{}", p.out);
     assert!(p.ran.is_empty());
     assert_eq!(p.asked.len(), 1);
 }
