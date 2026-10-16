@@ -184,6 +184,9 @@ A plain console app (no Tauri), built with `cargo build -p hugin`.
   terminal put back on any exit), `render.rs` (what each event looks like), `input.rs` (the
   input box)
 - **Stop** — `stop.rs`: one handle for the keyboard, the session and the loop
+- **Launching** — `launch.rs` (the folder, `wt.exe`, and a console of its own without it) and
+  `launch_main.rs`, the windowless `hugin-launch` a shortcut key starts; installed by
+  `tools/shortcuts.mjs`, with `tools/user-path.ps1` putting the folder on the user PATH
 
 ### `crates/bifrost-cli/` — the CLI, binary `bifrost`
 

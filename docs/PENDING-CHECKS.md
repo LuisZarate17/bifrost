@@ -11,6 +11,13 @@ worksheet, with exact text to type and what should happen. This file keeps the r
 > command is `bifrost`, and the data folder is `%APPDATA%\bifrost`. The open checks below use
 > the new names; anything already checked keeps the names it was checked under.
 
+## Open — I4, launching Hugin, 2026-10-16
+
+The key was pressed as real keyboard input with every window shown logged — one Windows Terminal
+window, no console — and `hugin` resolved on the new PATH. What a script cannot do is restart VS
+Code, which keeps the PATH it started with, so `hugin` in VS Code's terminal waits for a person.
+[I-testing.md](I-testing.md) §I4; [I4-results.md](results/I4-results.md).
+
 ## Open — I3, shell commands in Hugin, 2026-10-15
 
 Allow, deny, allow for the session and Stop were run end to end through Hugin's line mode with

@@ -163,6 +163,22 @@ every one asks first ([I3-results.md](results/I3-results.md)). Rebuild it first:
 
 ---
 
+## I4 — Launching Hugin
+
+`Hugin.lnk` is in the Start Menu and on the Desktop, and `%LOCALAPPDATA%\bifrost\bin` is on your
+user PATH ([I4-results.md](results/I4-results.md)). After rebuilding Hugin, run
+`node tools/shortcuts.mjs` again to refresh the installed copy.
+
+- [ ] **The key.** With any window in front, press **Ctrl+Alt+H**. **Expect:** one Windows Terminal
+      window titled Hugin, with no console flashing first, opened in the folder you last used Hugin in
+      (your profile folder the very first time).
+- [ ] **The last folder follows you.** Open Hugin in another project (`hugin` there), quit with Ctrl+D,
+      then press Ctrl+Alt+H. **Expect:** it opens in that project.
+- [ ] **VS Code's terminal.** Restart VS Code (it keeps the PATH it started with), open a terminal in a
+      project and type `hugin`. **Expect:** Hugin starts there.
+
+---
+
 ## After this
 
 - Anything that failed goes back to the chunk, with what you saw.
