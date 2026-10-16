@@ -13,6 +13,9 @@ mod inline;
 #[cfg(test)]
 mod inline_tests;
 mod input;
+mod launch;
+#[cfg(test)]
+mod launch_tests;
 mod line;
 mod render;
 mod session;
@@ -35,13 +38,14 @@ use ui::Event;
 const HELP: &str = "\
 hugin - a terminal agent that works in a folder
 
-usage: hugin [--folder <path>] [--shell <powershell|cmd|bash>] [--line]
+usage: hugin [--folder <path>] [--shell <powershell|cmd|bash>] [--line] [--launch]
 
   --folder <path>   the folder to work in (default: the current directory)
   --shell <name>    the shell the model's commands run in (default: hugin_shell in the config,
                     else Git Bash, or PowerShell where Git Bash is not installed); every
                     command is shown and asked about first
   --line            plain line mode, as when input or output is not a terminal
+  --launch          open Hugin in Windows Terminal, in the folder it was last used in
   -p                reserved for a later step
   --help            show this help
 
@@ -56,6 +60,8 @@ enum Cmd {
     Help,
     /// `-p`, which a later step builds.
     Print,
+    /// `--launch`: open Hugin in a terminal window, as the shortcut key does.
+    Launch,
     Run { folder: PathBuf, line: bool, shell: Option<Shell> },
 }
 
@@ -68,6 +74,7 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
         match arg.as_str() {
             "--help" | "-h" => return Ok(Cmd::Help),
             "-p" => return Ok(Cmd::Print),
+            "--launch" => return Ok(Cmd::Launch),
             "--line" => line = true,
             "--folder" => folder = Some(args.next().ok_or("--folder needs a path")?),
             "--shell" => shell = Some(parse_shell(&args.next().ok_or("--shell needs a name")?)?),
@@ -95,12 +102,25 @@ fn main() -> ExitCode {
             eprintln!("hugin -p is not built yet");
             ExitCode::from(2)
         }
+        Ok(Cmd::Launch) => match launch::launch() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("hugin: {e}");
+                ExitCode::from(1)
+            }
+        },
         Ok(Cmd::Run { folder, line, shell }) => run(folder, line, shell),
         Err(e) => {
             eprintln!("hugin: {e}\n\n{HELP}");
             ExitCode::from(2)
         }
     }
+}
+
+/// Whether the interactive interface runs: not with `--line`, and only with a terminal to
+/// read keys from and draw on.
+fn interactive(line: bool, stdin_tty: bool, stdout_tty: bool) -> bool {
+    !line && stdin_tty && stdout_tty
 }
 
 fn run(folder: PathBuf, line: bool, shell: Option<Shell>) -> ExitCode {
@@ -138,7 +158,11 @@ fn run(folder: PathBuf, line: bool, shell: Option<Shell>) -> ExitCode {
 
     // The interface needs a terminal to read keys from and to draw on; a pipe gets the
     // plain line mode, so a script can drive Hugin, and so does `--line`.
-    if !line && io::stdin().is_terminal() && io::stdout().is_terminal() {
+    if interactive(line, io::stdin().is_terminal(), io::stdout().is_terminal()) {
+        // Only here: line mode is what scripts use, and must not move a person's last folder.
+        // Failing to record it is not worth a word.
+        let last = root.clone();
+        let _ = config::update(move |c| c.hugin_last_folder = Some(last));
         return match inline::start(move || Session::real(model, root, shell), header, notices) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -160,6 +184,15 @@ mod tests_main {
 
     fn args(list: &[&str]) -> Result<Cmd, String> {
         parse(list.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn line_mode_and_pipes_are_not_interactive_so_they_record_no_folder() {
+        assert!(interactive(false, true, true));
+        assert!(!interactive(true, true, true));
+        assert!(!interactive(false, false, true));
+        assert!(!interactive(false, true, false));
+        assert_eq!(args(&["--launch"]), Ok(Cmd::Launch));
     }
 
     #[test]

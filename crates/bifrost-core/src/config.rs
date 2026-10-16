@@ -192,6 +192,11 @@ pub struct Config {
     /// or with `--shell`; anything else is the default.
     #[serde(deserialize_with = "lenient_hugin_shell")]
     pub hugin_shell: String,
+    /// The folder Hugin last opened its interactive interface in, which Ctrl+Alt+H and
+    /// `hugin --launch` open it in again. Written by Hugin, never by line mode; anything
+    /// that is not a string reads as none.
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub hugin_last_folder: Option<String>,
     /// Fields this build does not know — a newer build's, or a person's own notes —
     /// kept as they were so the next save does not drop them.
     #[serde(flatten)]
@@ -355,6 +360,7 @@ impl Default for Config {
             instructions: BTreeSet::new(),
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
             hugin_shell: DEFAULT_HUGIN_SHELL.to_string(),
+            hugin_last_folder: None,
             extra: serde_json::Map::new(),
             unsaved: false,
         }
@@ -564,6 +570,17 @@ mod tests {
     }
 
     #[test]
+    fn the_last_hugin_folder_reads_leniently_and_is_skipped_when_none() {
+        let read = |json: &str| serde_json::from_str::<Config>(json).unwrap();
+        assert_eq!(read(r#"{"hugin_last_folder":"C:\\w"}"#).hugin_last_folder.as_deref(), Some(r"C:\w"));
+        for bad in ["null", "3", "[]", "{}", "true"] {
+            let c = read(&format!(r#"{{"hugin_last_folder":{bad},"model":"m"}}"#));
+            assert_eq!((c.hugin_last_folder, c.model.as_str()), (None, "m"), "{bad}");
+        }
+        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("hugin_last_folder"));
+    }
+
+    #[test]
     fn empty_object_is_entirely_defaults() {
         assert_eq!(
             serde_json::from_str::<Config>("{}").unwrap(),
@@ -586,6 +603,7 @@ mod tests {
             instructions: BTreeSet::from([r"C:\work\demo".into()]),
             command_timeout_secs: 30,
             hugin_shell: "bash".into(),
+            hugin_last_folder: Some(r"C:\work\demo".into()),
             extra: serde_json::Map::new(),
             unsaved: false,
         };

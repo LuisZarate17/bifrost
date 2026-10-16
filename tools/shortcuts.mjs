@@ -17,6 +17,12 @@
 // C:\Users\<user>\OneDrive\Desktop, and assembling the path writes a shortcut
 // into a folder nobody ever looks at.
 //
+// Hugin is different: a terminal program. It is copied to %LOCALAPPDATA%\bifrost\bin (so
+// rebuilding it never breaks a shortcut or a running copy), that folder is put on the user
+// PATH so `hugin` works in any terminal, and Hugin.lnk starts hugin-launch.exe, a windowless
+// program that opens Windows Terminal in the folder Hugin was last used in. The Start Menu
+// copy carries the shortcut key Ctrl+Alt+H, which Windows handles itself.
+//
 // Taskbar pins are not touched: Windows keeps them out of reach of scripts on
 // purpose. After a rename, unpin the old app and pin the new one by hand.
 
@@ -24,6 +30,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { BADGES, renderBadge } from "./icon/badge.mjs";
+import { ico } from "./icon/ico.mjs";
+import { png } from "./icon/png.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -72,6 +81,11 @@ const ps = (script) =>
     { encoding: "utf8" },
   ).trim();
 
+/** A value inside a PowerShell single-quoted string. PowerShell also ends such a string at
+ *  a typographic single quote (‘ ’ ‚ ‛), so each of those is doubled as well — a profile
+ *  folder named O’Brien must stay a path, not become code. */
+const q = (text) => String(text).replace(/['‘’‚‛]/g, (c) => c + c);
+
 /** Shell folders, asked for rather than assembled. */
 function shellFolder(name) {
   return ps(`[Environment]::GetFolderPath('${name}')`);
@@ -80,19 +94,19 @@ function shellFolder(name) {
 function readShortcut(lnk) {
   if (!fs.existsSync(lnk)) return null;
   const out = ps(
-    `$s=(New-Object -ComObject WScript.Shell).CreateShortcut('${lnk}');` +
-      `Write-Output $s.TargetPath; Write-Output $s.WorkingDirectory`,
+    `$s=(New-Object -ComObject WScript.Shell).CreateShortcut('${q(lnk)}');` +
+      `Write-Output $s.TargetPath; Write-Output $s.WorkingDirectory; Write-Output $s.Hotkey`,
   ).split(/\r?\n/);
-  return { target: out[0] ?? "", workingDir: out[1] ?? "" };
+  return { target: out[0] ?? "", workingDir: out[1] ?? "", hotkey: out[2] ?? "" };
 }
 
 function writeShortcut(lnk, { exe, description }) {
   ps(
-    `$s=(New-Object -ComObject WScript.Shell).CreateShortcut('${lnk}');` +
-      `$s.TargetPath='${exe}';` +
-      `$s.WorkingDirectory='${repoRoot}';` +
-      `$s.IconLocation='${exe},0';` +
-      `$s.Description='${description.replace(/'/g, "''")}';` +
+    `$s=(New-Object -ComObject WScript.Shell).CreateShortcut('${q(lnk)}');` +
+      `$s.TargetPath='${q(exe)}';` +
+      `$s.WorkingDirectory='${q(repoRoot)}';` +
+      `$s.IconLocation='${q(exe)},0';` +
+      `$s.Description='${q(description)}';` +
       `$s.Save()`,
   );
 }
@@ -152,3 +166,115 @@ if (missingExe && !check) {
   console.log("\nShortcuts were written, but at least one target does not exist yet.");
   process.exitCode = 1;
 }
+
+// ── Hugin ───────────────────────────────────────────────────────────────────
+
+
+/** The PATH entries compared as Windows does: ignoring case and a trailing backslash. */
+const normalized = (entry) => entry.trim().replace(/[\\/]+$/, "").toLowerCase();
+const onPath = (pathValue, dir) => pathValue.split(";").some((e) => e.trim() && normalized(e) === normalized(dir));
+
+/** Copy `from` to `to` when the build is newer or the copy is missing; say what happened. */
+function copyIfNewer(from, to, check) {
+  const name = path.basename(to);
+  if (!fs.existsSync(from)) {
+    console.log(`!  ${name}: ${from} does not exist — build it first (cargo build -p hugin)`);
+    return;
+  }
+  const have = fs.existsSync(to);
+  const upToDate = have && fs.statSync(to).mtimeMs >= fs.statSync(from).mtimeMs;
+  if (check) {
+    console.log(`  ${name}: ${!have ? "missing" : upToDate ? "up to date" : "older than the build"}`);
+    return;
+  }
+  if (upToDate) {
+    console.log(`  same   ${name}`);
+    return;
+  }
+  try {
+    fs.copyFileSync(from, to);
+    console.log(`copied   ${name}`);
+  } catch (e) {
+    const busy = ["EBUSY", "EPERM", "EACCES"].includes(e.code);
+    console.log(`!  ${name}: not copied — ${busy ? "it is running; close it and run this again" : e.message}`);
+  }
+}
+
+function hugin() {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData) {
+    console.log("!  Hugin: LOCALAPPDATA is not set");
+    return;
+  }
+  const binDir = path.join(localAppData, "bifrost", "bin");
+  const debugDir = path.join(repoRoot, "target", "debug");
+  const launcher = path.join(binDir, "hugin-launch.exe");
+  const icon = path.join(binDir, "hugin.ico");
+  const description = "A coding agent in the terminal, on Bifrost's engine.";
+  console.log(`
+Hugin  (${binDir})`);
+
+  if (!check) fs.mkdirSync(binDir, { recursive: true });
+  for (const exe of ["hugin.exe", "hugin-launch.exe"]) copyIfNewer(path.join(debugDir, exe), path.join(binDir, exe), check);
+
+  // The user PATH only, through tools/user-path.ps1: it keeps every entry as it is (unexpanded,
+  // in order, the same registry type) and only ever appends.
+  const pathScript = path.join(repoRoot, "tools", "user-path.ps1");
+  const said = JSON.parse(
+    execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", pathScript, "-Folder", binDir, ...(check ? ["-Check"] : [])],
+      { encoding: "utf8" },
+    ).trim(),
+  );
+  if (check) {
+    console.log(`  user PATH ${said.there ? "has" : "does not have"} ${binDir}`);
+  } else if (said.changed) {
+    console.log(`PATH     was: ${said.before ?? "(none)"}`);
+    console.log(`         now: ${said.after}`);
+    console.log("         (terminals already open keep the old one; new ones find hugin)");
+  } else {
+    console.log("  same   user PATH already has it");
+  }
+
+  // The same ico the apps embed: 16 to 256 px entries.
+  const badge = BADGES.hugin;
+  const bytes = ico([16, 20, 24, 32, 40, 48, 64, 128, 256].map((size) => {
+    const rgba = renderBadge(badge, size);
+    return { size, rgba, png: png(size, size, rgba) };
+  }));
+  const iconSame = fs.existsSync(icon) && fs.readFileSync(icon).equals(bytes);
+  if (check) console.log(`  hugin.ico: ${fs.existsSync(icon) ? (iconSame ? "up to date" : "differs from the badge") : "missing"}`);
+  else if (!iconSame) {
+    fs.writeFileSync(icon, bytes);
+    console.log("wrote    hugin.ico");
+  }
+
+  for (const [label, dir] of locations) {
+    const lnk = path.join(dir, "Hugin.lnk");
+    // The key on the Start Menu copy only, so it is registered once.
+    const hotkey = label === "Start Menu" ? "CTRL+ALT+H" : "";
+    const before = readShortcut(lnk);
+    if (check) {
+      console.log(`${label.padEnd(11)} Hugin.lnk`);
+      console.log(`  ${before ? `${before.target}  key: ${before.hotkey || "(none)"}` : "(does not exist)"}`);
+      continue;
+    }
+    ps(
+      `$s=(New-Object -ComObject WScript.Shell).CreateShortcut('${q(lnk)}');` +
+        `$s.TargetPath='${q(launcher)}';` +
+        `$s.WorkingDirectory='${q(binDir)}';` +
+        `$s.IconLocation='${q(icon)},0';` +
+        `$s.Description='${q(description)}';` +
+        `$s.Hotkey='${hotkey}';` +
+        `$s.Save()`,
+    );
+    const after = readShortcut(lnk);
+    const changed = !before || before.target !== after.target || before.hotkey !== after.hotkey;
+    console.log(`${changed ? "updated" : "  same "}  ${label.padEnd(11)} Hugin.lnk`);
+    if (before && changed) console.log(`           was: ${before.target}  key: ${before.hotkey || "(none)"}`);
+    console.log(`           now: ${after.target}  key: ${after.hotkey || "(none)"}`);
+  }
+}
+
+hugin();
