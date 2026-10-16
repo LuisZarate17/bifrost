@@ -11,6 +11,12 @@ worksheet, with exact text to type and what should happen. This file keeps the r
 > command is `bifrost`, and the data folder is `%APPDATA%\bifrost`. The open checks below use
 > the new names; anything already checked keeps the names it was checked under.
 
+## Open — I4b, the Bifrost tray, 2026-10-16
+
+The tray was started, its Startup shortcut made and repaired, and Ctrl+Alt+H timed — all by
+script. Its menu cannot be opened by a script here (the taskbar hides itself), so the clicks are
+Luis's: [I-testing.md](I-testing.md) §I4b; [I4b-results.md](results/I4b-results.md).
+
 ## Open — I4, launching Hugin, 2026-10-16
 
 The key was pressed as real keyboard input with every window shown logged — one Windows Terminal

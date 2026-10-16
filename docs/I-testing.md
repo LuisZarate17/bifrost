@@ -179,6 +179,26 @@ user PATH ([I4-results.md](results/I4-results.md)). After rebuilding Hugin, run
 
 ---
 
+## I4b — The Bifrost tray
+
+The tray icon is now the **Bifrost mark** (three slices), and it starts at login
+([I4b-results.md](results/I4b-results.md)). Your taskbar hides itself, so open the tray from it and
+click the mark.
+
+- [ ] **The menu.** **Expect:** the model's state at the top (`Off`, `Warming…` or `Ready · N GB`),
+      then `Model loaded`, `Model ▸`, `Open Mimir`, `Open Hugin  Ctrl+Alt+H`, `Start at login`,
+      `Quit Bifrost`.
+- [ ] **The switch.** Untick `Model loaded`. **Expect:** the state goes to `Off` and the model leaves
+      memory. Tick it. **Expect:** `Warming…`, then `Ready · N GB`.
+- [ ] **The picker.** Open `Model ▸`. **Expect:** your installed models, the current one ticked,
+      `— text only` beside those that cannot see. Pick another: the tick moves; with the switch on,
+      the new one loads. Pick the ticked one again: nothing changes, and it stays ticked.
+- [ ] **Open Mimir, Open Hugin.** Each opens its app; Ctrl+Alt+H opens Hugin at once, splash first.
+- [ ] **Start at login.** Untick it, sign out and in: no tray. Tick it again: it starts at login, with
+      no model loaded until you turn the switch on.
+
+---
+
 ## After this
 
 - Anything that failed goes back to the chunk, with what you saw.

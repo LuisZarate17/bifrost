@@ -1,7 +1,7 @@
 # Stage I — where it stands
 
 Every chunk and gate of [STAGE-I.md](../stages/STAGE-I.md), done or not. **Updated at the end of
-every chunk**, alongside its results doc. Last updated 2026-10-16, after I4.
+every chunk**, alongside its results doc. Last updated 2026-10-16, after I4b.
 
 **6 of 8 chunks done · 1 of 4 gates passed** (Gate 1 skipped).
 
@@ -15,6 +15,7 @@ every chunk**, alongside its results doc. Last updated 2026-10-16, after I4.
 | **2. Hugin** | I2 | The terminal | ✅ Built · local (77bf850, 98bbd8f, ecc7886) — your task in both terminals is open | Inline like Claude Code; Stage H's finish line through Hugin 3/3; Stop at every point; checked in a real Windows Terminal — [I2](results/I2-results.md) |
 | | I3 | Shell commands | ✅ Built · local (781aba7) | Every command asked, `a` for the session; Git Bash chosen by cmdprobe (tied with PowerShell at 43/48, cmd 42); end to end 8/8 in both — [I3](results/I3-results.md) |
 | | I4 | Launching: Ctrl+Alt+H, PATH, the last folder | ✅ Built · local (3e552cd) | The real key shows exactly one Windows Terminal window, in the last folder; `hugin` on the PATH, entries kept as they were — [I4](results/I4-results.md) |
+| | I4b | The Bifrost tray and a smoother launch (asked for in use) | ✅ Built · local (2916a0a, c541532) | A splash while Hugin opens; Vidar's tray is Bifrost's control panel and catches Ctrl+Alt+H — 0.3 s to the splash, not 3 s — [I4b](results/I4b-results.md) |
 | | I5 | Print mode for Claude Code (`hugin -p`) | ⏳ Next | |
 | | Gate 2 | Hugin in daily use | Not started | |
 | **3. Claude checks** | I6 | Check with Claude, in Mimir | Not started | |

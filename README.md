@@ -5,7 +5,7 @@ Local AI tools that share one model and one machine. Nothing leaves the computer
 | | |
 |---|---|
 | **Mimir** | The main workspace: a local chat app that reads, finds and edits code in a folder you pick, runs the folder's check, and decides which model is loaded. **Built through Stage H** |
-| **Hugin** | A coding agent inline in the terminal, in the spirit of Claude Code, on Mimir's engine. **Built** (I2–I4): reads, searches, edits, the folder's check and any shell command, each approved inline; **Ctrl+Alt+H** opens it in the last folder, and `hugin` works in any terminal. `hugin -p` comes next — [docs/I-status.md](docs/I-status.md) |
+| **Hugin** | A coding agent inline in the terminal, in the spirit of Claude Code, on Mimir's engine. **Built** (I2–I4b): reads, searches, edits, the folder's check and any shell command, each approved inline; **Ctrl+Alt+H** opens it in the last folder, and `hugin` works in any terminal. `hugin -p` comes next — [docs/I-status.md](docs/I-status.md) |
 | **`bifrost`** | Vidar's pipeline from the command line, plus `warm` / `off` / `status` power control |
 
 Things with an icon get a name; things you type get a description (PLAN.md §0b). Bifrost is the
