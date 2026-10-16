@@ -2126,6 +2126,7 @@ dependencies = [
  "ratatui",
  "serde_json",
  "unicode-width",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

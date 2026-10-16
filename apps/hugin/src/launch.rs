@@ -4,7 +4,7 @@
 //! (no console flash) for a shortcut key to start. The pure parts, the folder choice and the
 //! `wt` argument list, are tested in `launch_tests.rs`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use bifrost_core::config;
@@ -35,40 +35,56 @@ pub fn wt_args(folder: &str, program: &str) -> Vec<String> {
         .collect()
 }
 
-/// Start Hugin in a terminal window. `Ok` once something was started; the `Err` says why not.
-pub fn launch() -> Result<(), String> {
+/// Which way Hugin was started, for the splash that waits for its window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Started {
+    /// In a new Windows Terminal window; `wt.exe` hands the work to a process that is not ours.
+    Terminal,
+    /// In a console of its own, by this process id.
+    Console(u32),
+}
+
+/// What to start and where: the `hugin.exe` beside this program, and the folder to open in.
+pub fn target() -> Result<(PathBuf, String), String> {
     let program = std::env::current_exe()
         .map_err(|e| format!("cannot find hugin.exe: {e}"))?
         .with_file_name("hugin.exe");
     let folder = choose_folder(config::load().hugin_last_folder, std::env::var("USERPROFILE").ok(), |f| {
         Path::new(f).is_dir()
     });
+    Ok((program, folder))
+}
+
+/// Start Hugin in a terminal window, never waiting on it. `Ok` says which way it was started;
+/// the `Err` says why not.
+pub fn start(program: &Path, folder: &str) -> Result<Started, String> {
     let program_text = program.to_string_lossy().into_owned();
 
     let wt = Command::new("wt.exe")
-        .args(wt_args(&folder, &program_text))
+        .args(wt_args(folder, &program_text))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn();
     let wt_error = match wt {
-        Ok(_) => return Ok(()),
+        Ok(_) => return Ok(Started::Terminal),
         Err(e) => e,
     };
 
-    new_console(&program, &folder)
+    new_console(program, folder)
+        .map(Started::Console)
         .map_err(|e| format!("could not start Windows Terminal ({wt_error}) or {program_text} ({e})"))
 }
 
 /// Start `program` in a console window of its own, in `folder` — what happens where Windows
-/// Terminal is not installed.
+/// Terminal is not installed. The `Ok` is the new process's id.
 ///
 /// **Not through `std::process`**, which always hands the child its parent's standard handles
 /// (`STARTF_USESTDHANDLES`). `hugin-launch` is windowless and has none, so Hugin would start
 /// with nothing to read or write, take itself for a script, and end at once — a window that
 /// flashes and closes. Without that flag, Windows gives the child its new console's own
 /// handles, and Hugin sees a terminal.
-fn new_console(program: &Path, folder: &str) -> Result<(), String> {
+fn new_console(program: &Path, folder: &str) -> Result<u32, String> {
     use std::ffi::{c_void, OsStr};
     use std::os::windows::ffi::OsStrExt;
 
@@ -150,5 +166,5 @@ fn new_console(program: &Path, folder: &str) -> Result<(), String> {
         CloseHandle(info.thread);
         CloseHandle(info.process);
     }
-    Ok(())
+    Ok(info.pid)
 }

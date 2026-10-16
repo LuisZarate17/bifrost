@@ -102,8 +102,8 @@ fn main() -> ExitCode {
             eprintln!("hugin -p is not built yet");
             ExitCode::from(2)
         }
-        Ok(Cmd::Launch) => match launch::launch() {
-            Ok(()) => ExitCode::SUCCESS,
+        Ok(Cmd::Launch) => match launch::target().and_then(|(program, folder)| launch::start(&program, &folder)) {
+            Ok(_) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("hugin: {e}");
                 ExitCode::from(1)
@@ -164,7 +164,7 @@ fn run(folder: PathBuf, line: bool, shell: Option<Shell>) -> ExitCode {
         let last = root.clone();
         let _ = config::update(move |c| c.hugin_last_folder = Some(last));
         return match inline::start(move || Session::real(model, root, shell), header, notices) {
-            Ok(()) => ExitCode::SUCCESS,
+            Ok(_) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("hugin: {e}");
                 ExitCode::from(1)

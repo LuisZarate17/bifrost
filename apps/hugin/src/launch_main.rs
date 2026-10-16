@@ -1,5 +1,6 @@
 //! `hugin-launch`: what the Ctrl+Alt+H shortcut starts. It opens Hugin in Windows Terminal, in
-//! the folder it was last used in (see [`launch`]).
+//! the folder it was last used in (see [`launch`]), and meanwhile shows a small splash (see
+//! [`splash`]), because a cold Windows Terminal takes seconds to show its window.
 //!
 //! A windows-subsystem program, so starting it never shows a console window: a console app
 //! started from a shortcut key would flash one before the terminal opened. Hence also that a
@@ -9,6 +10,9 @@
 
 #[path = "launch.rs"]
 mod launch;
+mod splash;
+#[cfg(test)]
+mod splash_tests;
 
 use std::os::windows::ffi::OsStrExt;
 
@@ -24,8 +28,15 @@ fn wide(text: &str) -> Vec<u16> {
     std::ffi::OsStr::new(text).encode_wide().chain(Some(0)).collect()
 }
 
+/// Show the splash while Hugin is started, then go.
+fn run() -> Result<(), String> {
+    let (program, folder) = launch::target()?;
+    let icon = program.with_file_name("hugin.ico");
+    splash::run(&folder, &icon, || launch::start(&program, &folder)).map(|_| ())
+}
+
 fn main() -> std::process::ExitCode {
-    match launch::launch() {
+    match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(reason) => {
             let (text, caption) = (wide(&reason), wide("Hugin"));

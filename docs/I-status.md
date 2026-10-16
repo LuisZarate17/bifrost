@@ -20,6 +20,13 @@ every chunk**, alongside its results doc. Last updated 2026-10-16, after I4.
 | **3. Claude checks** | I6 | Check with Claude, in Mimir | Not started | |
 | | Gate 3 | Done with Stage I | Not started | |
 
+## At the end of Stage I
+
+**Decided by Luis on 2026-10-16:** the repository is renamed **at the end of Stage I**, after
+Gate 3 — on GitHub (`LuisZarate17/odin` → `bifrost`, then the remote URL) and locally
+(`…eposodin` → `…eposifrost`, by `tools/move-repo.ps1`) — together with pushing
+Stage I. Until then everything stays committed locally under the old folder name.
+
 ## Decided before the build
 
 Names, colors, badges, Hugin's behavior and the one opt-in exception to the no-cloud rule are in
