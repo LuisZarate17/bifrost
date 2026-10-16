@@ -5,7 +5,11 @@ import { BADGES, renderBadge } from "./badge.mjs";
 import { ico, icns } from "./ico.mjs";
 
 //   node tools/icon/install.mjs <out-dir> <vidar|mimir|hugin|bifrost>
+//   node tools/icon/install.mjs --tray <out-dir>
 //   node tools/icon/install.mjs --preview <dir>
+//
+// The `--tray` form writes the Bifrost mark at the tray sizes (tray-16.png ... tray-32.png)
+// that Vidar's tray embeds; it is the suite's tray, so the mark and not Vidar's shield.
 //
 // The first form writes one icon set: the PNGs tauri.conf.json names, the Store
 // logos Tauri scaffolded beside them, a multi-size .ico and an .icns. Vidar's and
@@ -20,6 +24,17 @@ const [first, second] = process.argv.slice(2);
 
 const SIZES = [16, 32, 64, 256];
 
+const TRAY_SIZES = [16, 20, 24, 32];
+
+if (first === "--tray" && second) {
+  fs.mkdirSync(second, { recursive: true });
+  for (const size of TRAY_SIZES) {
+    fs.writeFileSync(path.join(second, `tray-${size}.png`), png(size, size, renderBadge(BADGES.bifrost, size)));
+  }
+  console.log(`wrote ${TRAY_SIZES.length} tray icons into ${second}`);
+  process.exit(0);
+}
+
 if (first === "--preview" && second) {
   fs.mkdirSync(second, { recursive: true });
   for (const [name, badge] of Object.entries(BADGES)) {
@@ -32,6 +47,7 @@ if (first === "--preview" && second) {
 
 if (!first || !BADGES[second]) {
   console.error(`usage: node tools/icon/install.mjs <out-dir> <${Object.keys(BADGES).join("|")}>`);
+  console.error("       node tools/icon/install.mjs --tray <out-dir>");
   console.error("       node tools/icon/install.mjs --preview <dir>");
   process.exit(2);
 }

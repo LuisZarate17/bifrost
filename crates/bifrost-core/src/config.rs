@@ -197,6 +197,11 @@ pub struct Config {
     /// that is not a string reads as none.
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub hugin_last_folder: Option<String>,
+    /// Whether the tray has ever offered "Start at login" and recorded the answer. The
+    /// first run of the tray turns it on and sets this; after that only the tray's switch
+    /// changes it. Anything that is not a bool reads as never recorded.
+    #[serde(deserialize_with = "lenient")]
+    pub bifrost_login_chosen: bool,
     /// Fields this build does not know — a newer build's, or a person's own notes —
     /// kept as they were so the next save does not drop them.
     #[serde(flatten)]
@@ -361,6 +366,7 @@ impl Default for Config {
             command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
             hugin_shell: DEFAULT_HUGIN_SHELL.to_string(),
             hugin_last_folder: None,
+            bifrost_login_chosen: false,
             extra: serde_json::Map::new(),
             unsaved: false,
         }
@@ -589,6 +595,17 @@ mod tests {
     }
 
     #[test]
+    fn the_login_choice_reads_leniently_and_defaults_to_never_recorded() {
+        let read = |json: &str| serde_json::from_str::<Config>(json).unwrap();
+        assert!(!read("{}").bifrost_login_chosen);
+        assert!(read(r#"{"bifrost_login_chosen":true}"#).bifrost_login_chosen);
+        for bad in ["null", "3", "\"yes\"", "[]", "{}"] {
+            let c = read(&format!(r#"{{"bifrost_login_chosen":{bad},"model":"m"}}"#));
+            assert_eq!((c.bifrost_login_chosen, c.model.as_str()), (false, "m"), "{bad}");
+        }
+    }
+
+    #[test]
     fn round_trips() {
         let c = Config {
             model: "qwen3-vl:4b-instruct-q8_0".into(),
@@ -604,6 +621,7 @@ mod tests {
             command_timeout_secs: 30,
             hugin_shell: "bash".into(),
             hugin_last_folder: Some(r"C:\work\demo".into()),
+            bifrost_login_chosen: true,
             extra: serde_json::Map::new(),
             unsaved: false,
         };

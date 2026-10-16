@@ -445,6 +445,12 @@ fn end_followup(window: tauri::WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
+/// Ctrl+Alt+H starts Hugin. Held here, not by a shortcut key on a `.lnk`: Windows takes
+/// about three seconds to act on that, and a running process's hotkey is instant.
+fn key_hugin() -> Shortcut {
+    Shortcut::new(chord(), Code::KeyH)
+}
+
 /// Ask a second question about the screenshot already taken.
 ///
 /// **Takes no new screenshot** — that is the entire feature. Fails rather than
@@ -1837,6 +1843,11 @@ pub fn run() {
                         return;
                     }
 
+                    if *shortcut == key_hugin() {
+                        std::thread::spawn(tray::open_hugin);
+                        return;
+                    }
+
                     // The copy key first: it is live only while an answer is on
                     // screen, so reaching here means there is something to copy.
                     // It is a plain message to the frontend, which owns what it
@@ -1949,6 +1960,12 @@ pub fn run() {
                     }
                 }
             };
+
+            // Ctrl+Alt+H for Hugin. Never fatal: another program may hold it.
+            match app.global_shortcut().register(key_hugin()) {
+                Ok(()) => println!("[vidar] hotkey registered: Ctrl+Alt+H (Hugin)"),
+                Err(e) => eprintln!("[vidar] Ctrl+Alt+H unavailable ({e}) — Hugin is still in the tray menu"),
+            }
 
             // Note: a successful bind is not proof the hotkey works. Apps that grab
             // keys with a low-level keyboard hook swallow it with no error at all

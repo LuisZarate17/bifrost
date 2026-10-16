@@ -20,8 +20,9 @@
 // Hugin is different: a terminal program. It is copied to %LOCALAPPDATA%\bifrost\bin (so
 // rebuilding it never breaks a shortcut or a running copy), that folder is put on the user
 // PATH so `hugin` works in any terminal, and Hugin.lnk starts hugin-launch.exe, a windowless
-// program that opens Windows Terminal in the folder Hugin was last used in. The Start Menu
-// copy carries the shortcut key Ctrl+Alt+H, which Windows handles itself.
+// program that opens Windows Terminal in the folder Hugin was last used in. Neither copy
+// carries a shortcut key: Bifrost's tray (Vidar's process) registers Ctrl+Alt+H, which a
+// running process answers at once where Explorer takes ~3 s.
 //
 // Taskbar pins are not touched: Windows keeps them out of reach of scripts on
 // purpose. After a rename, unpin the old app and pin the new one by hand.
@@ -252,8 +253,9 @@ Hugin  (${binDir})`);
 
   for (const [label, dir] of locations) {
     const lnk = path.join(dir, "Hugin.lnk");
-    // The key on the Start Menu copy only, so it is registered once.
-    const hotkey = label === "Start Menu" ? "CTRL+ALT+H" : "";
+    // No key on either copy: Bifrost's tray registers Ctrl+Alt+H (a running process answers
+    // at once, Explorer takes ~3 s), and Explorer holding it would block the tray's.
+    const hotkey = "";
     const before = readShortcut(lnk);
     if (check) {
       console.log(`${label.padEnd(11)} Hugin.lnk`);
