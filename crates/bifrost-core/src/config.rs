@@ -88,6 +88,16 @@ pub const DEFAULT_PROMPT: &str =
 /// this: it is a measurement harness, and changing its context would make F1's
 /// saved runs incomparable to new ones.
 pub const DEFAULT_NUM_CTX: u32 = 32768;
+/// How long a shell command may run, by default (`command_timeout_secs`).
+pub const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 120;
+/// The shell Hugin's commands run in (`hugin_shell`). **Chosen at I3 (2026-10-15) by
+/// cmdprobe**, eight tasks that need a command, on qwen3-coder. After the probe's two fixes
+/// (a task's wording, and PowerShell's exit codes) Git Bash and Windows PowerShell tied,
+/// 43/48 each over two runs, with cmd at 42 — and cmd's `find` was Git's, which walked
+/// the whole drive. The tie goes to Git Bash: as fast, the shell Claude Code uses on
+/// Windows, and the one whose one-liners got the line count right. Where Git Bash is not
+/// installed Hugin uses PowerShell.
+pub const DEFAULT_HUGIN_SHELL: &str = "bash";
 
 /// Chosen at Gate 2 (2026-10-01) from the H4 benchmark: 25/48 against 6/48 for
 /// `DEFAULT_MODEL`, at 32s/task. Text-only — reports no `vision` capability — so
@@ -174,6 +184,14 @@ pub struct Config {
     /// a field that is not a list means none — never a reset of the whole file.
     #[serde(deserialize_with = "lenient_instructions")]
     pub instructions: BTreeSet<String>,
+    /// How long a shell command Hugin runs may take, in seconds, before it is killed.
+    /// Set by hand; a value that is not a whole number is the default.
+    #[serde(deserialize_with = "lenient_command_timeout")]
+    pub command_timeout_secs: u64,
+    /// The shell Hugin runs commands in: `powershell`, `cmd` or `bash`. Set by hand
+    /// or with `--shell`; anything else is the default.
+    #[serde(deserialize_with = "lenient_hugin_shell")]
+    pub hugin_shell: String,
     /// Fields this build does not know — a newer build's, or a person's own notes —
     /// kept as they were so the next save does not drop them.
     #[serde(flatten)]
@@ -220,6 +238,21 @@ fn lenient_prompt<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::E
 
 fn lenient_num_ctx<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     lenient_or(d, || DEFAULT_NUM_CTX)
+}
+
+fn lenient_command_timeout<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+    // 0 would stop every command on its first look at the clock (review I3, finding 4).
+    let secs: u64 = lenient_or(d, || DEFAULT_COMMAND_TIMEOUT_SECS)?;
+    Ok(if secs == 0 { DEFAULT_COMMAND_TIMEOUT_SECS } else { secs })
+}
+
+/// `hugin_shell`: one of the three names, else the default.
+fn lenient_hugin_shell<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    let text: String = lenient_or(d, || DEFAULT_HUGIN_SHELL.to_string())?;
+    Ok(match crate::check::Shell::parse(&text) {
+        Some(shell) => shell.name().to_string(),
+        None => DEFAULT_HUGIN_SHELL.to_string(),
+    })
 }
 
 fn lenient_coding_model<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
@@ -320,6 +353,8 @@ impl Default for Config {
             model_before_coding: None,
             ask_every_call: false,
             instructions: BTreeSet::new(),
+            command_timeout_secs: DEFAULT_COMMAND_TIMEOUT_SECS,
+            hugin_shell: DEFAULT_HUGIN_SHELL.to_string(),
             extra: serde_json::Map::new(),
             unsaved: false,
         }
@@ -513,6 +548,22 @@ mod tests {
     }
 
     #[test]
+    fn the_command_settings_default_and_read_leniently() {
+        let c = Config::default();
+        assert_eq!((c.command_timeout_secs, c.hugin_shell.as_str()), (120, "bash"));
+        let read = |json: &str| serde_json::from_str::<Config>(json).unwrap();
+        let c = read(r#"{"command_timeout_secs":30,"hugin_shell":"Bash"}"#);
+        assert_eq!((c.command_timeout_secs, c.hugin_shell.as_str()), (30, "bash"));
+        for bad in [r#""soon""#, "null", "-5", "1.5", "[]", "0"] {
+            assert_eq!(read(&format!(r#"{{"command_timeout_secs":{bad},"model":"m"}}"#)).command_timeout_secs, 120, "{bad}");
+        }
+        for bad in [r#""zsh""#, "null", "3", "[]"] {
+            let c = read(&format!(r#"{{"hugin_shell":{bad},"model":"m"}}"#));
+            assert_eq!((c.hugin_shell.as_str(), c.model.as_str()), ("bash", "m"), "{bad}");
+        }
+    }
+
+    #[test]
     fn empty_object_is_entirely_defaults() {
         assert_eq!(
             serde_json::from_str::<Config>("{}").unwrap(),
@@ -533,6 +584,8 @@ mod tests {
             model_before_coding: Some("qwen3-vl:8b-instruct-q4_K_M".into()),
             ask_every_call: true,
             instructions: BTreeSet::from([r"C:\work\demo".into()]),
+            command_timeout_secs: 30,
+            hugin_shell: "bash".into(),
             extra: serde_json::Map::new(),
             unsaved: false,
         };

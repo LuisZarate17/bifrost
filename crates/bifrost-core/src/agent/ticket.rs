@@ -102,6 +102,10 @@ pub enum Payload {
     /// the card showed, with a place on the Stop counter — a walk of a large
     /// folder can take a while, and Stop must reach it.
     Find { root: String, find: Find, stop: u64 },
+    /// A shell command, Hugin's: the folder, the shell and the exact text the card
+    /// showed — which is also the ticket's path, so a ticket for one command cannot
+    /// be redeemed for another.
+    Command { root: String, shell: crate::check::Shell, command: String, stop: u64 },
 }
 
 /// What a finding call looks for.
@@ -399,6 +403,35 @@ mod tests {
         };
         assert!(redeem_in(&mut armed(), "t", "search", shown).is_err());
         assert!(redeem_in(&mut armed(), "t", "list_files", shown).is_err());
+    }
+
+    /// **The command that runs is the exact string that was approved** - folder,
+    /// shell and text come back from the ticket, and one differing byte redeems
+    /// nothing.
+    #[test]
+    fn a_command_ticket_is_redeemed_only_for_its_exact_command() {
+        let command = "git log --oneline\n  git status ";
+        let payload = Payload::Command {
+            root: r"C:\work\demo".into(),
+            shell: crate::check::Shell::Cmd,
+            command: command.into(),
+            stop: 9,
+        };
+        let armed = || {
+            Some(Armed {
+                token: "t".into(),
+                name: "run_command".into(),
+                path: command.into(),
+                payload: Some(payload.clone()),
+            })
+        };
+        assert_eq!(redeem_in(&mut armed(), "t", "run_command", command).unwrap(), Some(payload.clone()));
+        for other in ["git log --oneline\n  git status", "git log --oneline", " git log --oneline\n  git status "] {
+            assert!(redeem_in(&mut armed(), "t", "run_command", other).is_err(), "{other:?}");
+        }
+        // Not as a check, nor as a read of a file with that name.
+        assert!(redeem_in(&mut armed(), "t", "run_check", command).is_err());
+        assert!(redeem_in(&mut armed(), "t", "read_file", command).is_err());
     }
 
     #[test]

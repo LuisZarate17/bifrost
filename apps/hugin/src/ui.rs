@@ -12,12 +12,16 @@ use bifrost_core::tools::PlanStep;
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// What Hugin learned on start: the folder it works in, where git stands there and
-    /// the model it asks. `branch` and `changed` are `None` outside a repository.
-    Header { folder: String, branch: Option<String>, changed: Option<usize>, model: String },
+    /// the model it asks, and the shell its commands run in (`""` for none shown).
+    /// `branch` and `changed` are `None` outside a repository.
+    Header { folder: String, branch: Option<String>, changed: Option<usize>, model: String, shell: String },
     /// The person's own words, echoed, so a transcript reads in order.
     Prompt(String),
     /// What the turn is waiting for; empty clears it.
     Status(String),
+    /// A command the person allowed for the whole session with `a`, asked about before:
+    /// its card is shown again, with a line saying it was not asked.
+    Allowed(Approval),
     /// A tool call, in one line, once it has ended.
     Tool(ToolLine),
     /// The model's task list as it now stands.

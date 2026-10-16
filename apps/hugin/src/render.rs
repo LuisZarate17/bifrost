@@ -82,8 +82,8 @@ fn plain(text: &str) -> Line<'static> {
 /// only a change in the live area (the status, the end of a turn).
 pub fn scrollback(e: &Event, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     let lines = match e {
-        Event::Header { folder, branch, changed, model } => {
-            let text = view::header(folder, branch.as_deref(), *changed, model);
+        Event::Header { folder, branch, changed, model, shell } => {
+            let text = view::header(folder, branch.as_deref(), *changed, model, shell);
             let rest = text.strip_prefix("hugin").unwrap_or(&text).to_string();
             vec![Line::from(vec![span("hugin", theme.accent().add_modifier(Modifier::BOLD)), span(rest, theme.dim())])]
         }
@@ -95,6 +95,12 @@ pub fn scrollback(e: &Event, theme: &Theme, width: u16) -> Vec<Line<'static>> {
                 Line::from(vec![lead, Span::raw(l.to_string())])
             })
             .collect(),
+        Event::Allowed(a) => {
+            // The card as an approval shows it, wrapped; the note is one short line.
+            let mut lines = approval(a, theme, width);
+            lines.push(Line::from(span(format!("  {}", view::ALLOWED_NOTE), theme.dim())));
+            return lines;
+        }
         Event::Tool(t) => vec![tool_line(t, theme)],
         Event::Plan(steps) => steps.iter().map(plan_line).collect(),
         Event::Answer(text) => text.split('\n').map(plain).collect(),
@@ -114,9 +120,10 @@ pub fn approval(a: &Approval, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     let target = if a.target.is_empty() { String::new() } else { format!(" {}", a.target) };
     let mut lines = vec![Line::from(span(format!("? {}{target}", a.name), theme.accent()))];
     for d in &a.detail {
+        // A command is not a diff: its `-la` is not a removed line.
         let style = match d.chars().next() {
-            Some('+') => theme.fg(Color::Green),
-            Some('-') => theme.fg(Color::Red),
+            Some('+') if a.name != "command" => theme.fg(Color::Green),
+            Some('-') if a.name != "command" => theme.fg(Color::Red),
             _ => theme.dim(),
         };
         lines.push(Line::from(span(format!("  {d}"), style)));
@@ -336,7 +343,13 @@ mod tests {
     }
 
     fn header() -> Event {
-        Event::Header { folder: "C:\\work\\demo".into(), branch: Some("main".into()), changed: Some(2), model: "qwen".into() }
+        Event::Header {
+            folder: "C:\\work\\demo".into(),
+            branch: Some("main".into()),
+            changed: Some(2),
+            model: "qwen".into(),
+            shell: String::new(),
+        }
     }
 
     fn step(text: &str, status: PlanStatus) -> PlanStep {

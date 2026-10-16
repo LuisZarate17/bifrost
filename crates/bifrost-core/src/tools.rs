@@ -65,6 +65,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::chat::{Message, Tool, ToolCall};
+use crate::check::Shell;
 use std::path::{Path, PathBuf};
 
 use crate::edit::{self, Applied, Located, Workspace};
@@ -277,6 +278,33 @@ fn check_tool(label: &str) -> Tool {
     )
 }
 
+/// Run any shell command (I3). **Only Hugin offers it**: Mimir keeps its one picked
+/// check. Every call is shown to the user and approved before it runs.
+pub fn run_command_tool(shell: Shell) -> Tool {
+    Tool::function(
+        "run_command",
+        format!(
+            "Run one command in {}, in the project folder, and return its exit code and output.              The output is cut if it is long, and a command that runs too long is stopped. The              user sees every command and approves it before it runs. To read, search or change              files, prefer read_file, search, list_files and edit_file.",
+            shell.label()
+        ),
+        json!({
+            "type": "object",
+            "properties": {
+                "command": { "type": "string", "description": "The command to run, exactly as the shell should receive it" }
+            },
+            "required": ["command"]
+        }),
+    )
+}
+
+/// The sentence [`system_prompt`] gains when commands are offered.
+pub fn command_sentence(shell: Shell) -> String {
+    format!(
+        "You can run commands with run_command, in {}; the project folder is the working          directory. Use it for git, builds, tests and anything the other tools cannot do.          The user approves each command first.",
+        shell.label()
+    )
+}
+
 /// The task list (H10). **Its argument is one string, not an array of steps**: a
 /// string survives every recovery path a malformed call goes through, and an array
 /// of objects does not survive the JSON repair. One step per line, marked `[ ]`,
@@ -409,6 +437,9 @@ pub enum Request {
     Plan { steps: Vec<PlanStep> },
     /// Probe only — see [`rewrite_tool`].
     Rewrite { path: String, content: String },
+    /// Run one shell command, as written. Only Hugin offers it ([`run_command_tool`]),
+    /// and it always asks.
+    Command { command: String },
 }
 
 impl Request {
@@ -424,6 +455,7 @@ impl Request {
             Request::Check => "run_check",
             Request::Plan { .. } => "update_plan",
             Request::Rewrite { .. } => "write_file",
+            Request::Command { .. } => "run_command",
         }
     }
 
@@ -436,7 +468,11 @@ impl Request {
             | Request::Delete { path }
             | Request::Move { path, .. }
             | Request::Rewrite { path, .. } => path,
-            Request::List { .. } | Request::Search { .. } | Request::Check | Request::Plan { .. } => "",
+            Request::List { .. }
+            | Request::Search { .. }
+            | Request::Check
+            | Request::Plan { .. }
+            | Request::Command { .. } => "",
         }
     }
 }
@@ -595,6 +631,13 @@ fn interpret_call(call: &ToolCall) -> Result<Request, String> {
         // Any arguments the model sends are ignored: there is nothing it may
         // choose about what runs.
         "run_check" => Ok(Request::Check),
+        // Not trimmed: the command reaches the shell as the model wrote it.
+        "run_command" => Ok(Request::Command {
+            command: match call.function.arguments.get("command") {
+                Some(serde_json::Value::String(c)) if !c.trim().is_empty() => c.clone(),
+                _ => return Err("run_command was called without a command".to_string()),
+            },
+        }),
         "update_plan" => {
             let steps = parse_plan(&arg(call, "plan").unwrap_or_default());
             if steps.is_empty() {
@@ -697,6 +740,7 @@ pub fn approval(ws: Option<&Workspace>, req: &Request, ask_every_call: bool) -> 
         | Request::Delete { .. }
         | Request::Move { .. }
         | Request::Check
+        | Request::Command { .. }
         | Request::Rewrite { .. } => Approval::Ask,
         Request::Plan { .. } => unreachable!("answered before the folder checks"),
     }
@@ -1393,6 +1437,42 @@ mod tests {
         let r = interpret(&call("run_check", json!({ "command": "del /s C:\\" }))).unwrap();
         assert_eq!(r, Request::Check);
         assert_eq!((r.name(), r.path()), ("run_check", ""));
+    }
+
+    #[test]
+    fn a_command_call_is_read_as_written_and_nothing_else_is() {
+        let text = "  git log --oneline  
+ git status ";
+        let r = interpret(&call("run_command", json!({ "command": text }))).unwrap();
+        assert_eq!(r, Request::Command { command: text.into() });
+        assert_eq!((r.name(), r.path()), ("run_command", ""));
+        for bad in [json!({}), json!({ "command": "" }), json!({ "command": "  
+" }), json!({ "command": 5 }), json!({ "command": null })] {
+            let e = interpret(&call("run_command", bad.clone())).unwrap_err();
+            assert!(e.starts_with("error:"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn the_command_tool_names_the_shell_and_says_every_command_is_approved() {
+        for shell in Shell::ALL {
+            let t = run_command_tool(shell);
+            assert_eq!(t.function.name, "run_command");
+            assert!(t.function.description.contains(shell.label()), "{shell:?}");
+            assert!(t.function.description.contains("approves"));
+            assert!(command_sentence(shell).contains(shell.label()));
+        }
+    }
+
+    #[test]
+    fn a_command_always_asks() {
+        let s = Sandbox::new("command");
+        let ws = s.ws();
+        let req = Request::Command { command: "git status".into() };
+        for ask_every in [false, true] {
+            assert_eq!(approval(Some(&ws), &req, ask_every), Approval::Ask);
+        }
+        assert_eq!(approval(None, &req, false), Approval::Ask);
     }
 
     #[test]

@@ -6,9 +6,12 @@
 //! and the line is made when one reaches an end. A card that is waiting for a person is
 //! shown once, as its approval, and its line comes after.
 
+use std::collections::HashSet;
+
 use bifrost_core::agent::send::Calibration;
 use bifrost_core::agent::ticket::PendingCall;
 use bifrost_core::agent::turn::{Card, CardState, Decision, Frontend, Patch, RoundNumbers};
+use bifrost_core::check::Shell;
 
 use crate::stop::Stopper;
 use crate::ui::{Event, Ui};
@@ -17,6 +20,11 @@ use crate::view;
 pub struct Fe<'a> {
     ui: &'a mut dyn Ui,
     stopper: &'a Stopper,
+    /// The shell commands run in, named in their approval.
+    shell: Shell,
+    /// The commands the person allowed for the rest of the session with `a`, each the
+    /// exact string. Kept by the session, so it outlives the turn.
+    allowed: &'a mut HashSet<String>,
     /// Every card of the turn, by the position the loop was given.
     cards: Vec<Card>,
     /// What the next round is calibrated from: the last round that was measured.
@@ -27,8 +35,8 @@ pub struct Fe<'a> {
 }
 
 impl<'a> Fe<'a> {
-    pub fn new(ui: &'a mut dyn Ui, stopper: &'a Stopper) -> Self {
-        Self { ui, stopper, cards: Vec::new(), calibration: None, answer: None }
+    pub fn new(ui: &'a mut dyn Ui, stopper: &'a Stopper, shell: Shell, allowed: &'a mut HashSet<String>) -> Self {
+        Self { ui, stopper, shell, allowed, cards: Vec::new(), calibration: None, answer: None }
     }
 
     /// The card's line, or the task list for `update_plan`.
@@ -101,9 +109,33 @@ impl Frontend for Fe<'_> {
         }
     }
 
+    /// **A command asks every time**, but one allowed with `a` runs again unasked when its
+    /// string is exactly the same, byte for byte. Its card is still shown, with a line saying
+    /// why it was not asked. `a` on anything else allows that one call, as `y` does.
     fn decide(&mut self, card: usize, call: &PendingCall) -> Decision {
-        let approval = view::approval(&self.cards[card], call);
-        self.ui.approve(&approval)
+        let command = call.name == "run_command";
+        let approval = if command {
+            view::command_approval(&call.path, self.shell)
+        } else {
+            view::approval(&self.cards[card], call)
+        };
+        let decision = if command && self.allowed.contains(&call.path) {
+            self.ui.show(Event::Allowed(approval));
+            Decision::Allow
+        } else {
+            self.ui.approve(&approval)
+        };
+        if command {
+            if decision == Decision::AllowForSession {
+                self.allowed.insert(call.path.clone());
+            }
+            // The wait while it runs, which the loop reports only as a card going to running.
+            if decision != Decision::Deny && !self.stopper.stopped() {
+                let first = view::visible(&view::first_line(&call.path));
+                self.ui.show(Event::Status(format!("running {first}")));
+            }
+        }
+        decision
     }
 
     /// Nothing to do: the loop cannot lend the conversation, and the session saves it

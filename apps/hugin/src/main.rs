@@ -27,15 +27,20 @@ use std::io::{self, BufReader, IsTerminal};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use bifrost_core::check::Shell;
+use bifrost_core::config;
 use session::Session;
 use ui::Event;
 
 const HELP: &str = "\
 hugin - a terminal agent that works in a folder
 
-usage: hugin [--folder <path>] [--line]
+usage: hugin [--folder <path>] [--shell <powershell|cmd|bash>] [--line]
 
   --folder <path>   the folder to work in (default: the current directory)
+  --shell <name>    the shell the model's commands run in (default: hugin_shell in the config,
+                    else Git Bash, or PowerShell where Git Bash is not installed); every
+                    command is shown and asked about first
   --line            plain line mode, as when input or output is not a terminal
   -p                reserved for a later step
   --help            show this help
@@ -51,12 +56,13 @@ enum Cmd {
     Help,
     /// `-p`, which a later step builds.
     Print,
-    Run { folder: PathBuf, line: bool },
+    Run { folder: PathBuf, line: bool, shell: Option<Shell> },
 }
 
 fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
     let mut folder = None;
     let mut line = false;
+    let mut shell = None;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -64,13 +70,19 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
             "-p" => return Ok(Cmd::Print),
             "--line" => line = true,
             "--folder" => folder = Some(args.next().ok_or("--folder needs a path")?),
-            other => match other.strip_prefix("--folder=") {
-                Some(path) => folder = Some(path.to_string()),
-                None => return Err(format!("unknown argument: {other}")),
+            "--shell" => shell = Some(parse_shell(&args.next().ok_or("--shell needs a name")?)?),
+            other => match (other.strip_prefix("--folder="), other.strip_prefix("--shell=")) {
+                (Some(path), _) => folder = Some(path.to_string()),
+                (_, Some(name)) => shell = Some(parse_shell(name)?),
+                _ => return Err(format!("unknown argument: {other}")),
             },
         }
     }
-    Ok(Cmd::Run { folder: folder.map_or_else(|| PathBuf::from("."), PathBuf::from), line })
+    Ok(Cmd::Run { folder: folder.map_or_else(|| PathBuf::from("."), PathBuf::from), line, shell })
+}
+
+fn parse_shell(name: &str) -> Result<Shell, String> {
+    Shell::parse(name).ok_or_else(|| format!("unknown shell: {name} (powershell, cmd or bash)"))
 }
 
 fn main() -> ExitCode {
@@ -83,7 +95,7 @@ fn main() -> ExitCode {
             eprintln!("hugin -p is not built yet");
             ExitCode::from(2)
         }
-        Ok(Cmd::Run { folder, line }) => run(folder, line),
+        Ok(Cmd::Run { folder, line, shell }) => run(folder, line, shell),
         Err(e) => {
             eprintln!("hugin: {e}\n\n{HELP}");
             ExitCode::from(2)
@@ -91,7 +103,22 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(folder: PathBuf, line: bool) -> ExitCode {
+fn run(folder: PathBuf, line: bool, shell: Option<Shell>) -> ExitCode {
+    // The flag, else the config's (an unknown value there is already the default).
+    let asked = shell;
+    let shell = asked.or_else(|| Shell::parse(&config::load().hugin_shell)).unwrap_or(Shell::Bash);
+    let shell = if shell.available() {
+        shell
+    } else if asked.is_some() {
+        // Named on the command line: say so rather than run commands somewhere else.
+        eprintln!("hugin: {} is not installed, so commands cannot run in it (try --shell powershell)", shell.label());
+        return ExitCode::from(1);
+    } else {
+        // The configured one is missing, Git Bash on a machine without Git most likely:
+        // PowerShell is always there.
+        eprintln!("hugin: {} is not installed; commands run in Windows PowerShell", shell.label());
+        Shell::PowerShell
+    };
     let start = match start::learn(&folder) {
         Ok(start) => start,
         Err(e) => {
@@ -106,12 +133,13 @@ fn run(folder: PathBuf, line: bool) -> ExitCode {
         branch: start.branch,
         changed: start.changed,
         model: start.model,
+        shell: shell.name().to_string(),
     };
 
     // The interface needs a terminal to read keys from and to draw on; a pipe gets the
     // plain line mode, so a script can drive Hugin, and so does `--line`.
     if !line && io::stdin().is_terminal() && io::stdout().is_terminal() {
-        return match inline::start(move || Session::real(model, root), header, notices) {
+        return match inline::start(move || Session::real(model, root, shell), header, notices) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("hugin: {e}");
@@ -119,9 +147,31 @@ fn run(folder: PathBuf, line: bool) -> ExitCode {
             }
         };
     }
-    let mut session = Session::real(model, root);
+    let mut session = Session::real(model, root, shell);
     // What is read is shown by the terminal only when stdin is one.
     let echo = !io::stdin().is_terminal();
     line::run(BufReader::new(io::stdin()), io::stdout(), &mut session, header, notices, echo);
     ExitCode::SUCCESS
+}
+
+#[cfg(test)]
+mod tests_main {
+    use super::*;
+
+    fn args(list: &[&str]) -> Result<Cmd, String> {
+        parse(list.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn the_shell_flag_takes_a_name_and_nothing_else() {
+        let shell = |list: &[&str]| match args(list) {
+            Ok(Cmd::Run { shell, .. }) => shell,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(shell(&[]), None);
+        assert_eq!(shell(&["--shell", "cmd"]), Some(Shell::Cmd));
+        assert_eq!(shell(&["--shell=bash", "--line"]), Some(Shell::Bash));
+        assert!(args(&["--shell", "zsh"]).is_err());
+        assert!(args(&["--shell"]).is_err());
+    }
 }

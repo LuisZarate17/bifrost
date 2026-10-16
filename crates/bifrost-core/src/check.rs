@@ -109,6 +109,171 @@ pub fn timeout_for(argv: &[String]) -> Duration {
     if argv.iter().any(|a| a == "test") { TEST_TIMEOUT } else { CHECK_TIMEOUT }
 }
 
+// ── the shell a command runs in ─────────────────────────────────────────────
+
+/// Where a shell command runs. Hugin offers the model a tool for any command, and
+/// the shell decides what its text means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shell {
+    PowerShell,
+    Cmd,
+    Bash,
+}
+
+impl Shell {
+    /// Every shell, in the order they are listed.
+    pub const ALL: [Shell; 3] = [Shell::PowerShell, Shell::Cmd, Shell::Bash];
+
+    /// The word the config and `--shell` use.
+    pub fn name(self) -> &'static str {
+        match self {
+            Shell::PowerShell => "powershell",
+            Shell::Cmd => "cmd",
+            Shell::Bash => "bash",
+        }
+    }
+
+    /// The shell as a person reads it.
+    pub fn label(self) -> &'static str {
+        match self {
+            Shell::PowerShell => "Windows PowerShell",
+            Shell::Cmd => "cmd.exe",
+            Shell::Bash => "Git Bash",
+        }
+    }
+
+    /// The shell a word names, or `None`.
+    pub fn parse(word: &str) -> Option<Shell> {
+        match word.trim().to_ascii_lowercase().as_str() {
+            "powershell" => Some(Shell::PowerShell),
+            "cmd" => Some(Shell::Cmd),
+            "bash" => Some(Shell::Bash),
+            _ => None,
+        }
+    }
+
+    /// Whether it can be started on this machine. Only Git Bash can be missing.
+    pub fn available(self) -> bool {
+        self != Shell::Bash || bash_path().is_some()
+    }
+}
+
+/// Git for Windows' `bin\bash.exe`: under `%ProgramFiles%\Git`, or beside the
+/// `git.exe` found on `PATH`. **Never `C:\Windows\System32\bash.exe`**, which is the
+/// launcher for WSL and would run the command in a Linux distribution.
+pub fn bash_path() -> Option<PathBuf> {
+    if let Some(pf) = std::env::var_os("ProgramFiles") {
+        let p = PathBuf::from(pf).join("Git").join("bin").join("bash.exe");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).find_map(|dir| {
+        let git = dir.join("git.exe");
+        if !git.is_file() {
+            return None;
+        }
+        // `Git\cmd\git.exe` → `Git\bin\bash.exe`; `Git\bin\git.exe` → itself.
+        let p = dir.join("..").join("bin").join("bash.exe");
+        p.is_file().then(|| p.components().collect::<PathBuf>())
+    })
+}
+
+/// What PowerShell is given to run: `command` on lines of its own, between a preamble —
+/// no progress bars, UTF-8 out — and a close that **ends with the exit code of the last
+/// program that failed**. Left to itself `powershell -Command` ends with 1 whenever the
+/// last thing failed, so `cargo build` failing with 101 would read as 1, and the model
+/// would be told a number cargo never said. A cmdlet that fails still ends it with 1.
+fn powershell_script(command: &str) -> String {
+    const START: &str =
+        "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; $global:LASTEXITCODE=0";
+    const END: &str =
+        "$bifrostOk=$?; if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE } elseif (-not $bifrostOk) { exit 1 }";
+    format!("{START}\n{command}\n{END}")
+}
+
+/// How long a command line Windows starts a process with, less a margin.
+const MAX_COMMAND_LINE: usize = 30_000;
+
+/// The process that runs `command` in `shell`, with the command passed **byte for
+/// byte**: PowerShell takes it encoded, so no quoting reaches it; cmd takes it as
+/// the raw tail of its command line, because std's quoting would break cmd's own
+/// parsing; bash takes it as one argument.
+///
+/// `Err` for a command a shell cannot run as written — more than one line for cmd, which
+/// stops at the first, and one too long for PowerShell's command line — so nothing runs
+/// that differs from what was approved.
+fn shell_command(shell: Shell, command: &str) -> Result<Command, String> {
+    match shell {
+        Shell::PowerShell => {
+            let script = powershell_script(command);
+            let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+            // Decoded by PowerShell itself and run as a script block, rather than handed to
+            // `-EncodedCommand`: the same bytes arrive, but `-EncodedCommand` makes it write
+            // its errors as CLIXML, and the model would be given XML instead of the error.
+            let run = format!(
+                "& ([scriptblock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{}'))))",
+                base64(&utf16)
+            );
+            if run.len() > MAX_COMMAND_LINE {
+                return Err(format!(
+                    "this command is too long to hand to PowerShell ({} characters) — write it to a .ps1 file and run that",
+                    command.chars().count()
+                ));
+            }
+            let mut cmd = Command::new("powershell.exe");
+            cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]).arg(run);
+            Ok(cmd)
+        }
+        Shell::Cmd => {
+            if command.contains(['\n', '\r']) {
+                return Err("cmd.exe runs one line, and stops at the first — join the commands with && instead".into());
+            }
+            let mut cmd = Command::new("cmd.exe");
+            cmd.args(["/d", "/s", "/c"]);
+            raw_tail(&mut cmd, &format!("\"{command}\""));
+            Ok(cmd)
+        }
+        Shell::Bash => {
+            let bash = bash_path().ok_or(r"Git Bash is not installed (no Git for Windows bin\bash.exe)")?;
+            let mut cmd = Command::new(bash);
+            cmd.args(["--noprofile", "--norc", "-c"]).arg(command);
+            Ok(cmd)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn raw_tail(cmd: &mut Command, tail: &str) {
+    use std::os::windows::process::CommandExt;
+    cmd.raw_arg(tail);
+}
+
+#[cfg(not(windows))]
+fn raw_tail(cmd: &mut Command, tail: &str) {
+    cmd.arg(tail);
+}
+
+/// Standard base64 with padding — all `-EncodedCommand` needs.
+fn base64(bytes: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = (chunk[0] as u32) << 16
+            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
+            | *chunk.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 // ── running it ──────────────────────────────────────────────────────────────
 
 /// How a run ended.
@@ -164,6 +329,41 @@ pub fn run(
     cancelled: impl Fn() -> bool,
 ) -> Result<Outcome, String> {
     let (program, args) = argv.split_first().ok_or("no command was given")?;
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    run_prepared(cmd, root, &label(argv), program, timeout, env, cancelled)
+}
+
+/// Run `command` in `shell`, in `root`, until it ends, times out, or `cancelled()`
+/// says stop. Everything [`run`] does — one job for the whole tree, the capped
+/// output, Smart App Control — and **the command reaches the shell byte for byte**:
+/// see [`shell_command`].
+///
+/// `Err` only when the shell could not be started (Git Bash not installed, say).
+pub fn run_shell(
+    root: &Path,
+    shell: Shell,
+    command: &str,
+    timeout: Duration,
+    env: &[(String, String)],
+    cancelled: impl Fn() -> bool,
+) -> Result<Outcome, String> {
+    let cmd = shell_command(shell, command)?;
+    let program = cmd.get_program().to_string_lossy().into_owned();
+    run_prepared(cmd, root, command, &program, timeout, env, cancelled)
+}
+
+/// The one runner: `cmd` is the program and its arguments, and `shown` is what an
+/// error names it as.
+fn run_prepared(
+    mut cmd: Command,
+    root: &Path,
+    shown: &str,
+    program: &str,
+    timeout: Duration,
+    env: &[(String, String)],
+    cancelled: impl Fn() -> bool,
+) -> Result<Outcome, String> {
     let dir = plain(root);
 
     // One pipe for both streams, so the model sees an error next to the line
@@ -171,9 +371,7 @@ pub fn run(
     let (mut reader, writer) = std::io::pipe().map_err(|e| format!("could not make a pipe: {e}"))?;
     let writer2 = writer.try_clone().map_err(|e| format!("could not make a pipe: {e}"))?;
 
-    let mut cmd = Command::new(program);
-    cmd.args(args)
-        .current_dir(&dir)
+    cmd.current_dir(&dir)
         .stdin(Stdio::null())
         .stdout(writer)
         .stderr(writer2)
@@ -205,13 +403,13 @@ pub fn run(
             return Ok(Outcome {
                 ended: Ended::Exited(None),
                 elapsed: started.elapsed(),
-                output: format!("could not start `{}`: {e}", label(argv)),
+                output: format!("could not start `{shown}`: {e}"),
                 bytes: 0,
                 complete: true,
                 blocked: Some(format!("the program `{program}`")),
             });
         }
-        Err(e) => return Err(format!("could not start `{}` in {}: {e}", label(argv), dir.display())),
+        Err(e) => return Err(format!("could not start `{shown}` in {}: {e}", dir.display())),
     };
     // The Command still holds this process's copies of the pipe's write end.
     // Until they are closed the reader never sees end-of-file.
@@ -497,6 +695,41 @@ pub fn for_model(argv: &[String], outcome: &Outcome) -> String {
     } else {
         format!("{head} Something it started was still running, so the output may be incomplete.")
     };
+    let output = outcome.output.trim_end();
+    if output.is_empty() {
+        head
+    } else {
+        format!("{head} Output:\n\n{output}")
+    }
+}
+
+/// What the model is told about a shell command: `` `ls` exited 0 (1.2 s). Output: ``.
+///
+/// **Never starts with `error:`**, for the reason [`for_model`] gives. Only a
+/// command that could not be started at all is an `error:`, and that is the `Err`
+/// of [`run_shell`], not an outcome.
+pub fn for_command(shell: Shell, command: &str, outcome: &Outcome) -> String {
+    let secs = outcome.elapsed.as_secs_f64();
+
+    if let Some(what) = &outcome.blocked {
+        return format!(
+            "`{command}` could not finish: Windows Smart App Control blocked {what}. This is not a \
+             problem with the command itself. Tell the user; rebuilding usually clears it."
+        );
+    }
+
+    let head = match &outcome.ended {
+        Ended::Exited(Some(code)) => format!("`{command}` exited {code} ({secs:.1} s)."),
+        Ended::Exited(None) => format!("`{command}` ended without an exit code after {secs:.1} s."),
+        Ended::TimedOut => format!("`{command}` ran for {secs:.0} s, past its time limit, and was stopped."),
+        Ended::Stopped => format!("`{command}` was stopped by the user after {secs:.1} s."),
+    };
+    let head = if outcome.complete {
+        head
+    } else {
+        format!("{head} Something it started was still running, so the output may be incomplete.")
+    };
+    let _ = shell;
     let output = outcome.output.trim_end();
     if output.is_empty() {
         head
@@ -930,5 +1163,202 @@ mod tests {
         assert_eq!(plain(Path::new(r"\\?\UNC\server\share\proj")), PathBuf::from(r"\\server\share\proj"));
         assert_eq!(plain(Path::new(r"\\?\C:\work\proj")), PathBuf::from(r"C:\work\proj"));
         assert_eq!(plain(Path::new(r"C:\work\proj")), PathBuf::from(r"C:\work\proj"));
+    }
+
+    // ── shells ──
+
+    fn args_of(cmd: &Command) -> Vec<String> {
+        cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    fn unbase64(text: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut acc = 0u32;
+        let mut bits = 0;
+        for c in text.bytes().filter(|c| *c != b'=') {
+            let v = match c {
+                b'A'..=b'Z' => c - b'A',
+                b'a'..=b'z' => c - b'a' + 26,
+                b'0'..=b'9' => c - b'0' + 52,
+                b'+' => 62,
+                _ => 63,
+            } as u32;
+            acc = acc << 6 | v;
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((acc >> bits & 0xFF) as u8);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn base64_matches_the_standard_vectors() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn shell_names_round_trip_and_unknown_is_none() {
+        for s in Shell::ALL {
+            assert_eq!(Shell::parse(s.name()), Some(s));
+        }
+        assert_eq!(Shell::parse(" PowerShell "), Some(Shell::PowerShell));
+        assert_eq!(Shell::parse("zsh"), None);
+        assert_eq!(
+            [Shell::PowerShell.label(), Shell::Cmd.label(), Shell::Bash.label()],
+            ["Windows PowerShell", "cmd.exe", "Git Bash"]
+        );
+    }
+
+    /// **The command reaches PowerShell as it was written**: encoded, so no quoting
+    /// can touch it, and it decodes back to the preamble and the exact text.
+    #[test]
+    fn powershell_gets_the_command_encoded() {
+        let command = "Write-Output \"it's\" | % { $_ }  # \u{e9}\nGet-Date";
+        let cmd = shell_command(Shell::PowerShell, command).unwrap();
+        assert_eq!(cmd.get_program(), "powershell.exe");
+        let args = args_of(&cmd);
+        assert_eq!(args[..6], ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]);
+        assert_eq!(args.len(), 7);
+        let (head, tail) = ("& ([scriptblock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('", "'))))");
+        let encoded = args[6].strip_prefix(head).and_then(|r| r.strip_suffix(tail)).expect("the decoding wrapper");
+        let units: Vec<u16> = unbase64(encoded).chunks(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+        assert_eq!(String::from_utf16(&units).unwrap(), powershell_script(command));
+        assert!(powershell_script(command).contains(&format!("\n{command}\n")), "the command itself, untouched");
+    }
+
+    /// cmd gets `/d /s /c "<command>"` with the command untouched — including its
+    /// own quotes, which std's quoting would have escaped.
+    #[test]
+    fn cmd_gets_the_command_as_a_raw_tail() {
+        let command = r#"echo "a b" & dir "C:\Program Files""#;
+        let cmd = shell_command(Shell::Cmd, command).unwrap();
+        assert_eq!(cmd.get_program(), "cmd.exe");
+        assert_eq!(args_of(&cmd), ["/d", "/s", "/c", &format!("\"{command}\"")]);
+    }
+
+    #[test]
+    fn bash_gets_the_command_as_one_argument() {
+        let Some(bash) = bash_path() else { return };
+        let command = "echo \"a b\" && ls 'x y'";
+        let cmd = shell_command(Shell::Bash, command).unwrap();
+        assert_eq!(cmd.get_program(), bash.as_os_str());
+        assert_eq!(args_of(&cmd), ["--noprofile", "--norc", "-c", command]);
+    }
+
+    #[test]
+    fn bash_is_never_the_wsl_launcher() {
+        if let Some(p) = bash_path() {
+            let lower = p.to_string_lossy().to_lowercase();
+            assert!(!lower.contains("system32") && lower.ends_with(r"bin\bash.exe"), "{lower}");
+        }
+    }
+
+    #[test]
+    fn what_a_command_is_told_never_reads_as_a_failed_call() {
+        for ended in [Ended::Exited(Some(0)), Ended::Exited(Some(1)), Ended::Exited(None), Ended::TimedOut, Ended::Stopped] {
+            let said = for_command(Shell::Cmd, "dir", &outcome(ended, "error: nothing"));
+            assert!(!said.starts_with("error:"), "{said}");
+        }
+        let o = Outcome { blocked: Some("a program".into()), ..outcome(Ended::Exited(Some(1)), "") };
+        assert!(!for_command(Shell::Cmd, "dir", &o).starts_with("error:"));
+    }
+
+    #[test]
+    fn for_command_words_each_ending() {
+        let say = |ended, output: &str| for_command(Shell::Bash, "git log", &outcome(ended, output));
+        assert_eq!(say(Ended::Exited(Some(0)), "abc\n"), "`git log` exited 0 (1.5 s). Output:\n\nabc");
+        assert_eq!(say(Ended::Exited(Some(0)), ""), "`git log` exited 0 (1.5 s).");
+        assert!(say(Ended::Exited(Some(2)), "x").starts_with("`git log` exited 2 (1.5 s)."));
+        assert!(say(Ended::TimedOut, "").contains("past its time limit"));
+        assert!(say(Ended::Stopped, "").contains("stopped by the user"));
+        let o = Outcome { blocked: Some("a program".into()), ..outcome(Ended::Exited(Some(1)), "") };
+        assert!(for_command(Shell::Bash, "git log", &o).contains("Smart App Control"));
+    }
+
+    fn shells_here() -> Vec<Shell> {
+        Shell::ALL.into_iter().filter(|s| s.available()).collect()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn echo_hello_runs_in_every_available_shell() {
+        let f = Folder::new("shells");
+        for shell in shells_here() {
+            let out = run_shell(&f.0, shell, "echo hello", CHECK_TIMEOUT, &[], never).unwrap();
+            assert!(out.passed(), "{shell:?}: {:?}", out);
+            assert_eq!(out.output.trim(), "hello", "{shell:?}");
+        }
+    }
+
+    /// A PowerShell error reaches the model as the error's words, not as CLIXML — which is
+    /// what `-EncodedCommand` would have made of it (review I3, finding 1).
+    #[cfg(windows)]
+    #[test]
+    fn a_powershell_error_comes_back_as_plain_text() {
+        let f = Folder::new("ps-error");
+        let out = run_shell(&f.0, Shell::PowerShell, "Get-Item no-such-file-here", CHECK_TIMEOUT, &[], never).unwrap();
+        assert!(!out.output.contains("CLIXML") && !out.output.contains("<Objs"), "{}", out.output);
+        assert!(out.output.contains("no-such-file-here"), "{}", out.output);
+    }
+
+    /// What a shell cannot run as written is refused before anything starts: a second line
+    /// for cmd, which would run only the first, and a command past PowerShell's command
+    /// line (review I3, finding 5).
+    #[test]
+    fn a_command_a_shell_cannot_run_as_written_is_refused() {
+        assert!(shell_command(Shell::Cmd, "echo one\necho two").unwrap_err().contains("one line"));
+        assert!(shell_command(Shell::Cmd, "echo one && echo two").is_ok());
+        let long = "Write-Output x; ".repeat(1_500);
+        assert!(shell_command(Shell::PowerShell, &long).unwrap_err().contains("too long"));
+        assert!(shell_command(Shell::Bash, &long).is_ok() || bash_path().is_none());
+    }
+
+    /// PowerShell ends with the code of a program that failed, as cargo said it — not the
+    /// 1 `powershell -Command` would give — and still ends with 1 for a failed cmdlet and
+    /// 0 for what worked.
+    #[cfg(windows)]
+    #[test]
+    fn powershell_passes_a_programs_exit_code_through() {
+        let f = Folder::new("ps-exit");
+        let code = |command: &str| run_shell(&f.0, Shell::PowerShell, command, CHECK_TIMEOUT, &[], never).unwrap().ended;
+        assert_eq!(code("cmd /c exit 7"), Ended::Exited(Some(7)));
+        assert_eq!(code("Get-Item no-such-file-here"), Ended::Exited(Some(1)));
+        assert_eq!(code("Write-Output fine"), Ended::Exited(Some(0)));
+        // A program that failed earlier in the line still counts, after a cmdlet that worked.
+        assert_eq!(code("cmd /c exit 4; Write-Output after"), Ended::Exited(Some(4)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_shell_command_keeps_its_exit_code() {
+        let f = Folder::new("shell-exit");
+        for shell in shells_here() {
+            let out = run_shell(&f.0, shell, "exit 3", CHECK_TIMEOUT, &[], never).unwrap();
+            assert_eq!(out.ended, Ended::Exited(Some(3)), "{shell:?}");
+        }
+    }
+
+    /// **Stop kills a shell command's tree** in each shell, with nothing left
+    /// holding the output.
+    #[cfg(windows)]
+    #[test]
+    fn stop_kills_a_shell_command_and_its_children() {
+        let f = Folder::new("shell-stop");
+        for shell in shells_here() {
+            let started = Instant::now();
+            let out = run_shell(&f.0, shell, "ping -n 30 127.0.0.1", CHECK_TIMEOUT, &[], || {
+                started.elapsed() > Duration::from_millis(1500)
+            })
+            .unwrap();
+            assert_eq!(out.ended, Ended::Stopped, "{shell:?}");
+            assert!(out.complete, "{shell:?}: a child outlived the stop");
+            assert!(started.elapsed() < Duration::from_secs(10), "{shell:?}: {:?}", started.elapsed());
+        }
     }
 }

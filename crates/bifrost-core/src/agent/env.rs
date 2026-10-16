@@ -14,8 +14,10 @@
 //! are the `_in` functions with `&Env::default()`, and Mimir does not know this exists.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::chat;
+use crate::check::Shell;
 
 /// The setting a round and the running of an approved call are done in. Every field
 /// has the app's value, which [`Env::default`] is made of.
@@ -57,6 +59,14 @@ pub struct Env {
     /// `CARGO_TARGET_DIR`, so that no run rebuilds from nothing, and `CARGO_NET_OFFLINE`,
     /// so that none can reach the network. The app adds nothing.
     pub check_env: Vec<(String, String)>,
+    /// The shell Hugin's `run_command` runs in. `Some` adds the tool to what is offered
+    /// by default and its sentence to the app's own system prompt, and lets a call to
+    /// it be asked about; `None` is the app's — Mimir never offers it, and a call to
+    /// it is turned away as the tool that does not exist.
+    pub commands: Option<Shell>,
+    /// How long a `run_command` may run before it is killed. The app's is the
+    /// config's default; Hugin sets it from `command_timeout_secs`.
+    pub command_timeout: Duration,
 }
 
 impl Default for Env {
@@ -72,6 +82,8 @@ impl Default for Env {
             compact: true,
             backups: None,
             check_env: Vec::new(),
+            commands: None,
+            command_timeout: Duration::from_secs(crate::config::DEFAULT_COMMAND_TIMEOUT_SECS),
         }
     }
 }
@@ -88,5 +100,7 @@ mod tests {
         assert!(env.options.is_none() && env.offered.is_none() && env.system.is_none() && env.backups.is_none());
         assert!(env.recover && env.compact);
         assert!(env.check_env.is_empty());
+        assert!(env.commands.is_none(), "Mimir must not offer run_command");
+        assert_eq!(env.command_timeout, Duration::from_secs(120));
     }
 }

@@ -241,7 +241,13 @@ struct Played {
 }
 
 pub(crate) fn header() -> Event {
-    Event::Header { folder: "C:\\work\\demo".into(), branch: Some("main".into()), changed: Some(2), model: "m".into() }
+    Event::Header {
+        folder: "C:\\work\\demo".into(),
+        branch: Some("main".into()),
+        changed: Some(2),
+        model: "m".into(),
+        shell: String::new(),
+    }
 }
 
 /// Play a session to its end.
@@ -451,6 +457,7 @@ fn the_header_names_the_branch_only_inside_a_repository() {
             branch: branch.map(String::from),
             changed,
             model: "qwen".into(),
+            shell: String::new(),
         });
         shown.push(text.lock().unwrap().clone());
     }
@@ -515,4 +522,95 @@ fn a_session_ends_promptly() {
     let started = Instant::now();
     let _ = play(Script::new(&[]));
     assert!(started.elapsed() < Duration::from_secs(5));
+}
+
+// ── commands ────────────────────────────────────────────────────────────────
+
+/// A `run_command` waiting for a decision: the command is the card's path and its ticket's.
+fn command(text: &str) -> Result<Round, String> {
+    round_of(Reply::Call {
+        call: PendingCall {
+            token: format!("t-{text}"),
+            name: "run_command".into(),
+            path: text.into(),
+            diff: None,
+            range: None,
+            changed_build_files: Vec::new(),
+            to: None,
+            folders: Vec::new(),
+            size: None,
+        },
+        raw_call: raw("run_command", json!({ "command": text })),
+    })
+}
+
+/// What running `text` came to, worded as `check::for_command` words it.
+fn command_ran(text: &str, how: &str) -> Result<Ran, String> {
+    let result = format!("`{text}` {how}");
+    Ok(Ran { ok: how.starts_with("exited 0"), result, stopped: false, undo: None, check: None })
+}
+
+#[test]
+fn a_command_shows_every_line_then_one_line_of_how_it_ended() {
+    let long = format!("git log --oneline {}", "x".repeat(120));
+    let text = format!("{long}\ngit status");
+    let p = play(
+        Script::new(&["look"])
+            .answering(&["y"])
+            .model(vec![command(&text), answer("Done.")])
+            .running(vec![command_ran(&text, "exited 0 (0.2 s). Output:\n\nabc")]),
+    );
+    let first: String = long.clone().chars().take(79).collect();
+    let want = format!(
+        "? command (Windows PowerShell)\n  {long}\n  git status\napprove? [y/n/a] y\n… running {first}…\n● command {first}… → exited 0\n"
+    );
+    assert!(p.out.contains(&want), "{}", p.out);
+    assert_eq!(p.ran, [format!("run_command:{text}:t-{text}")]);
+}
+
+#[test]
+fn a_command_that_fails_times_out_or_is_stopped_says_so() {
+    let ends = [("exited 1 (0.1 s).", "exited 1"), ("ran for 120 s, past its time limit, and was stopped.", "timed out")];
+    for (how, line) in ends {
+        let p = play(
+            Script::new(&["go"]).answering(&["y"]).model(vec![command("make"), answer("ok")]).running(vec![command_ran("make", how)]),
+        );
+        assert!(p.out.contains(&format!("● command make → {line}\n")), "{}", p.out);
+    }
+}
+
+#[test]
+fn a_command_is_declined_with_n() {
+    let p = play(Script::new(&["go"]).answering(&["n"]).model(vec![command("make"), answer("ok")]));
+    assert!(p.out.contains("● command make → declined\n"), "{}", p.out);
+    assert!(p.ran.is_empty());
+    assert_eq!(p.convo[2], Message::tool_result("run_command", "The user declined to run `make`. Nothing was run."));
+}
+
+/// **`a` allows that exact string for the session**: the same string again is run without a
+/// question, with its card and a line saying so; one byte different asks.
+#[test]
+fn a_allows_that_exact_command_for_the_session_and_nothing_else() {
+    let p = play(
+        Script::new(&["go"])
+            .answering(&["a", "y"])
+            .model(vec![command("make"), command("make"), command("make "), answer("ok")])
+            .running(vec![
+                command_ran("make", "exited 0 (0.1 s)."),
+                command_ran("make", "exited 0 (0.1 s)."),
+                command_ran("make ", "exited 0 (0.1 s)."),
+            ]),
+    );
+    assert_eq!(p.out.matches("approve? [y/n/a] ").count(), 2, "{}", p.out);
+    assert_eq!(p.out.matches("? command (Windows PowerShell)\n  make\n  allowed for this session\n").count(), 1, "{}", p.out);
+    assert_eq!(p.ran.len(), 3);
+}
+
+#[test]
+fn a_on_something_that_is_not_a_command_allows_that_one_call() {
+    let p = play(
+        Script::new(&["go"]).answering(&["a", "y"]).model(vec![edit(), edit(), answer("ok")]).running(vec![edited(), edited()]),
+    );
+    assert_eq!(p.out.matches("approve? [y/n/a] ").count(), 2);
+    assert!(!p.out.contains("allowed for this session"));
 }

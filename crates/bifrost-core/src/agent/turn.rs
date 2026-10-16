@@ -624,7 +624,7 @@ fn refusal_for(name: &str, path: &str) -> String {
     if is_change(name) {
         return format!("The user declined this change to {path}. Nothing was written.");
     }
-    if name == "run_check" {
+    if name == "run_check" || name == "run_command" {
         return format!("The user declined to run `{path}`. Nothing was run.");
     }
     if name == "search" || name == "list_files" {

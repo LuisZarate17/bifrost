@@ -189,6 +189,10 @@ pub fn round_in(
         (Some(prompt), _) => Some(prompt.clone()),
         (None, Some(ws)) => {
             let mut prompt = tools::system_prompt(ws, check.is_some());
+            if let Some(shell) = env.commands {
+                prompt.push(' ');
+                prompt.push_str(&tools::command_sentence(shell));
+            }
             if cfg.instructions_for(&ws.root_display())
                 && let Some(notes) = instructions::find(ws)
             {
@@ -212,7 +216,7 @@ pub fn round_in(
     let offered = if closing {
         Vec::new()
     } else {
-        env.offered.clone().unwrap_or_else(|| tools::available(ws.is_some(), check_label.as_deref()))
+        env.offered.clone().unwrap_or_else(|| default_tools(env, ws.is_some(), check_label.as_deref()))
     };
 
     // Inside a turn the conversation only grows, and past `num_ctx` Ollama cuts
@@ -249,6 +253,7 @@ pub fn round_in(
         check: check.as_deref(),
         ask_every_call: cfg.ask_every_call,
         rewrite,
+        commands: env.commands,
         stop,
     };
     Ok(Round {
@@ -257,6 +262,17 @@ pub fn round_in(
         recovered: reply.recovered,
         sent,
     })
+}
+
+/// The tools a round offers when the caller names none: the folder's, and Hugin's
+/// `run_command` after them when `env` has a shell. **Mimir's `env` has none**, so it
+/// never offers the tool.
+fn default_tools(env: &Env, editing: bool, check_label: Option<&str>) -> Vec<chat::Tool> {
+    let mut offered = tools::available(editing, check_label);
+    if let (Some(shell), true) = (env.commands, editing) {
+        offered.push(tools::run_command_tool(shell));
+    }
+    offered
 }
 
 /// Make sure Ollama is answering, starting it if not, before a request that needs it.
@@ -283,6 +299,9 @@ struct Context<'a> {
     /// `write_file` was among the tools offered, so a call to it is planned rather
     /// than turned away. The app never offers it; only a probe's tool list does.
     rewrite: bool,
+    /// The shell `run_command` runs in, when the tool was offered (Hugin). `None`
+    /// turns a call to it away as the tool that does not exist.
+    commands: Option<check::Shell>,
     /// This round's place on the Stop counter, for an automatic search or listing.
     stop: u64,
 }
@@ -444,6 +463,24 @@ fn classify(
         },
         tools::Request::Plan { .. } => {
             return reject("update_plan", "", "error: the task list could not be read".into());
+        }
+        tools::Request::Command { .. } if cx.commands.is_none() => {
+            return reject("run_command", "", "no such tool: run_command".into());
+        }
+        tools::Request::Command { .. } if ws.is_none() => {
+            return reject(
+                "run_command",
+                "",
+                "there is no project folder to run a command in — the user has not chosen one".into(),
+            );
+        }
+        tools::Request::Command { command } => {
+            let (ws, shell) = (ws.expect("checked above"), cx.commands.expect("checked above"));
+            // The path is the command itself, whole: it is what the approval is for,
+            // and what the ticket is redeemed against.
+            let payload =
+                Payload::Command { root: ws.root_display(), shell, command: command.clone(), stop: next_stop() };
+            ("run_command", command, Some(payload))
         }
         tools::Request::Rewrite { path, .. } if !cx.rewrite => {
             return reject("write_file", &path, "no such tool: write_file — use edit_file".into());
@@ -640,8 +677,21 @@ mod tests {
         ask_every_call: bool,
         rewrite: bool,
     ) -> (Reply, Armed) {
+        judge_with(reply, history, ws, check, ask_every_call, rewrite, None)
+    }
+
+    /// [`judge`], with `run_command` offered in this shell or not.
+    fn judge_with(
+        reply: &ChatReply,
+        history: &[Message],
+        ws: Option<&edit::Workspace>,
+        check: Option<&[String]>,
+        ask_every_call: bool,
+        rewrite: bool,
+        commands: Option<check::Shell>,
+    ) -> (Reply, Armed) {
         let mut armed = Armed::new();
-        let cx = Context { history, ws, check, ask_every_call, rewrite, stop: u64::MAX };
+        let cx = Context { history, ws, check, ask_every_call, rewrite, commands, stop: u64::MAX };
         let reply = classify(reply, &cx, &mut |name: &str, path: &str, payload: Option<Payload>| {
             armed.push((name.to_string(), path.to_string(), payload));
             format!("ticket-{}", armed.len())
@@ -662,6 +712,74 @@ mod tests {
     /// One call, judged when the tools offered include `write_file`.
     fn judge_rewrite(call: ToolCall, ws: Option<&edit::Workspace>) -> (Reply, Armed) {
         judge_offering(&said("", vec![call]), &[], ws, None, false, true)
+    }
+
+    /// One call, judged when `run_command` is offered in `commands`.
+    fn judge_command(call: ToolCall, ws: Option<&edit::Workspace>, commands: Option<check::Shell>) -> (Reply, Armed) {
+        judge_with(&said("", vec![call]), &[], ws, None, false, false, commands)
+    }
+
+    /// **A command asks, every time, with the exact string as its card and its
+    /// ticket's path** - never shortened, never trimmed, whatever the switch says.
+    #[test]
+    fn a_command_asks_with_its_exact_text_when_offered() {
+        let s = Sandbox::new("command");
+        let ws = s.ws();
+        let text = "git log --oneline -n 3   
+  git status ";
+        for ask_every in [false, true] {
+            let (reply, armed) = judge_with(
+                &said("", vec![call("run_command", json!({ "command": text }))]),
+                &[],
+                Some(&ws),
+                None,
+                ask_every,
+                false,
+                Some(check::Shell::Bash),
+            );
+            let (card, (name, path, payload)) = asking((reply, armed));
+            assert_eq!((card.name.as_str(), card.path.as_str()), ("run_command", text));
+            assert_eq!((name.as_str(), path.as_str()), ("run_command", text));
+            let Some(Payload::Command { root, shell, command, .. }) = payload else { panic!("armed with a command") };
+            assert_eq!((root, shell, command.as_str()), (ws.root_display(), check::Shell::Bash, text));
+        }
+    }
+
+    /// **Mimir's setting never runs a command**: the call is turned away as a tool
+    /// that does not exist, and nothing is armed.
+    #[test]
+    fn a_command_is_rejected_when_not_offered() {
+        let s = Sandbox::new("nocommand");
+        let ws = s.ws();
+        let (name, path, error) =
+            rejection(judge_command(call("run_command", json!({ "command": "dir" })), Some(&ws), None));
+        assert_eq!((name.as_str(), path.as_str()), ("run_command", ""));
+        assert_eq!(error, "error: no such tool: run_command");
+    }
+
+    #[test]
+    fn a_command_with_no_folder_is_rejected_and_an_empty_one_too() {
+        let s = Sandbox::new("command-edges");
+        let ws = s.ws();
+        let shell = Some(check::Shell::Cmd);
+        let (_, _, error) = rejection(judge_command(call("run_command", json!({ "command": "dir" })), None, shell));
+        assert!(error.starts_with("error:") && error.contains("no project folder"), "{error}");
+        let (_, _, error) = rejection(judge_command(call("run_command", json!({ "command": " " })), Some(&ws), shell));
+        assert!(error.starts_with("error:") && error.contains("without a command"), "{error}");
+    }
+
+    #[test]
+    fn only_a_setting_with_a_shell_offers_run_command() {
+        let names = |env: &Env, editing| -> Vec<String> {
+            default_tools(env, editing, Some("cargo check")).into_iter().map(|t| t.function.name).collect()
+        };
+        let app = Env::default();
+        assert!(!names(&app, true).contains(&"run_command".to_string()));
+        let hugin = Env { commands: Some(check::Shell::PowerShell), ..Env::default() };
+        let offered = names(&hugin, true);
+        assert_eq!(offered.last().map(String::as_str), Some("run_command"));
+        assert_eq!(offered[..offered.len() - 1], names(&app, true)[..]);
+        assert!(!names(&hugin, false).contains(&"run_command".to_string()), "no folder, no command");
     }
 
     fn kind(reply: &Reply) -> &'static str {

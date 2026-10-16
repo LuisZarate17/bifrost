@@ -6,6 +6,7 @@
 
 use bifrost_core::agent::ticket::PendingCall;
 use bifrost_core::agent::turn::{Card, CardState};
+use bifrost_core::check::Shell;
 use bifrost_core::tools::Lines;
 
 use crate::ui::{Approval, ToolLine};
@@ -34,6 +35,8 @@ pub fn target(card: &Card) -> String {
             Some(to) => format!("{} → {to}", card.path),
             None => card.path.clone(),
         },
+        // The approval showed all of it; the line is a reminder.
+        "run_command" => visible(&first_line(&card.path)),
         _ => card.path.clone(),
     }
 }
@@ -69,6 +72,7 @@ pub fn outcome(card: &Card) -> String {
                 "list_files" if worked => counted(text, "file", "files").unwrap_or_else(|| first_line(text)),
                 "search" if worked => hits(text).unwrap_or_else(|| first_line(text)),
                 "run_check" => check_outcome(text).unwrap_or_else(|| first_line(text)),
+                "run_command" => command_outcome(&card.path, text).unwrap_or_else(|| first_line(text)),
                 _ => first_line(text),
             }
         }
@@ -86,6 +90,7 @@ pub fn verb(name: &str) -> String {
         "delete_file" => "delete",
         "move_file" => "move",
         "run_check" => "check",
+        "run_command" => "command",
         "update_plan" => "plan",
         other => other,
     }
@@ -126,6 +131,26 @@ fn check_outcome(text: &str) -> Option<String> {
     }
 }
 
+/// `exited 0`, `exited 1`, `timed out`, `stopped` or `blocked`, from the sentence a command's
+/// result starts with: the command in backticks (all of it, whatever it holds), then how it ended.
+fn command_outcome(command: &str, text: &str) -> Option<String> {
+    let rest = text.strip_prefix('`')?.strip_prefix(command)?.strip_prefix('`')?.trim_start();
+    if let Some(after) = rest.strip_prefix("exited ") {
+        let code = after.split_whitespace().next()?;
+        Some(format!("exited {code}"))
+    } else if rest.starts_with("ran for ") {
+        Some("timed out".into())
+    } else if rest.starts_with("was stopped by the user") {
+        Some("stopped".into())
+    } else if rest.starts_with("could not finish") {
+        Some("blocked".into())
+    } else if rest.starts_with("ended without") {
+        Some("no exit code".into())
+    } else {
+        None
+    }
+}
+
 /// `12 lines`: the lines a read returned, not counting the `[lines A–B of L]` header
 /// a ranged read starts with.
 fn lines_read(text: &str) -> String {
@@ -135,7 +160,28 @@ fn lines_read(text: &str) -> String {
 }
 
 /// The first line of a result, cut to [`OUTCOME_CHARS`].
-fn first_line(text: &str) -> String {
+/// A command as a person must see it before saying yes: every character that would act
+/// on the terminal instead of showing — a carriage return that redraws the line, an
+/// escape sequence that recolours or erases it, a tab — and every one that is there
+/// but invisible — a direction override, a zero-width space — written out as an escape
+/// (`\r`, `\t`, `\u{1b}`, `\u{202e}`), so what is shown is what runs. Lines are
+/// split at `\n` before this. Only for showing: the command that runs is never touched.
+pub fn visible(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        let hidden = matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}');
+        match c {
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            c if c.is_control() || hidden => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+pub fn first_line(text: &str) -> String {
     let line = text.trim_start().lines().next().unwrap_or("").trim_end();
     if line.chars().count() <= OUTCOME_CHARS {
         return line.to_string();
@@ -144,9 +190,9 @@ fn first_line(text: &str) -> String {
     format!("{cut}…")
 }
 
-/// `hugin · <folder> · <branch>, <n> changed · <model>`: the first line of a session. Outside
-/// a repository the branch and the count are left out.
-pub fn header(folder: &str, branch: Option<&str>, changed: Option<usize>, model: &str) -> String {
+/// `hugin · <folder> · <branch>, <n> changed · <model> · <shell>`: the first line of a session.
+/// Outside a repository the branch and the count are left out; so is an empty shell.
+pub fn header(folder: &str, branch: Option<&str>, changed: Option<usize>, model: &str, shell: &str) -> String {
     let name = std::path::Path::new(folder)
         .file_name()
         .map_or(folder.to_string(), |n| n.to_string_lossy().into_owned());
@@ -155,12 +201,26 @@ pub fn header(folder: &str, branch: Option<&str>, changed: Option<usize>, model:
         (Some(b), None) => format!(" · {b}"),
         _ => String::new(),
     };
-    format!("hugin · {name}{git} · {model}")
+    let shell = if shell.is_empty() { String::new() } else { format!(" · {shell}") };
+    format!("hugin · {name}{git} · {model}{shell}")
 }
 
 /// The card as the line it ends as.
 pub fn tool_line(card: &Card) -> ToolLine {
     ToolLine { name: verb(&card.name), target: target(card), outcome: outcome(card) }
+}
+
+/// What a command allowed for the session shows in place of a question.
+pub const ALLOWED_NOTE: &str = "allowed for this session";
+
+/// A command asked about: where it runs, then **the command exactly as it will run, every
+/// line of it** — never cut, whatever its length (the interface wraps; this does not).
+pub fn command_approval(command: &str, shell: Shell) -> Approval {
+    Approval {
+        name: "command".into(),
+        target: format!("({})", shell.label()),
+        detail: command.split('\n').map(visible).collect(),
+    }
 }
 
 /// The card, and the call that asked, as what a person reads before answering.
@@ -351,7 +411,57 @@ mod tests {
 
     #[test]
     fn the_header_names_the_folder_and_the_branch_only_inside_a_repository() {
-        assert_eq!(header(r"C:\work\demo", Some("main"), Some(2), "m"), "hugin · demo · main, 2 changed · m");
-        assert_eq!(header(r"C:\work\demo", None, None, "m"), "hugin · demo · m");
+        assert_eq!(header(r"C:\work\demo", Some("main"), Some(2), "m", ""), "hugin · demo · main, 2 changed · m");
+        assert_eq!(header(r"C:\work\demo", None, None, "m", ""), "hugin · demo · m");
+        assert_eq!(header(r"C:\work\demo", None, None, "m", "bash"), "hugin · demo · m · bash");
+    }
+}
+
+#[cfg(test)]
+mod command_tests {
+    use super::*;
+
+    fn ran(command: &str, text: &str) -> Card {
+        let mut c = Card::new("run_command", command, CardState::Ran);
+        c.ok = Some(text.contains("exited 0"));
+        c.result = Some(text.into());
+        c
+    }
+
+    #[test]
+    fn a_command_line_names_its_first_line_and_how_it_ended() {
+        let multi = "echo `hi`\nexit 3";
+        let line = tool_line(&ran(multi, &format!("`{multi}` exited 3 (0.1 s). Output:\n\nhi")));
+        assert_eq!((line.name.as_str(), line.target.as_str(), line.outcome.as_str()), ("command", "echo `hi`", "exited 3"));
+        for (how, want) in [
+            ("exited 0 (1.2 s).", "exited 0"),
+            ("ran for 120 s, past its time limit, and was stopped.", "timed out"),
+            ("was stopped by the user after 2.0 s.", "stopped"),
+            ("could not finish: Windows Smart App Control blocked a program.", "blocked"),
+        ] {
+            assert_eq!(tool_line(&ran("make", &format!("`make` {how}"))).outcome, want);
+        }
+        let long = format!("echo {}", "y".repeat(200));
+        assert_eq!(tool_line(&ran(&long, &format!("`{long}` exited 0 (0.1 s)."))).target.chars().count(), 80);
+    }
+
+    #[test]
+    fn a_commands_approval_holds_every_line_and_names_the_shell() {
+        let text = format!("{}\n  indented\n\nlast", "z".repeat(300));
+        let a = command_approval(&text, Shell::Bash);
+        assert_eq!((a.name.as_str(), a.target.as_str()), ("command", "(Git Bash)"));
+        assert_eq!(a.detail.join("\n"), text);
+    }
+
+    /// A command's approval shows every character that would act on the terminal or hide
+    /// itself, as an escape — so a carriage return cannot redraw `echo ok` over what
+    /// really runs (review I3, finding 2). The command itself is untouched.
+    #[test]
+    fn an_approval_shows_control_and_hidden_characters_as_escapes() {
+        let sneaky = "echo ok\rrm -rf build\tx\u{1b}[2K\u{202e}y\u{200b}z\nsecond";
+        let a = command_approval(sneaky, Shell::Bash);
+        assert_eq!(a.detail, ["echo ok\\rrm -rf build\\tx\\u{1b}[2K\\u{202e}y\\u{200b}z", "second"]);
+        assert!(a.detail.iter().all(|l| !l.chars().any(|c| c.is_control())));
+        assert_eq!(visible("plain text, é and 中"), "plain text, é and 中");
     }
 }

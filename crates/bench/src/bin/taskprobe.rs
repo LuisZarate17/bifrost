@@ -1084,7 +1084,7 @@ fn run(
     // A task that stubs out a safety function (b03's `contain_with`) stubs the
     // worktree's copy only: the tools the model calls run on the bifrost-core this
     // probe was built with, whose rules are intact.
-    let setup = Setup { ws: &ws, backups: &backups, check: Some(&cargo), confine_reads: true, compact };
+    let setup = Setup { ws: &ws, backups: &backups, check: Some(&cargo), confine_reads: true, compact, commands: None };
     let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, PROBE_ROUNDS, &setup);
 
     let files = Command::new("git")

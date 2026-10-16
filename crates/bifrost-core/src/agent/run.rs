@@ -164,6 +164,28 @@ pub fn run_approved_in(name: &str, path: &str, token: &str, env: &Env) -> Result
                 Err(e) => Ran::text(format!("error: {e}")),
             })
         }
+        ("run_command", Some(Payload::Command { root, shell, command, stop })) => {
+            if stopped(stop) {
+                return Ok(Ran {
+                    result: format!("`{command}` was stopped by the user before it ran."),
+                    ok: false,
+                    stopped: true,
+                    undo: None,
+                    check: None,
+                });
+            }
+            let root = std::path::PathBuf::from(root);
+            Ok(match check::run_shell(&root, shell, &command, env.command_timeout, &env.check_env, || stopped(stop)) {
+                Ok(o) => Ran {
+                    result: check::for_command(shell, &command, &o),
+                    ok: o.passed(),
+                    stopped: o.ended == check::Ended::Stopped,
+                    undo: None,
+                    check: Some(o),
+                },
+                Err(e) => Ran::text(format!("error: {e}")),
+            })
+        }
         ("list_files" | "search", Some(Payload::Find { root, find, stop })) => Ok(run_find(&root, &find, stop)),
         (other, _) => Err(format!("no such tool: {other}")),
     }

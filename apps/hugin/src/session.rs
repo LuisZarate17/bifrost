@@ -4,11 +4,16 @@
 //! and drive a whole session without a network, a model or a disk. [`Session::real`]
 //! wires the real ones.
 
-use bifrost_core::agent::round::round;
-use bifrost_core::agent::run::run_approved;
+use std::collections::HashSet;
+use std::time::Duration;
+
+use bifrost_core::agent::env::Env;
+use bifrost_core::agent::round::round_in;
+use bifrost_core::agent::run::run_approved_in;
 use bifrost_core::agent::send::Calibration;
 use bifrost_core::agent::turn::{self, run_turn_with};
 use bifrost_core::chat::Message;
+use bifrost_core::check::Shell;
 use bifrost_core::store::{self, StoredMessage};
 use bifrost_core::{config, tools};
 
@@ -36,6 +41,10 @@ pub struct Session {
     run: Box<turn::Run<'static>>,
     save: Box<Saver>,
     stopper: Stopper,
+    /// The shell the model's commands run in.
+    shell: Shell,
+    /// The commands allowed for the rest of the session, each the exact string.
+    allowed: HashSet<String>,
 }
 
 impl Session {
@@ -55,11 +64,20 @@ impl Session {
             run,
             save,
             stopper: Stopper::default(),
+            shell: Shell::PowerShell,
+            allowed: HashSet::new(),
         }
     }
 
-    /// A session that asks the model and runs the tools for real, in `root`.
-    pub fn real(model: String, root: String) -> Self {
+    /// The shell commands run in, named in their approvals.
+    pub fn with_shell(mut self, shell: Shell) -> Self {
+        self.shell = shell;
+        self
+    }
+
+    /// A session that asks the model and runs the tools for real, in `root`, offering the
+    /// model commands in `shell`.
+    pub fn real(model: String, root: String, shell: Shell) -> Self {
         let asked = model.clone();
         let ask = move |messages: &[Message], calibration: Option<Calibration>, closing: bool| {
             // Loaded fresh each round, as the app does, so a change to the config
@@ -69,9 +87,11 @@ impl Session {
             let mut cfg = config::load();
             cfg.workspace = Some(root.clone());
             cfg.set_instructions(&root, true);
-            round(messages, &asked, &cfg, calibration, closing)
+            round_in(messages, &asked, &cfg, &env(shell), calibration, closing)
         };
-        Self::new(model, Box::new(ask), Box::new(run_approved), Box::new(store::save))
+        // Read when the command runs, so a change to the time limit applies to the next one.
+        let run = move |name: &str, path: &str, token: &str| run_approved_in(name, path, token, &env(shell));
+        Self::new(model, Box::new(ask), Box::new(run), Box::new(store::save)).with_shell(shell)
     }
 
     /// The handle that stops the running turn, for whatever reads the keyboard.
@@ -92,7 +112,7 @@ impl Session {
         ui.show(Event::Prompt(prompt.to_string()));
         self.convo.push(Message::user(prompt));
 
-        let mut fe = Fe::new(ui, &self.stopper);
+        let mut fe = Fe::new(ui, &self.stopper, self.shell, &mut self.allowed);
         let result = run_turn_with(
             &mut self.convo,
             self.calibration,
@@ -150,6 +170,16 @@ impl Session {
         }
         self.record.updated_at = store::stamp();
         (self.save)(&self.record)
+    }
+}
+
+/// The setting Hugin's rounds and runs are done in: the app's, with commands offered in
+/// `shell` and the config's time limit for them.
+fn env(shell: Shell) -> Env {
+    Env {
+        commands: Some(shell),
+        command_timeout: Duration::from_secs(config::load().command_timeout_secs),
+        ..Env::default()
     }
 }
 

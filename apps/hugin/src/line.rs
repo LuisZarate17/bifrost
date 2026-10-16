@@ -204,8 +204,13 @@ impl<W: Write> Line<W> {
 impl<W: Write> Ui for Line<W> {
     fn show(&mut self, e: Event) {
         match e {
-            Event::Header { folder, branch, changed, model } => {
-                self.say(&format!("{}\n", view::header(&folder, branch.as_deref(), changed, &model)));
+            Event::Header { folder, branch, changed, model, shell } => {
+                self.say(&format!("{}\n", view::header(&folder, branch.as_deref(), changed, &model, &shell)));
+            }
+            Event::Allowed(a) => {
+                let mut shown = card_text(&a);
+                shown.push_str(&format!("  {}\n", view::ALLOWED_NOTE));
+                self.say(&shown);
             }
             Event::Prompt(text) => {
                 if self.echo {
@@ -237,12 +242,7 @@ impl<W: Write> Ui for Line<W> {
     }
 
     fn approve(&mut self, a: &Approval) -> Decision {
-        let target = if a.target.is_empty() { String::new() } else { format!(" {}", a.target) };
-        let mut shown = format!("? {}{target}\n", a.name);
-        for line in &a.detail {
-            shown.push_str(&format!("  {line}\n"));
-        }
-        self.say(&shown);
+        self.say(&card_text(a));
         loop {
             self.say(ASK);
             let stopper = self.stopper.clone();
@@ -267,6 +267,16 @@ impl<W: Write> Ui for Line<W> {
             }
         }
     }
+}
+
+/// An approval as text: what is asked, then every line to read before answering.
+fn card_text(a: &Approval) -> String {
+    let target = if a.target.is_empty() { String::new() } else { format!(" {}", a.target) };
+    let mut shown = format!("? {}{target}\n", a.name);
+    for line in &a.detail {
+        shown.push_str(&format!("  {line}\n"));
+    }
+    shown
 }
 
 /// A prompt leaves the queue: its turn begins, stopped already if a `/stop` came for it.
