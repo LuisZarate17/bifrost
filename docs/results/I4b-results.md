@@ -33,6 +33,7 @@ Vidar's tray icon is now the **Bifrost mark**, and its menu is short:
  Ready · 18.2 GB
  ✓ Model loaded            one switch: on loads the model, off releases it
    Model ▸                 the installed models; the configured one ticked; "text only" if it cannot see
+   Open Vidar   Ctrl+Alt+W  summons the overlay, as the key does
    Open Mimir
    Open Hugin   Ctrl+Alt+H
  ✓ Start at login
@@ -63,6 +64,17 @@ changed nothing; menu clicks that could wait on Ollama on the main thread; a Sta
 coming back after a failed first run; paths embedded in PowerShell text (now passed as environment
 variables); a Startup shortcut never repointed; two quick clicks racing; a slow release blocking a
 pick; and the idle memory figure sampled while a model was resident.
+
+## Hugin opens on a raven
+
+Asked for in the same session: a start screen with art. Of four directions — the shield, a raven, a
+pixel wordmark, a rune card — **Luis chose the raven**. It was drawn as a shape, turned into a 44 × 22
+pixel map and looked at in a real Windows Terminal through three drafts (a pigeon, then a raven sliding
+off its perch, then one standing on it) before it was built in (`eec0042`). Hugin's interactive
+interface now opens with it in Raven Violet — heavy bill, darker folded wing, one bright eye — with
+its name, *thought, sent out to work*, the folder and branch, and the model and shell beside it. Too
+narrow, the text goes under the art; under 48 columns or with `NO_COLOR`, the old single line. Line
+mode, which scripts read, keeps its plain header.
 
 ## For a person
 

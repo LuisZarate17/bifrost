@@ -193,7 +193,8 @@ click the mark.
 - [ ] **The picker.** Open `Model ▸`. **Expect:** your installed models, the current one ticked,
       `— text only` beside those that cannot see. Pick another: the tick moves; with the switch on,
       the new one loads. Pick the ticked one again: nothing changes, and it stays ticked.
-- [ ] **Open Mimir, Open Hugin.** Each opens its app; Ctrl+Alt+H opens Hugin at once, splash first.
+- [ ] **Open Vidar, Open Mimir, Open Hugin.** Each opens its app (Open Vidar summons the overlay, as
+      Ctrl+Alt+W does); Ctrl+Alt+H opens Hugin at once, splash first, and Hugin starts on the raven.
 - [ ] **Start at login.** Untick it, sign out and in: no tray. Tick it again: it starts at login, with
       no model loaded until you turn the switch on.
 
