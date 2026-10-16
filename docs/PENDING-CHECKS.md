@@ -11,6 +11,13 @@ worksheet, with exact text to type and what should happen. This file keeps the r
 > command is `bifrost`, and the data folder is `%APPDATA%\bifrost`. The open checks below use
 > the new names; anything already checked keeps the names it was checked under.
 
+## Open — I3, shell commands in Hugin, 2026-10-15
+
+Allow, deny, allow for the session and Stop were run end to end through Hugin's line mode with
+the real model, in Git Bash and in PowerShell, 8/8 each. What is left is the feel of it in the
+terminal you use, and whether the approval reads clearly enough to say no to the wrong command. The
+checks are in [I-testing.md](I-testing.md) §I3; the reasoning in [I3-results.md](results/I3-results.md).
+
 ## Open — I2, Hugin in the terminal, 2026-10-15
 
 The packet's "done when" for I2 is a person's: **a real coding task in Hugin from start to finish,

@@ -97,6 +97,9 @@ names don't, so grep the name if a number has gone stale.
 - **Running the folder's check command** — `check.rs` → `candidates()`, `run()` (stoppable, kills
   the whole tree, output capped), `for_model()` (never reads as a failed call; names a Smart App
   Control block for what it is)
+- **Running a shell command, for Hugin** — `check.rs` → `Shell`, `run_shell()` (the same runner,
+  the command byte for byte into PowerShell, cmd or Git Bash), `for_command()`; offered only when
+  `agent::env::Env::commands` is set, which Mimir never does
 - **Finding code in the folder** — `search.rs` → `list()`, `search()` (literal, smart-case),
   `validate()` (an impossible call is refused before its card). Skips `.git`, `target`,
   `node_modules`, links; capped at 8 KB
@@ -196,6 +199,8 @@ A plain console app (no Tauri), built with `cargo build -p hugin`.
   the app's path, malformed-call recovery included (H4a)
 - **Can the model edit files correctly?** — `crates/bench/src/bin/editprobe.rs` (G7), scored byte
   for byte on CRLF files: `cargo run -p bench --bin editprobe`
+- **Which shell should Hugin use?** — `crates/bench/src/bin/cmdprobe.rs` (I3): eight tasks that need
+  a command, scored per shell; a probe refuses destructive commands itself (`probe::destructive`)
 - **Does the check help it fix what it breaks?** — `crates/bench/src/bin/fixprobe.rs` (H1): eight
   tasks whose obvious edit breaks the build, with `run_check` and without
 - **Can it find code nobody pointed it at?** — `crates/bench/src/bin/findprobe.rs` (H2): eighteen

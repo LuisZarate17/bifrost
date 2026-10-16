@@ -1,9 +1,9 @@
 # Stage I — where it stands
 
 Every chunk and gate of [STAGE-I.md](../stages/STAGE-I.md), done or not. **Updated at the end of
-every chunk**, alongside its results doc. Last updated 2026-10-15, after I2.
+every chunk**, alongside its results doc. Last updated 2026-10-15, after I3.
 
-**4 of 8 chunks done · 1 of 4 gates passed** (Gate 1 skipped).
+**5 of 8 chunks done · 1 of 4 gates passed** (Gate 1 skipped).
 
 | Phase | Chunk | What it is | Status | Result |
 |---|---|---|---|---|
@@ -13,8 +13,8 @@ every chunk**, alongside its results doc. Last updated 2026-10-15, after I2.
 | **1. One engine** | I1 | The turn loop moves from Mimir's webview into bifrost-core | ✅ Done · local (c2eb5c9, 478273d, 692b1a1) | Mimir and every probe run one Rust loop; e2e 9/9; taskprobe 30/48, findprobe 50/54, fixprobe identical to the old loop — [I1](results/I1-results.md) |
 | | Gate 1 | Mimir unchanged on the shared loop | ⏭ Skipped, 2026-10-15 — its day of real use stays open in [I-testing.md](I-testing.md) §I1 | The measured half passed with I1 |
 | **2. Hugin** | I2 | The terminal | ✅ Built · local (77bf850, 98bbd8f, ecc7886) — your task in both terminals is open | Inline like Claude Code; Stage H's finish line through Hugin 3/3; Stop at every point; checked in a real Windows Terminal — [I2](results/I2-results.md) |
-| | I3 | Shell commands | ⏳ Next | |
-| | I4 | Launching: Ctrl+Alt+H, PATH, the last folder | Not started | |
+| | I3 | Shell commands | ✅ Built · local (781aba7) | Every command asked, `a` for the session; Git Bash chosen by cmdprobe (tied with PowerShell at 43/48, cmd 42); end to end 8/8 in both — [I3](results/I3-results.md) |
+| | I4 | Launching: Ctrl+Alt+H, PATH, the last folder | ⏳ Next | |
 | | I5 | Print mode for Claude Code (`hugin -p`) | Not started | |
 | | Gate 2 | Hugin in daily use | Not started | |
 | **3. Claude checks** | I6 | Check with Claude, in Mimir | Not started | |

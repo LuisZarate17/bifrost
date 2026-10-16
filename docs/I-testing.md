@@ -144,6 +144,25 @@ to finish, in both terminals ([I2-results.md](results/I2-results.md)).
 
 ---
 
+## I3 — Shell commands in Hugin
+
+Hugin can now run any command in its folder, in Git Bash (PowerShell where Git is not installed);
+every one asks first ([I3-results.md](results/I3-results.md)). Rebuild it first:
+`cargo build -p hugin`.
+
+- [ ] **Allow.** Ask Hugin to show the last three commits. **Expect:** `? command (Git Bash)`, then the
+      command on its own line exactly as it will run, then `approve? [y/n/a]`. `y` runs it:
+      `● command git log … → exited 0`, and the answer names the commits.
+- [ ] **Deny.** Ask for something that needs a command, and answer `n`. **Expect:** `→ declined`, and
+      the model is told you said no — it does not try to get round it.
+- [ ] **For the session.** Ask for `git status` and answer `a`; ask again. **Expect:** the second time
+      shows the card with `allowed for this session` and runs without asking. A *different* command
+      still asks.
+- [ ] **Stop.** Ask it to run `ping -n 60 127.0.0.1`, allow it, then press **Esc**. **Expect:**
+      `→ stopped` within a second, and no `PING.EXE` left in Task Manager.
+
+---
+
 ## After this
 
 - Anything that failed goes back to the chunk, with what you saw.
