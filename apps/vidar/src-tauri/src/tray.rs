@@ -761,7 +761,9 @@ fn open_mimir() {
 }
 
 /// Build the tray and start the poller.
-pub fn install<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) -> tauri::Result<()> {
+///
+/// Not generic over the runtime: "Open Vidar" calls `toggle_popup`, which takes the app's own.
+pub fn install(app: &AppHandle, power: Arc<Power>) -> tauri::Result<()> {
     // A disabled first line carrying the current state.
     //
     // Without it the menu is verbs and no feedback: clicking on a model that is
@@ -771,6 +773,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) -> tauri::Resu
     let status_item = MenuItem::with_id(app, "status", "…", false, None::<&str>)?;
     let loaded_item = CheckMenuItem::with_id(app, "loaded", "Model loaded", true, false, None::<&str>)?;
     let models = Submenu::with_id(app, "models", "Model", true)?;
+    let vidar_item = MenuItem::with_id(app, "open_vidar", "Open Vidar", true, Some("Ctrl+Alt+W"))?;
     let mimir_item = MenuItem::with_id(app, "open_mimir", "Open Mimir", true, None::<&str>)?;
     let hugin_item = MenuItem::with_id(app, "open_hugin", "Open Hugin", true, Some("Ctrl+Alt+H"))?;
     let login_item = CheckMenuItem::with_id(
@@ -792,6 +795,7 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) -> tauri::Resu
             &loaded_item,
             &models,
             &gap1,
+            &vidar_item,
             &mimir_item,
             &hugin_item,
             &gap2,
@@ -831,6 +835,11 @@ pub fn install<R: Runtime>(app: &AppHandle<R>, power: Arc<Power>) -> tauri::Resu
                         refresh_async(app, handler_power.clone());
                     }
                 },
+                "open_vidar" => {
+                    // As the hotkey does: off the menu's thread, which holds the message pump.
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move { crate::toggle_popup(&app, "tray") });
+                }
                 "open_mimir" => open_mimir(),
                 "open_hugin" => open_hugin(),
                 "login" => {

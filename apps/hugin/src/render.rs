@@ -83,9 +83,7 @@ fn plain(text: &str) -> Line<'static> {
 pub fn scrollback(e: &Event, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     let lines = match e {
         Event::Header { folder, branch, changed, model, shell } => {
-            let text = view::header(folder, branch.as_deref(), *changed, model, shell);
-            let rest = text.strip_prefix("hugin").unwrap_or(&text).to_string();
-            vec![Line::from(vec![span("hugin", theme.accent().add_modifier(Modifier::BOLD)), span(rest, theme.dim())])]
+            start_screen(theme, folder, branch.as_deref(), *changed, model, shell, width)
         }
         Event::Prompt(text) => text
             .split('\n')
@@ -113,6 +111,138 @@ pub fn scrollback(e: &Event, theme: &Theme, width: u16) -> Vec<Line<'static>> {
         Event::Status(_) | Event::TurnEnd => Vec::new(),
     };
     wrap(lines, width)
+}
+
+// ── the start screen ────────────────────────────────────────────────────────
+
+/// The raven, one character per pixel: `.` empty, `#` body, `w` wing, `b` bill, `-` the line
+/// in the bill, `o` the eye, `|` legs, `=` the perch.
+pub const RAVEN: [&str; 22] = [
+    "............................................",
+    "...............................####.........",
+    "..............................#######.......",
+    ".............................########bb.....",
+    ".............................#####o##bbbbb..",
+    "............................#########bbbbbb.",
+    "...........................##########bbbbb..",
+    "..........................ww#########bbb....",
+    "........................wwwww########.......",
+    "......................wwwwwww#######........",
+    "....................wwwwwwwww#######........",
+    "..................wwwwwwwwww######..........",
+    "................wwwwwwwwwww#######..........",
+    "..............wwwwwwwwwww######.............",
+    "............wwwwwwwwww#######...............",
+    "..........wwwwwwwww#########................",
+    ".........wwwwww###########..................",
+    "......##ww############..|...................",
+    "....###########.....|...|...................",
+    "..#######...........|...|...................",
+    ".#####..............|...|...................",
+    ".............=======|===|=======............",
+];
+
+/// The art is this many columns wide, after a margin of [`MARGIN`] and before [`GAP`].
+const ART_WIDTH: usize = 44;
+const MARGIN: usize = 2;
+const GAP: usize = 4;
+/// Narrower than this there is no room for even the art.
+const MIN_ART: usize = 48;
+/// The art rows (from 0) that the text lines sit beside.
+const TEXT_ROWS: [usize; 4] = [3, 4, 6, 7];
+
+fn pixel_color(c: char) -> Option<Color> {
+    let p = palette();
+    match c {
+        '#' => Some(hex(&p.hugin.dark)),
+        'w' => Some(Color::Rgb(0x6a, 0x58, 0xe6)),
+        'b' | '|' => Some(hex(&p.hugin.light)),
+        '-' => Some(Color::Rgb(0x3c, 0x2f, 0x96)),
+        'o' => Some(Color::Rgb(0xec, 0xeb, 0xe6)),
+        '=' => Some(Color::Rgb(0x4a, 0x44, 0x5c)),
+        _ => None,
+    }
+}
+
+/// A pixel map as half blocks, two pixel rows to a terminal row: nothing is a space, the top
+/// alone `▀` in its colour, the bottom alone `▄`, both `▀` with the bottom as the background.
+fn half_blocks(map: &[&str]) -> Vec<Vec<(char, Style)>> {
+    let pixels: Vec<Vec<char>> = map.iter().map(|r| r.chars().collect()).collect();
+    let at = |row: usize, x: usize| pixels.get(row).and_then(|r| r.get(x)).copied().and_then(pixel_color);
+    let width = pixels.iter().map(Vec::len).max().unwrap_or(0);
+    (0..pixels.len().div_ceil(2))
+        .map(|r| {
+            (0..width)
+                .map(|x| match (at(2 * r, x), at(2 * r + 1, x)) {
+                    (None, None) => (' ', Style::default()),
+                    (Some(t), None) => ('▀', Style::default().fg(t)),
+                    (None, Some(b)) => ('▄', Style::default().fg(b)),
+                    (Some(t), Some(b)) => ('▀', Style::default().fg(t).bg(b)),
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// The first line of a session: `hugin · <folder> · <branch>, <n> changed · <model> · <shell>`.
+fn header_line(theme: &Theme, folder: &str, branch: Option<&str>, changed: Option<usize>, model: &str, shell: &str) -> Line<'static> {
+    let text = view::header(folder, branch, changed, model, shell);
+    let rest = text.strip_prefix("hugin").unwrap_or(&text).to_string();
+    Line::from(vec![span("hugin", theme.accent().add_modifier(Modifier::BOLD)), span(rest, theme.dim())])
+}
+
+/// What opens a session in the scrollback: the raven with the folder, the model and the shell
+/// beside it, then an empty line. With no room for the art, or no color, the one header line.
+pub fn start_screen(
+    theme: &Theme,
+    folder: &str,
+    branch: Option<&str>,
+    changed: Option<usize>,
+    model: &str,
+    shell: &str,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let width = width as usize;
+    if !theme.color || width < MIN_ART {
+        return vec![header_line(theme, folder, branch, changed, model, shell)];
+    }
+    let place = match view::git_note(branch, changed) {
+        Some(g) => vec![Span::raw(view::folder_name(folder)), span(format!(" · {g}"), theme.dim())],
+        None => vec![Span::raw(view::folder_name(folder))],
+    };
+    let mut who = vec![Span::raw(model.to_string())];
+    if !shell.is_empty() {
+        who.push(span(format!(" · {shell}"), theme.dim()));
+    }
+    let text = vec![
+        Line::from(span("Hugin", theme.accent().add_modifier(Modifier::BOLD))),
+        Line::from(span("thought, sent out to work", theme.dim())),
+        Line::from(place),
+        Line::from(who),
+    ];
+    let longest = text.iter().map(Line::width).max().unwrap_or(0);
+    let side_by_side = width >= MARGIN + ART_WIDTH + GAP + longest;
+
+    let margin = || span(" ".repeat(MARGIN), Style::default());
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (r, cells) in half_blocks(&RAVEN).iter().enumerate() {
+        let mut spans = vec![margin()];
+        spans.extend(from_cells(cells).spans);
+        if side_by_side && let Some(n) = TEXT_ROWS.iter().position(|&t| t == r) {
+            spans.push(span(" ".repeat(GAP), Style::default()));
+            spans.extend(text[n].spans.clone());
+        }
+        lines.push(Line::from(spans));
+    }
+    if !side_by_side {
+        for l in text {
+            let mut spans = vec![margin()];
+            spans.extend(l.spans);
+            lines.push(Line::from(spans));
+        }
+    }
+    lines.push(Line::default());
+    lines
 }
 
 /// An approval's header and the lines to read before answering.
@@ -424,11 +554,97 @@ mod tests {
     // ── the scrollback ──
 
     #[test]
-    fn the_header_names_the_folder_the_branch_and_the_model() {
-        assert_eq!(event_text(&header(), &lit(), 80), ["hugin · demo · main, 2 changed · qwen"]);
-        let lines = scrollback(&header(), &lit(), 80);
+    fn the_header_line_names_the_folder_the_branch_and_the_model() {
+        // Too narrow for the raven.
+        assert_eq!(event_text(&header(), &lit(), 40), ["hugin · demo · main, 2 changed · qwen"]);
+        let lines = scrollback(&header(), &lit(), 40);
         assert_eq!(lines[0].spans[0].style.fg, Some(hex("#8b7cf8")));
         assert_eq!(lines[0].spans[1].style.fg, None);
+    }
+
+    fn start(theme: &Theme, branch: Option<&str>, shell: &str, width: u16) -> Vec<Line<'static>> {
+        start_screen(theme, "C:\\work\\demo", branch, branch.map(|_| 2), "qwen", shell, width)
+    }
+
+    #[test]
+    fn half_blocks_put_two_pixel_rows_in_one_terminal_row() {
+        let cells = half_blocks(&["#.w.", ".b-."]);
+        assert_eq!(cells.len(), 1);
+        let dark = hex("#8b7cf8");
+        let light = hex("#5a47d1");
+        let row = &cells[0];
+        assert_eq!(row[0], ('▀', Style::default().fg(dark)));
+        assert_eq!(row[1], ('▄', Style::default().fg(light)));
+        assert_eq!(row[2], ('▀', Style::default().fg(Color::Rgb(0x6a, 0x58, 0xe6)).bg(Color::Rgb(0x3c, 0x2f, 0x96))));
+        assert_eq!(row[3], (' ', Style::default()));
+        // An odd last row has an empty bottom.
+        assert_eq!(half_blocks(&["#", ".", "o"]).len(), 2);
+        assert_eq!(half_blocks(&["#", ".", "o"])[1][0], ('▀', Style::default().fg(Color::Rgb(0xec, 0xeb, 0xe6))));
+    }
+
+    #[test]
+    fn the_raven_is_44_by_22_pixels_in_11_rows() {
+        assert!(RAVEN.iter().all(|r| r.chars().count() == ART_WIDTH));
+        assert_eq!(half_blocks(&RAVEN).len(), 11);
+    }
+
+    #[test]
+    fn the_start_screen_sets_the_text_beside_the_raven() {
+        let lines = start(&lit(), Some("main"), "Git Bash", 100);
+        let rows = text_of(&shown(&lines, 100));
+        assert_eq!(rows.len(), 12);
+        assert_eq!(rows[11], "");
+        let side = |r: usize| rows[r].chars().skip(MARGIN + ART_WIDTH + GAP).collect::<String>();
+        assert_eq!(side(3), "Hugin");
+        assert_eq!(side(4), "thought, sent out to work");
+        assert_eq!(side(6), "demo · main, 2 changed");
+        assert_eq!(side(7), "qwen · Git Bash");
+        for r in [0, 1, 2, 5, 8, 9, 10] {
+            assert_eq!(side(r).trim(), "", "row {r}");
+        }
+        // Two spaces of margin, and the art starts there.
+        assert!(rows[1].starts_with("  "));
+        assert_eq!(rows[1].chars().nth(MARGIN + 31), Some('▀'));
+        // Styles: Hugin bold violet, the rest of the place line dim.
+        let hugin = lines[3].spans.iter().find(|s| s.content == "Hugin").unwrap();
+        assert_eq!(hugin.style.fg, Some(hex("#8b7cf8")));
+        assert!(hugin.style.add_modifier.contains(Modifier::BOLD));
+        let dim = lines[6].spans.last().unwrap();
+        assert!(dim.style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(lines[6].spans[lines[6].spans.len() - 2].content, "demo");
+    }
+
+    #[test]
+    fn outside_git_and_without_a_shell_the_text_has_no_branch_and_no_shell() {
+        let rows = text_of(&shown(&start(&lit(), None, "", 100), 100));
+        assert!(rows[6].ends_with("demo"));
+        assert!(rows[7].ends_with("qwen"));
+    }
+
+    #[test]
+    fn too_narrow_for_the_text_beside_it_the_art_comes_first_and_the_text_under_it() {
+        // 2 + 44 + 4 + 25 = 75 is the least for side by side.
+        let rows = text_of(&shown(&start(&lit(), Some("main"), "", 74), 74));
+        assert_eq!(rows.len(), 11 + 4 + 1);
+        assert!(rows[0..11].iter().all(|r| r.chars().count() <= MARGIN + ART_WIDTH));
+        assert_eq!(&rows[11..], ["  Hugin", "  thought, sent out to work", "  demo · main, 2 changed", "  qwen", ""]);
+        let rows = text_of(&shown(&start(&lit(), Some("main"), "", 75), 75));
+        assert_eq!(rows.len(), 12);
+    }
+
+    #[test]
+    fn under_48_columns_or_without_color_the_start_is_the_one_header_line() {
+        let want = ["hugin · demo · main, 2 changed · qwen"];
+        assert_eq!(text_of(&shown(&start(&lit(), Some("main"), "", 47), 47)), want);
+        assert_eq!(text_of(&shown(&start(&mono(), Some("main"), "", 120), 120)), want);
+        assert!(!colored(&shown(&start(&mono(), Some("main"), "", 120), 120)));
+        assert_eq!(start(&lit(), Some("main"), "", 48).len(), 16);
+    }
+
+    #[test]
+    fn line_mode_keeps_its_plain_header() {
+        assert_eq!(view::header("C:\\work\\demo", Some("main"), Some(2), "qwen", ""), "hugin · demo · main, 2 changed · qwen");
+        assert_eq!(view::header("C:\\work\\demo", None, None, "qwen", "bash"), "hugin · demo · qwen · bash");
     }
 
     #[test]

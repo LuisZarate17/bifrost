@@ -1695,7 +1695,7 @@ fn watch_mouse(app: tauri::AppHandle) {
 /// Must not run on the main thread: it touches windows, and doing that while
 /// holding the Win32 message pump is a confirmed Windows 11 freeze
 /// (plugins-workspace#1923).
-fn toggle_popup(app: &tauri::AppHandle, source: &str) {
+pub(crate) fn toggle_popup(app: &tauri::AppHandle, source: &str) {
     let Some(window) = app.get_webview_window("main") else {
         return;
     };

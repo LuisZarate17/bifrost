@@ -193,16 +193,25 @@ pub fn first_line(text: &str) -> String {
 /// `hugin · <folder> · <branch>, <n> changed · <model> · <shell>`: the first line of a session.
 /// Outside a repository the branch and the count are left out; so is an empty shell.
 pub fn header(folder: &str, branch: Option<&str>, changed: Option<usize>, model: &str, shell: &str) -> String {
-    let name = std::path::Path::new(folder)
-        .file_name()
-        .map_or(folder.to_string(), |n| n.to_string_lossy().into_owned());
-    let git = match (branch, changed) {
-        (Some(b), Some(n)) => format!(" · {b}, {n} changed"),
-        (Some(b), None) => format!(" · {b}"),
-        _ => String::new(),
-    };
+    let git = git_note(branch, changed).map_or(String::new(), |g| format!(" · {g}"));
     let shell = if shell.is_empty() { String::new() } else { format!(" · {shell}") };
-    format!("hugin · {name}{git} · {model}{shell}")
+    format!("hugin · {}{git} · {model}{shell}", folder_name(folder))
+}
+
+/// The last part of the folder's path: the name a person calls it.
+pub fn folder_name(folder: &str) -> String {
+    std::path::Path::new(folder)
+        .file_name()
+        .map_or(folder.to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// `<branch>, <n> changed`; None outside a repository.
+pub fn git_note(branch: Option<&str>, changed: Option<usize>) -> Option<String> {
+    match (branch, changed) {
+        (Some(b), Some(n)) => Some(format!("{b}, {n} changed")),
+        (Some(b), None) => Some(b.to_string()),
+        _ => None,
+    }
 }
 
 /// The card as the line it ends as.
