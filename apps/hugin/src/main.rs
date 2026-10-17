@@ -17,7 +17,6 @@ mod launch;
 #[cfg(test)]
 mod launch_tests;
 mod line;
-mod raven;
 mod render;
 mod session;
 mod start;

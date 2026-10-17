@@ -195,9 +195,9 @@ click the mark.
       the new one loads. Pick the ticked one again: nothing changes, and it stays ticked.
 - [ ] **Open Vidar, Open Mimir, Open Hugin.** Each opens its app (Open Vidar summons the overlay, as
       Ctrl+Alt+W does); Ctrl+Alt+H opens Hugin at once, splash first.
-- [ ] **Hugin's start.** In Windows Terminal, **expect** the small dark raven with a violet outline,
-      and beside it `Hugin  thought, sent out to work`, then the folder and branch, then the model and
-      shell. In VS Code's terminal, **expect** the same three lines without the raven.
+- [ ] **Hugin's start.** In Windows Terminal and in VS Code's terminal, **expect** a small violet pixel
+      raven, four rows tall, with `Hugin`, `thought, sent out to work`, the folder and branch, and the
+      model and shell beside it.
 - [ ] **Start at login.** Untick it, sign out and in: no tray. Tick it again: it starts at login, with
       no model loaded until you turn the switch on.
 

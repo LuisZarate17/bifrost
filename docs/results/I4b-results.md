@@ -71,19 +71,14 @@ Asked for in the same session: a start screen with art. Of four directions — t
 pixel wordmark, a rune card — **Luis chose the raven**. Finding the right one took many rounds, each
 looked at in a real Windows Terminal: a 44 × 22 pixel raven in Raven Violet (built in as `eec0042`,
 then taken back out), a misty mountain scene, a moon, a crescent, the raven traced from photographs,
-and pixel ravens as small as the words. What stayed is **a raven drawn as a logo**: dark, with a violet
-outline, no eye, three lines tall.
+and a raven drawn as a logo shown as a Sixel image (built in as `ce56c0c`, then taken back out). What
+stayed is **the first pixel raven, redrawn by hand at 17 × 8 pixels**: four rows of half blocks, as tall
+as the four lines beside it — the name, *thought, sent out to work*, the folder and branch, the model and
+shell. Being characters, it shows in every color terminal, VS Code's included. Narrower than the text
+beside it allows, the text goes under the raven; under 21 columns or with `NO_COLOR`, the old single
+line. Line mode, which scripts read, keeps its plain header.
 
-In Windows Terminal, Hugin now opens with that mark as a small image (Sixel, 9 columns by 3 rows,
-its background left undrawn so the terminal's own shows through), and three lines beside it: the name
-and *thought, sent out to work*, the folder and branch, the model and shell, in muted dark colors.
-Other color terminals, VS Code's among them, get the three lines without the mark; under 48 columns or
-with `NO_COLOR`, the old single line. Line mode, which scripts read, keeps its plain header. The mark's
-source is `apps/hugin/assets/raven.svg`; `tools/raven/make.ps1` turns it into the image Hugin carries.
-
-Checked on the real desktop: in a fresh Windows Terminal window; at the bottom of a full one, where the
-screen has to scroll first and the mark still lands beside its words; and in the old console host,
-which gets the words alone.
+A half-size version (Unicode 16 octants, two rows) was drawn and shown, and set aside: four rows it is.
 
 ## For a person
 
