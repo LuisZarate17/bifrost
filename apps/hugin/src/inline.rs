@@ -29,6 +29,7 @@ use ratatui::text::Line;
 use ratatui::{Terminal, TerminalOptions, Viewport};
 
 use crate::input::Input;
+use crate::raven;
 use crate::render::{self, Status, Theme};
 use crate::session::Session;
 use crate::stop::Stopper;
@@ -433,7 +434,7 @@ pub fn run<B: Backend, K: Keys>(
     backend: Shared<B>,
     keys: &mut K,
     theme: Theme,
-    header: Event,
+    header: Option<Event>,
     notices: Receiver<String>,
     worker: Worker,
 ) -> io::Result<()> {
@@ -450,7 +451,9 @@ pub fn run<B: Backend, K: Keys>(
         pending: Vec::new(),
     };
     let width = screen.width();
-    app.say(&header, width);
+    if let Some(h) = header {
+        app.say(&h, width);
+    }
 
     while !app.quit {
         let width = screen.width();
@@ -532,10 +535,34 @@ pub fn start(
         restore();
         previous(info);
     }));
+    // The raven is written before raw mode, with the terminal as it was found.
+    let theme = Theme::from_env();
+    let header = match header {
+        Event::Header { folder, branch, changed, model, shell } => {
+            let words = render::start_words(&theme, &folder, branch.as_deref(), changed, &model, &shell);
+            let width = crossterm::terminal::size().map_or(0, |(w, _)| w);
+            let wanted = raven::wanted(
+                std::env::var_os("WT_SESSION").is_some(),
+                std::env::var_os("TERM_PROGRAM").is_some(),
+                theme.has_color(),
+                width,
+                render::widest(&words),
+            );
+            if wanted {
+                let mut out = io::stdout();
+                out.write_all(raven::screen(&words).as_bytes())?;
+                out.flush()?;
+                None
+            } else {
+                Some(Event::Header { folder, branch, changed, model, shell })
+            }
+        }
+        other => Some(other),
+    };
     crossterm::terminal::enable_raw_mode()?;
     let _restore = Restore;
     // Not every terminal has bracketed paste; those that do not send a paste as keys.
     let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableBracketedPaste);
     let backend = Shared::new(CrosstermBackend::new(io::stdout()));
-    run(backend, &mut Crossterm, Theme::from_env(), header, notices, worker)
+    run(backend, &mut Crossterm, theme, header, notices, worker)
 }

@@ -101,7 +101,7 @@ fn play(keys: Keystrokes, make: impl FnOnce() -> Session + Send + 'static) -> Ve
     let shared = Shared::new(TestBackend::new(60, 24));
     let (_keep, notices) = mpsc::channel();
     let mut script = Scripted { items: keys.0.into(), started: Instant::now() };
-    run(shared.clone(), &mut script, Theme::new(false), header(), notices, Worker::spawn(make)).unwrap();
+    run(shared.clone(), &mut script, Theme::new(false), Some(header()), notices, Worker::spawn(make)).unwrap();
     assert!(script.items.is_empty(), "keys left unused: {:?}", script.items);
     shared.with(|b| {
         let rows = |buf: &ratatui::buffer::Buffer| -> Vec<String> {

@@ -65,16 +65,25 @@ coming back after a failed first run; paths embedded in PowerShell text (now pas
 variables); a Startup shortcut never repointed; two quick clicks racing; a slow release blocking a
 pick; and the idle memory figure sampled while a model was resident.
 
-## Hugin opens on a raven
+## Hugin opens with its mark
 
 Asked for in the same session: a start screen with art. Of four directions — the shield, a raven, a
-pixel wordmark, a rune card — **Luis chose the raven**. It was drawn as a shape, turned into a 44 × 22
-pixel map and looked at in a real Windows Terminal through three drafts (a pigeon, then a raven sliding
-off its perch, then one standing on it) before it was built in (`eec0042`). Hugin's interactive
-interface now opens with it in Raven Violet — heavy bill, darker folded wing, one bright eye — with
-its name, *thought, sent out to work*, the folder and branch, and the model and shell beside it. Too
-narrow, the text goes under the art; under 48 columns or with `NO_COLOR`, the old single line. Line
-mode, which scripts read, keeps its plain header.
+pixel wordmark, a rune card — **Luis chose the raven**. Finding the right one took many rounds, each
+looked at in a real Windows Terminal: a 44 × 22 pixel raven in Raven Violet (built in as `eec0042`,
+then taken back out), a misty mountain scene, a moon, a crescent, the raven traced from photographs,
+and pixel ravens as small as the words. What stayed is **a raven drawn as a logo**: dark, with a violet
+outline, no eye, three lines tall.
+
+In Windows Terminal, Hugin now opens with that mark as a small image (Sixel, 9 columns by 3 rows,
+its background left undrawn so the terminal's own shows through), and three lines beside it: the name
+and *thought, sent out to work*, the folder and branch, the model and shell, in muted dark colors.
+Other color terminals, VS Code's among them, get the three lines without the mark; under 48 columns or
+with `NO_COLOR`, the old single line. Line mode, which scripts read, keeps its plain header. The mark's
+source is `apps/hugin/assets/raven.svg`; `tools/raven/make.ps1` turns it into the image Hugin carries.
+
+Checked on the real desktop: in a fresh Windows Terminal window; at the bottom of a full one, where the
+screen has to scroll first and the mark still lands beside its words; and in the old console host,
+which gets the words alone.
 
 ## For a person
 
