@@ -46,6 +46,9 @@ pub struct Env {
     /// folder. **`Some` is added even without one**: a probe words its own prompt, and
     /// the conversation it hands over holds none.
     pub system: Option<String>,
+    /// A sentence put before the app's own system prompt, saying who the assistant is.
+    /// `None` leaves the prompt as it is. A prompt given in `system` is used as it is.
+    pub identity: Option<String>,
     /// Whether old results are set aside before a request is sent (H7). `true` is the
     /// app's. `false` sends the whole conversation every round
     /// ([`super::send::send_whole`]), which measures the loop as it was before H7:
@@ -79,6 +82,7 @@ impl Default for Env {
             recover: true,
             offered: None,
             system: None,
+            identity: None,
             compact: true,
             backups: None,
             check_env: Vec::new(),
@@ -97,7 +101,7 @@ mod tests {
     #[test]
     fn the_default_is_the_app() {
         let env = Env::default();
-        assert!(env.options.is_none() && env.offered.is_none() && env.system.is_none() && env.backups.is_none());
+        assert!(env.options.is_none() && env.offered.is_none() && env.system.is_none() && env.identity.is_none() && env.backups.is_none());
         assert!(env.recover && env.compact);
         assert!(env.check_env.is_empty());
         assert!(env.commands.is_none(), "Mimir must not offer run_command");

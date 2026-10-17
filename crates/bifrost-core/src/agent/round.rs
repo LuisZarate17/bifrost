@@ -32,6 +32,25 @@ use super::workspace;
 use crate::chat::{self, Message, Options};
 use crate::{check, config, edit, instructions, ollama, search, tools};
 
+/// The app's own system prompt for a folder: the identity if the setting has one, then
+/// the prompt, the command sentence when commands are offered, and the project's notes.
+fn app_prompt(env: &Env, cfg: &config::Config, ws: &edit::Workspace, has_check: bool) -> String {
+    let mut prompt = tools::system_prompt(ws, has_check);
+    if let Some(identity) = &env.identity {
+        prompt = format!("{identity} {prompt}");
+    }
+    if let Some(shell) = env.commands {
+        prompt.push(' ');
+        prompt.push_str(&tools::command_sentence(shell));
+    }
+    if cfg.instructions_for(&ws.root_display())
+        && let Some(notes) = instructions::find(ws)
+    {
+        prompt = tools::with_notes(prompt, &notes);
+    }
+    prompt
+}
+
 /// What one round came to, and what it cost.
 pub struct Round {
     pub reply: Reply,
@@ -187,19 +206,7 @@ pub fn round_in(
     let mut messages = messages.to_vec();
     let system = match (&env.system, &ws) {
         (Some(prompt), _) => Some(prompt.clone()),
-        (None, Some(ws)) => {
-            let mut prompt = tools::system_prompt(ws, check.is_some());
-            if let Some(shell) = env.commands {
-                prompt.push(' ');
-                prompt.push_str(&tools::command_sentence(shell));
-            }
-            if cfg.instructions_for(&ws.root_display())
-                && let Some(notes) = instructions::find(ws)
-            {
-                prompt = tools::with_notes(prompt, &notes);
-            }
-            Some(prompt)
-        }
+        (None, Some(ws)) => Some(app_prompt(env, cfg, ws, check.is_some())),
         (None, None) => None,
     };
     // How many messages are in front of the caller's, for numbering what is set aside.
@@ -766,6 +773,17 @@ mod tests {
         assert!(error.starts_with("error:") && error.contains("no project folder"), "{error}");
         let (_, _, error) = rejection(judge_command(call("run_command", json!({ "command": " " })), Some(&ws), shell));
         assert!(error.starts_with("error:") && error.contains("without a command"), "{error}");
+    }
+
+    #[test]
+    fn an_identity_leads_the_apps_own_prompt_and_nothing_else_changes() {
+        let sandbox = Sandbox::new("identity");
+        let ws = sandbox.ws();
+        let cfg = config::Config::default();
+        let plain = app_prompt(&Env::default(), &cfg, &ws, true);
+        assert_eq!(plain, tools::system_prompt(&ws, true), "no identity: the prompt as it was");
+        let named = Env { identity: Some("You are Hugin.".into()), ..Env::default() };
+        assert_eq!(app_prompt(&named, &cfg, &ws, true), format!("You are Hugin. {plain}"));
     }
 
     #[test]

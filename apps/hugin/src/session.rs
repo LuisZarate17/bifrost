@@ -173,10 +173,15 @@ impl Session {
     }
 }
 
+/// Who Hugin says it is: put before the system prompt, because the model otherwise
+/// answers as the assistant it was trained as.
+const HUGIN_IDENTITY: &str = "You are Hugin, a coding agent running in the user's terminal on their own computer. If asked your name, say Hugin. Answer greetings and simple questions directly, without tools.";
+
 /// The setting Hugin's rounds and runs are done in: the app's, with commands offered in
 /// `shell` and the config's time limit for them.
 fn env(shell: Shell) -> Env {
     Env {
+        identity: Some(HUGIN_IDENTITY.into()),
         commands: Some(shell),
         command_timeout: Duration::from_secs(config::load().command_timeout_secs),
         ..Env::default()
@@ -193,5 +198,17 @@ fn stored(m: &Message, model: &str) -> StoredMessage {
         tool_calls: m.tool_calls.iter().flatten().filter_map(|c| serde_json::to_value(c).ok()).collect(),
         model: if m.role == "assistant" { model.to_string() } else { String::new() },
         created_at: store::stamp(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_setting_carries_the_identity() {
+        let env = env(Shell::PowerShell);
+        assert_eq!(env.identity.as_deref(), Some(HUGIN_IDENTITY));
+        assert!(env.commands.is_some());
     }
 }
