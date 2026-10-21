@@ -1,9 +1,10 @@
 # Stage I — where it stands
 
 Every chunk and gate of [STAGE-I.md](../stages/STAGE-I.md), done or not. **Updated at the end of
-every chunk**, alongside its results doc. Last updated 2026-10-16, after I4b.
+every chunk**, alongside its results doc. Last updated 2026-10-21, after I6.
 
-**6 of 8 chunks done · 1 of 4 gates passed** (Gate 1 skipped).
+**7 of 8 chunks done, plus I4b and I4c · 1 of 4 gates passed** (Gate 1 skipped; I5 and
+Gate 2 skipped for now).
 
 | Phase | Chunk | What it is | Status | Result |
 |---|---|---|---|---|
@@ -16,9 +17,10 @@ every chunk**, alongside its results doc. Last updated 2026-10-16, after I4b.
 | | I3 | Shell commands | ✅ Built · local (781aba7) | Every command asked, `a` for the session; Git Bash chosen by cmdprobe (tied with PowerShell at 43/48, cmd 42); end to end 8/8 in both — [I3](results/I3-results.md) |
 | | I4 | Launching: Ctrl+Alt+H, PATH, the last folder | ✅ Built · local (3e552cd) | The real key shows exactly one Windows Terminal window, in the last folder; `hugin` on the PATH, entries kept as they were — [I4](results/I4-results.md) |
 | | I4b | The Bifrost tray and a smoother launch (asked for in use) | ✅ Built · local (2916a0a, c541532) | A splash while Hugin opens; Vidar's tray is Bifrost's control panel and catches Ctrl+Alt+H — 0.3 s to the splash, not 3 s — [I4b](results/I4b-results.md) |
-| | I5 | Print mode for Claude Code (`hugin -p`) | ⏳ Next | |
-| | Gate 2 | Hugin in daily use | Not started | |
-| **3. Claude checks** | I6 | Check with Claude, in Mimir | Not started | |
+| | I4c | Hugin full screen (asked for in use) | ✅ Done · local | Your messages banded and pinned to the top row once scrolled off; Hugin scrolls itself; reverses "inline"; Luis's check in VS Code passed — [I4c](results/I4c-results.md) |
+| | I5 | Print mode for Claude Code (`hugin -p`) | ⏭ Skipped for now, 2026-10-17 — still open | |
+| | Gate 2 | Hugin in daily use | ⏭ Skipped for now, with I5 | |
+| **3. Claude checks** | I6 | Check with Claude, in Mimir | ✅ Done · local | On your login, no API key; safe mode so only the question and the diff go; e2e 51/51; the real `claude` 9/9 — [I6](results/I6-results.md) |
 | | Gate 3 | Done with Stage I | Not started | |
 
 ## At the end of Stage I

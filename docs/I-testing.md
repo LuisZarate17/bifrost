@@ -203,6 +203,44 @@ click the mark.
 
 ---
 
+## I4c — Hugin full screen
+
+Hugin now takes the whole terminal, like Claude Code's full-screen mode
+([I4c-results.md](results/I4c-results.md)). **Passed by Luis in VS Code, 2026-10-21.**
+
+- [x] **Start.** `hugin` in a new terminal. **Expect:** the raven at the top, the input box between
+      two rules at the bottom.
+- [x] **Your message.** Send a long question. **Expect:** a blank line, a bold `›`, a gray band.
+- [x] **Pinned.** When the answer pushes it off screen, **expect** your message on the top row.
+- [x] **Scrolling.** The wheel, PgUp/PgDn, Ctrl+End. **Expect:** the pinned row comes and goes as your
+      message leaves and enters the view; `↓ ctrl+end` while scrolled up.
+- [x] **Selecting.** Shift+drag, then copy. **Expect:** the words paste.
+- [x] **Splitting.** Split the pane, drag the divider. **Expect:** clean rewrapping, a whole bird,
+      nothing twice.
+- [x] **Leaving.** Ctrl+D. **Expect:** the shell, a dim `hugin · session saved`, and nothing printed
+      when the mouse moves.
+
+---
+
+## I6 — Check with Claude
+
+[I6-results.md](results/I6-results.md). **Run 2026-10-21 against the real `claude`**, by a script
+driving the built app at Luis's request (one real check).
+
+- [x] **Off by default.** Ctrl+, → Claude. **Expect:** the switch off, "Not checked while Claude
+      checks are off".
+- [x] **On.** **Expect:** "Signed in as …" at once.
+- [x] **The button.** A turn that changed a file. **Expect:** Check with Claude under it.
+- [x] **The preview.** Click it. **Expect:** "Sends your question and 1 file's changes (… KB) to
+      Claude", Send and Cancel.
+- [x] **Cancel.** **Expect:** the row gone, and no `claude` started.
+- [x] **Send.** **Expect:** "Claude is checking…" with Stop, then a card labeled Claude.
+- [x] **The follow-up.** "fix what Claude found". **Expect:** the local model refers to the review.
+- [x] **Reload.** **Expect:** the Claude card still there.
+- [x] **Off again.** **Expect:** the buttons gone.
+
+---
+
 ## After this
 
 - Anything that failed goes back to the chunk, with what you saw.

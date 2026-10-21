@@ -26,7 +26,7 @@ use bifrost_core::agent::ticket::PendingCall;
 use bifrost_core::agent::turn::{self, Card, Decision, Frontend, Patch, RoundNumbers};
 use bifrost_core::agent::workspace;
 use bifrost_core::chat::{self, Message, Options, StreamChunk};
-use bifrost_core::{check, config, edit, instructions, ollama, store, vram};
+use bifrost_core::{check, claude, config, edit, instructions, ollama, store, vram};
 
 /// One message pushed up to the UI.
 ///
@@ -998,6 +998,147 @@ async fn clear_project_folder() -> Result<(), String> {
     .map_err(|e| format!("clearing the project folder failed: {e}"))?
 }
 
+// ── Check with Claude ───────────────────────────────────────────────────────
+
+/// What the settings dialog and the turn's button need to know about Check with Claude.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeStatus {
+    /// The switch. Off until the user turns it on.
+    checks: bool,
+    /// Whether the `claude` command is there and signed in. Only when asked for
+    /// (`probe`) **and the switch is on**: it runs `claude auth status`, which makes no
+    /// model call but starts a process of the user's, and nothing about `claude` is
+    /// looked at while the feature is off.
+    command: Option<claude::Status>,
+}
+
+/// The switch, and — with `probe`, when the switch is on — the state of the `claude`
+/// command.
+#[tauri::command]
+async fn claude_status(probe: bool) -> Result<ClaudeStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let cfg = config::load();
+        let command = (probe && cfg.claude_checks).then(|| claude::status(cfg.claude_command.as_deref()));
+        ClaudeStatus { checks: cfg.claude_checks, command }
+    })
+    .await
+    .map_err(|e| format!("reading the Claude status failed: {e}"))
+}
+
+/// Turn Check with Claude on or off. **Off by default.** Takes only the switch.
+#[tauri::command]
+async fn set_claude_checks(on: bool) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || config::update(|cfg| cfg.claude_checks = on))
+        .await
+        .map_err(|e| format!("changing the Claude setting failed: {e}"))?
+}
+
+/// What Check with Claude would send for a turn, shown before it is sent.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudePreview {
+    files: usize,
+    /// The size of everything sent — the question and the diff.
+    bytes: usize,
+    /// The question was longer than one check sends and is cut.
+    question_cut: bool,
+    /// A fingerprint of the exact text, which [`claude_check`] must be given back.
+    hash: String,
+}
+
+/// What [`claude_check`] would send for this question and these changes: the prompt
+/// is built here for the preview and again at send time, from the same function.
+fn prepare_claude(question: &str, ids: &[String]) -> Result<claude::Prepared, String> {
+    if ids.len() > MAX_TURN_UNDO {
+        return Err(format!("a turn of more than {MAX_TURN_UNDO} edits cannot be checked at once"));
+    }
+    let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
+    let _edits = edits_lock();
+    claude::prepare(question, ids, &backups)
+}
+
+/// How much [`claude_check`] would send for this question and these changes.
+#[tauri::command]
+async fn claude_preview(question: String, undo_ids: Vec<String>) -> Result<ClaudePreview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = prepare_claude(&question, &undo_ids)?;
+        Ok(ClaudePreview { files: p.files, bytes: p.bytes, question_cut: p.question_cut, hash: p.hash })
+    })
+    .await
+    .map_err(|e| format!("building the preview failed: {e}"))?
+}
+
+/// Stop for Check with Claude, **apart from the Stop counter** a streamed answer or a
+/// tool turn is on: pressing Stop on a turn must not end a check, nor Stop on a check
+/// end a turn.
+///
+/// A check is named by its page and the page's number for it, as a turn's Stop is
+/// ([`STOPPED_REQUEST`]), so a Stop that reaches Rust before its check has begun still
+/// stops it. The epoch is raised when a page loads: a check belonged to the page before.
+static CLAUDE_STOPPED: std::sync::Mutex<Option<(String, u64)>> = std::sync::Mutex::new(None);
+static CLAUDE_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn claude_name_stopped(page: String, request: u64) {
+    let mut last = CLAUDE_STOPPED.lock().unwrap_or_else(|e| e.into_inner());
+    if !matches!(&*last, Some((p, r)) if *p == page && *r >= request) {
+        *last = Some((page, request));
+    }
+}
+
+fn claude_request_stopped(page: &str, request: u64) -> bool {
+    matches!(
+        &*CLAUDE_STOPPED.lock().unwrap_or_else(|e| e.into_inner()),
+        Some((p, r)) if p == page && *r >= request
+    )
+}
+
+/// **The one call to the cloud:** ask Claude to check a turn's changes against the
+/// question that began it. Reached only by the button, and refused if the switch is
+/// off. `Ok(None)` is a Stop.
+///
+/// `hash` is the fingerprint the preview returned. The prompt is built again here, and
+/// if the files have changed since the user was shown what would go, nothing is sent.
+#[tauri::command]
+async fn claude_check(
+    question: String,
+    undo_ids: Vec<String>,
+    hash: String,
+    page: String,
+    request: u64,
+) -> Result<Option<String>, String> {
+    let epoch = CLAUDE_EPOCH.load(std::sync::atomic::Ordering::SeqCst);
+    tauri::async_runtime::spawn_blocking(move || {
+        let stopped = || {
+            claude_request_stopped(&page, request) || CLAUDE_EPOCH.load(std::sync::atomic::Ordering::SeqCst) != epoch
+        };
+        if stopped() {
+            return Ok(None);
+        }
+        let cfg = config::load();
+        if !cfg.claude_checks {
+            return Err("Claude checks are off. Turn them on in the settings first.".to_string());
+        }
+        let prepared = prepare_claude(&question, &undo_ids)?;
+        if prepared.hash != hash {
+            return Err("The files changed since the preview — check again.".to_string());
+        }
+        match claude::run(cfg.claude_command.as_deref(), &prepared.text, stopped) {
+            Ok(answer) => Ok(Some(answer)),
+            Err(claude::RunError::Stopped) => Ok(None),
+            Err(claude::RunError::Failed(why)) => Err(why),
+        }
+    })
+    .await
+    .map_err(|e| format!("the Claude check failed: {e}"))?
+}
+
+/// Stop the Claude check `request` of `page`, running or not yet begun.
+#[tauri::command]
+fn claude_stop(page: String, request: u64) {
+    claude_name_stopped(page, request);
+}
+
 // ── attachments ─────────────────────────────────────────────────────────────
 
 /// Store an attachment and return the name to reference it by.
@@ -1151,6 +1292,8 @@ pub fn run() {
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
                 stop_all();
                 answer_waiting();
+                // A check belonged to the page before, which is gone.
+                CLAUDE_EPOCH.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -1183,6 +1326,11 @@ pub fn run() {
             set_check,
             clear_check,
             set_notes,
+            claude_status,
+            set_claude_checks,
+            claude_preview,
+            claude_check,
+            claude_stop,
             stop
         ])
         .run(tauri::generate_context!())
@@ -1214,6 +1362,20 @@ mod tests {
         // After a reload the new page starts its numbering again.
         name_stopped("page-b".into(), 1);
         assert!(request_stopped("page-b", 1) && !request_stopped("page-b", 2));
+    }
+
+    /// A check's Stop is its own: it reaches a check that has not begun, and the turns'
+    /// Stop counter does not touch it.
+    #[test]
+    fn a_check_has_a_stop_of_its_own() {
+        claude_name_stopped("page-c".into(), 2);
+        assert!(claude_request_stopped("page-c", 2) && claude_request_stopped("page-c", 1));
+        assert!(!claude_request_stopped("page-c", 3) && !claude_request_stopped("page-d", 2));
+        stop_all();
+        assert!(!claude_request_stopped("page-c", 3), "a turn's Stop does not stop a check");
+        let n = next_stop();
+        claude_name_stopped("page-c".into(), 3);
+        assert!(!stopped(n), "a check's Stop does not stop a turn");
     }
 
     // ── model_offer ─────────────────────────────────────────────────────────

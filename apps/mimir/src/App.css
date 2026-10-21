@@ -849,6 +849,78 @@ kbd {
   border-color: var(--text-3);
   background: var(--bg-hover);
 }
+.turn-undo {
+  flex-wrap: wrap;
+}
+
+/* Check with Claude (I6): the question asked before anything is sent, and the wait. */
+.claude-confirm {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.claude-confirm-text {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Claude's answer: its own card, labelled, so it is never taken for the local
+   model's. The label is words; the error also says so in words. */
+.claude-card {
+  margin: 10px 0 4px;
+  padding: 10px 14px 4px;
+  border: 1px solid var(--border-2);
+  border-left: 3px solid var(--accent-line);
+  border-radius: 10px;
+  background: var(--bg-sunk);
+  user-select: text;
+}
+.claude-card.error {
+  border-color: var(--danger-line);
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
+}
+.claude-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.claude-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--text-strong);
+}
+.claude-failed {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-line);
+  color: var(--danger);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.claude-message {
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+  white-space: pre-wrap;
+}
+.claude-meta {
+  opacity: 1;
+}
+
+.toggle-state {
+  font-weight: 500;
+  opacity: 0.8;
+}
+.claude-status {
+  font-variant-numeric: tabular-nums;
+}
 
 .waiting {
   display: flex;

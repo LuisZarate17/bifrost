@@ -202,6 +202,17 @@ pub struct Config {
     /// changes it. Anything that is not a bool reads as never recorded.
     #[serde(deserialize_with = "lenient")]
     pub bifrost_login_chosen: bool,
+    /// Whether Mimir offers **Check with Claude** on a finished turn (I6). Off until
+    /// the user turns it on in Mimir's settings; even on, nothing is sent until the
+    /// button is pressed. **Read strictly in the safe direction**: anything that is
+    /// not a bool is off.
+    #[serde(deserialize_with = "lenient")]
+    pub claude_checks: bool,
+    /// Where the `claude` command is, when it is not found on its own — `PATH`, then
+    /// `%USERPROFILE%\.local\bin\claude.exe`. Set by hand; anything that is not a
+    /// string reads as none.
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub claude_command: Option<String>,
     /// Fields this build does not know — a newer build's, or a person's own notes —
     /// kept as they were so the next save does not drop them.
     #[serde(flatten)]
@@ -367,6 +378,8 @@ impl Default for Config {
             hugin_shell: DEFAULT_HUGIN_SHELL.to_string(),
             hugin_last_folder: None,
             bifrost_login_chosen: false,
+            claude_checks: false,
+            claude_command: None,
             extra: serde_json::Map::new(),
             unsaved: false,
         }
@@ -606,6 +619,19 @@ mod tests {
     }
 
     #[test]
+    fn claude_checks_are_off_unless_a_bool_says_on() {
+        let read = |json: &str| serde_json::from_str::<Config>(json).unwrap();
+        assert!(!read("{}").claude_checks);
+        assert!(read(r#"{"claude_checks":true}"#).claude_checks);
+        for bad in ["null", "3", "\"true\"", "[]", "{}"] {
+            let c = read(&format!(r#"{{"claude_checks":{bad},"claude_command":7,"model":"m"}}"#));
+            assert_eq!((c.claude_checks, c.claude_command, c.model.as_str()), (false, None, "m"), "{bad}");
+        }
+        assert_eq!(read(r#"{"claude_command":"C:\\c.exe"}"#).claude_command.as_deref(), Some(r"C:\c.exe"));
+        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("claude_command"));
+    }
+
+    #[test]
     fn round_trips() {
         let c = Config {
             model: "qwen3-vl:4b-instruct-q8_0".into(),
@@ -622,6 +648,8 @@ mod tests {
             hugin_shell: "bash".into(),
             hugin_last_folder: Some(r"C:\work\demo".into()),
             bifrost_login_chosen: true,
+            claude_checks: true,
+            claude_command: Some(r"C:\tools\claude.exe".into()),
             extra: serde_json::Map::new(),
             unsaved: false,
         };

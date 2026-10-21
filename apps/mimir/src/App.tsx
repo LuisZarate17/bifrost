@@ -119,7 +119,11 @@ export type Entry =
        *  thread and replayed to the model in later turns. */
       plan?: PlanItem[];
       error?: string;
-    };
+    }
+  /** Claude's check of the turn above it (I6), asked for with a click. An answer is
+   *  saved with the thread (role "claude") and shown to the local model on the next
+   *  question; a failure (`error`) is about this session and is not saved. */
+  | { kind: "claude"; content: string; error?: boolean };
 
 /** One step of the model's task list; `bifrost_core::tools::PlanStep`. */
 export type PlanItem = { text: string; status: "pending" | "doing" | "done" };
@@ -160,6 +164,8 @@ export type TurnGroup = {
   ids: string[];
   /** A card still waiting on you or under way: not a turn to undo yet. */
   busy: boolean;
+  /** Index of your message that began the turn. */
+  start: number;
   /** Index of the turn's last entry — the answer if there is one, else the last
    *  card — which is where the line goes. */
   end: number;
@@ -171,11 +177,13 @@ export function turnsOf(all: Entry[]): TurnGroup[] {
   const out: TurnGroup[] = [];
   all.forEach((e, i) => {
     if (e.kind === "turn" && e.role === "user") {
-      out.push({ ids: [], busy: false, end: i });
+      out.push({ ids: [], busy: false, start: i, end: i });
       return;
     }
     const g = out[out.length - 1];
-    if (!g) return;
+    // Claude's check is drawn after the line, not before it: the line is where the
+    // next check is asked for.
+    if (!g || e.kind === "claude") return;
     g.end = i;
     if (e.kind !== "tool") return;
     if (e.state === "pending" || e.state === "running") g.busy = true;
@@ -484,6 +492,36 @@ function App() {
   }, []);
   useEffect(() => () => window.clearTimeout(armTimer.current), []);
 
+  /** Check with Claude (I6): whether the switch is on, and the one check being asked
+   *  for or run — keyed by the turn's undo handles, like the Undo line. Nothing is
+   *  sent until `stage` goes from "confirm" to "checking" by a click on Send. */
+  const [claudeOn, setClaudeOn] = useState(false);
+  const [claudeRun, setClaudeRun] = useState<{
+    key: string;
+    stage: "confirm" | "checking";
+    files: number;
+    /** The size of everything that would go: the question and the diff. */
+    bytes: number;
+    questionCut: boolean;
+    /** The question the preview was built for, and the fingerprint of the exact text.
+     *  Send gives both back, and Rust sends nothing if the files have changed since. */
+    question: string;
+    hash: string;
+    /** This check's number for Stop, which is its own and not the turns' (lib.rs). */
+    request?: number;
+    stopping?: boolean;
+  } | null>(null);
+  const claudeRequest = useRef(0);
+  // A new question in the thread ends a check that was only being asked about.
+  useEffect(() => {
+    if (streaming) setClaudeRun((r) => (r?.stage === "confirm" ? null : r));
+  }, [streaming]);
+  useEffect(() => {
+    invoke<{ checks: boolean }>("claude_status", { probe: false })
+      .then((s) => setClaudeOn(s.checks))
+      .catch(() => {});
+  }, []);
+
   const refreshModels = useCallback(() => {
     setLoadingModels(true);
     invoke<ModelInfo[]>("models")
@@ -727,6 +765,7 @@ function App() {
             },
           ];
         }
+        if (e.kind === "claude") return e.error ? [] : [{ role: "claude", content: e.content }];
         if (e.kind !== "turn") return [];
         return [
           {
@@ -841,6 +880,7 @@ function App() {
                 ...(args.plan ? { plan: args.plan } : {}),
               };
             }
+            if (m.role === "claude") return { kind: "claude", content: m.content };
             return {
               kind: "turn",
               role: m.role === "assistant" ? "assistant" : "user",
@@ -944,6 +984,7 @@ function App() {
   /** What one entry costs the context, images included. */
   const costOf = useCallback((e: Entry): number => {
     if (e.kind === "tool") return estimate(e.result ?? "");
+    if (e.kind === "claude") return estimate(e.content);
     // An image is ~2,042 tokens whatever it shows. Counting only the words meant
     // an image-heavy thread never trimmed at all, and Ollama silently truncated
     // the prompt instead — which looks exactly like the model losing the plot.
@@ -1018,6 +1059,14 @@ function App() {
                     ? " The user has since undone this create, so the file is removed."
                     : " The user has since undone this edit, so the file is back as it was.";
           out.push({ role: "tool", content: (e.result ?? "") + note, tool_name: e.name });
+          continue;
+        }
+        if (e.kind === "claude") {
+          // The local model is told what Claude found, as a message from the user, so
+          // it can act on it. A failed check says nothing about the code.
+          if (!e.error) out.push({ role: "user", content: `Claude's check of the last turn:
+
+${e.content}` });
           continue;
         }
         if (e.kind !== "turn") continue;
@@ -1189,7 +1238,7 @@ function App() {
     // Attachments alone are a valid message - "what is this?" with a screenshot
     // is the common case. The Send button already allowed it while this bailed,
     // so the button simply did nothing.
-    if ((!text && staged.length === 0) || streaming || switchingModel) return;
+    if ((!text && staged.length === 0) || streaming || switchingModel || claudeRun?.stage === "checking") return;
 
     setError("");
     setStats("");
@@ -1315,7 +1364,7 @@ function App() {
       });
       await persist(out, convoId);
     }
-  }, [draft, streaming, entries, model, card, planSend, staged, persist, settle, convoId, toolsOn, runTurn, toWire, disarm, switchingModel]);
+  }, [draft, streaming, entries, model, card, planSend, staged, persist, settle, convoId, toolsOn, runTurn, toWire, disarm, switchingModel, claudeRun?.stage]);
 
   /**
    * Stop the answer being written, and keep what has arrived.
@@ -1474,6 +1523,81 @@ function App() {
     [armed, disarm, undoTurn],
   );
 
+  /** Check with Claude, step one: ask Rust what would go, and show it. Sends nothing. */
+  const askClaude = useCallback(async (t: TurnGroup) => {
+    const key = t.ids.join(",");
+    const first = entriesRef.current[t.start];
+    const question = first?.kind === "turn" ? first.content : "";
+    try {
+      const p = await invoke<{ files: number; bytes: number; questionCut: boolean; hash: string }>(
+        "claude_preview",
+        { question, undoIds: t.ids },
+      );
+      setClaudeRun({ key, stage: "confirm", question, ...p });
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  /** Step two, on Send: the one call to the cloud. The answer is placed after its own
+   *  turn — and after any check already there — however much the thread has grown. */
+  const sendClaude = useCallback(
+    async (t: TurnGroup, run: { question: string; hash: string }) => {
+      // The turn is identified by its question's entry, not by a position: the thread
+      // can change while Claude thinks.
+      const asked = entriesRef.current[t.start];
+      const gen = threadGen.current;
+      const request = ++claudeRequest.current;
+      setClaudeRun((r) => (r ? { ...r, stage: "checking", request } : r));
+      let card: Entry | null = null;
+      try {
+        const answer = await invoke<string | null>("claude_check", {
+          question: run.question,
+          undoIds: t.ids,
+          hash: run.hash,
+          page: PAGE,
+          request,
+        });
+        // null is Stop: no card.
+        if (answer !== null) card = { kind: "claude", content: answer };
+      } catch (e) {
+        card = { kind: "claude", content: String(e), error: true };
+      }
+      setClaudeRun(null);
+      if (!card) return;
+      if (threadGen.current !== gen) {
+        setError("Claude's answer came back after you left that conversation, so it was not added.");
+        return;
+      }
+      const placed = card;
+      let found = true;
+      const next = await settle((prev) => {
+        // After the last entry of the turn that was asked about: from its question to
+        // just before the next one, so after any check already there.
+        const from = prev.indexOf(asked);
+        if (from < 0) {
+          found = false;
+          return prev;
+        }
+        let at = from + 1;
+        while (at < prev.length && !(prev[at].kind === "turn" && (prev[at] as { role?: string }).role === "user")) at++;
+        return [...prev.slice(0, at), placed, ...prev.slice(at)];
+      });
+      if (!found) {
+        setError("Claude's answer came back, but the turn it was about is gone from this conversation, so it was not added.");
+        return;
+      }
+      await persist(next, convoIdRef.current);
+    },
+    [persist, settle],
+  );
+
+  const stopClaude = useCallback(() => {
+    if (claudeRun?.request === undefined) return;
+    setClaudeRun((r) => (r ? { ...r, stopping: true } : r));
+    void invoke("claude_stop", { page: PAGE, request: claudeRun.request }).catch(() => {});
+  }, [claudeRun?.request]);
+
   const take = useCallback(async (files: FileList | File[]) => {
     const { attachments, rejected } = await readFiles(files);
     if (attachments.length) setStaged((prev) => [...prev, ...attachments]);
@@ -1494,6 +1618,11 @@ function App() {
         stop();
         return;
       }
+      if (e.key === "Escape" && claudeRun?.stage === "checking" && !showModels && !showAppearance) {
+        e.preventDefault();
+        stopClaude();
+        return;
+      }
       if (!e.ctrlKey || e.altKey || e.shiftKey) return;
       const k = e.key.toLowerCase();
       if (k === "n") {
@@ -1509,7 +1638,7 @@ function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [streaming, newConvo, stop, showModels, showAppearance]);
+  }, [streaming, newConvo, stop, showModels, showAppearance, claudeRun?.stage, stopClaude]);
 
   const limit = card?.numCtx ?? 32768;
   const pct = Math.min(100, Math.round((spent / limit) * 100));
@@ -1528,34 +1657,81 @@ function App() {
     }
     return -1;
   })();
-  const canSend = !streaming && !switchingModel && (draft.trim().length > 0 || staged.length > 0);
+  const canSend = !streaming && !switchingModel && claudeRun?.stage !== "checking" && (draft.trim().length > 0 || staged.length > 0);
   const short = model ? splitName(model) : null;
 
   const turns = turnsOf(entries);
   const replacedPlans = supersededPlans(entries);
   const turnEnds = new Map(turns.map((t) => [t.end, t]));
-  /** The Undo-all line, after a turn's last entry. Two or more changes still
-   *  applied, nothing waiting on you, and not the turn being streamed now. */
+  /** The line after a turn's last entry: Undo all, for two or more changes still
+   *  applied, and Check with Claude, when it is switched on, for one or more. Nothing
+   *  waiting on you, and not the turn being streamed now. */
   const turnLine = (i: number) => {
     const t = turnEnds.get(i);
-    if (!t || t.busy || t.ids.length < 2) return null;
+    if (!t || t.busy) return null;
+    const undoable = t.ids.length >= 2;
+    const checkable = claudeOn && t.ids.length >= 1;
+    if (!undoable && !checkable) return null;
     if (streaming && t === turns[turns.length - 1]) return null;
     const key = t.ids.join(",");
     const label = undoing === key ? "Undoing…" : armed === key ? `Undo ${t.ids.length} changes?` : "Undo all";
+    const run = claudeRun?.key === key ? claudeRun : null;
     // The count is quiet text and the action a button that looks like the
     // cards' own Undo: a borderless line read as a caption, not as something
     // to press. The text never changes, so the button's edge does not move.
     return (
       <div className="turn-undo" aria-live="polite">
-        <span className="turn-undo-count">{t.ids.length} changes in this turn</span>
-        <button
-          className={"btn ghost xs" + (armed === key ? " armed" : "")}
-          onClick={() => askUndoTurn(t.ids)}
-          disabled={streaming || undoing !== null}
-          title="Put every file this turn changed back the way it was"
-        >
-          {label}
-        </button>
+        {undoable && (
+          <>
+            <span className="turn-undo-count">{t.ids.length} changes in this turn</span>
+            <button
+              className={"btn ghost xs" + (armed === key ? " armed" : "")}
+              onClick={() => askUndoTurn(t.ids)}
+              disabled={streaming || undoing !== null}
+              title="Put every file this turn changed back the way it was"
+            >
+              {label}
+            </button>
+          </>
+        )}
+        {checkable && !run && (
+          <button
+            className="btn ghost xs claude-ask"
+            onClick={() => void askClaude(t)}
+            disabled={streaming || undoing !== null || claudeRun !== null}
+            title="Ask Claude to review this turn's changes. Shows what would be sent first."
+          >
+            Check with Claude
+          </button>
+        )}
+        {checkable && run?.stage === "confirm" && (
+          <span className="claude-confirm" role="group" aria-label="Check with Claude">
+            <span className="claude-confirm-text">
+              Sends your question and {run.files} {run.files === 1 ? "file's" : "files'"} changes (
+              {humanBytes(run.bytes)}) to Claude
+              {run.questionCut && " — a long question is cut to 20 KB"}
+            </span>
+            <button className="btn accent xs claude-send" onClick={() => void sendClaude(t, run)}>
+              Send
+            </button>
+            <button className="btn ghost xs claude-cancel" onClick={() => setClaudeRun(null)}>
+              Cancel
+            </button>
+          </span>
+        )}
+        {checkable && run?.stage === "checking" && (
+          <span className="claude-confirm" role="status">
+            <span className="pulse" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            <span className="claude-confirm-text">{run.stopping ? "Stopping…" : "Claude is checking…"}</span>
+            <button className="btn ghost xs claude-stop" onClick={stopClaude} disabled={run.stopping}>
+              Stop
+            </button>
+          </span>
+        )}
       </div>
     );
   };
@@ -1577,6 +1753,27 @@ function App() {
           onUndo={() => entry.undo && void undoEdit(entry.undo)}
           disabled={streaming || undoing !== null}
         />
+      );
+    }
+
+    if (entry.kind === "claude") {
+      return (
+        <div key={i} className={"claude-card" + (entry.error ? " error" : "")}>
+          <div className="claude-head">
+            <span className="claude-label">Claude</span>
+            {entry.error && <span className="claude-failed">Check failed</span>}
+          </div>
+          {entry.error ? (
+            <p className="claude-message">{entry.content}</p>
+          ) : (
+            <>
+              <Answer text={entry.content} />
+              <div className="turn-meta claude-meta">
+                <CopyButton text={entry.content} label="Copy Claude's check" />
+              </div>
+            </>
+          )}
+        </div>
       );
     }
 
@@ -2098,6 +2295,7 @@ function App() {
 
       {showAppearance && (
         <Appearance
+          onClaudeChecks={setClaudeOn}
           onClose={() => {
             setShowAppearance(false);
             composerRef.current?.focus();

@@ -2060,6 +2060,136 @@ pub fn undo_turn(ids: &[String], backups: &Path) -> Result<TurnUndo, String> {
     Ok(TurnUndo { restored, already, failed: None })
 }
 
+// ── what a turn changed ─────────────────────────────────────────────────────
+
+/// One side of a [`Net`] change.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Content {
+    /// There is no file.
+    Absent,
+    Bytes(Vec<u8>),
+    /// Over [`MAX_EDIT_BYTES`], so not read. Carries the size.
+    TooBig(u64),
+}
+
+/// What a turn did to one file, start to end: the file as the turn found it and
+/// as it is now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Net {
+    /// The file as the project folder shows it — where it was when the turn began.
+    pub display: String,
+    /// Where a move left it, when the turn moved it.
+    pub moved_to: Option<String>,
+    pub before: Content,
+    pub after: Content,
+}
+
+/// `path`'s bytes, or [`Content::Absent`] / [`Content::TooBig`] without reading a
+/// large file in.
+fn read_content(path: &Path) -> Result<Content, String> {
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() > MAX_EDIT_BYTES as u64 => Ok(Content::TooBig(m.len())),
+        Ok(_) => match std::fs::read(path) {
+            Ok(b) => Ok(Content::Bytes(b)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Content::Absent),
+            Err(e) => Err(format!("reading {}: {e}", plain(path))),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Content::Absent),
+        Err(e) => Err(format!("reading {}: {e}", plain(path))),
+    }
+}
+
+/// The net change of each file a turn touched, from the undo records of `ids`,
+/// in the order the turn first touched them. A change with no record left — undone
+/// already — is not part of it.
+///
+/// **Before** is the oldest record's backup (nothing, for a create); **after** is the
+/// file as it is on disk now, so a hand edit made since the turn is in it too. A
+/// move carries no bytes of its own: the file is followed to where it went, and a
+/// move on its own is a rename with the same content on both sides.
+pub fn turn_changes(ids: &[String], backups: &Path) -> Result<Vec<Net>, String> {
+    let mut found: Vec<(u128, String, Record)> = Vec::new();
+    for id in ids {
+        if id.is_empty() || id.len() > 32 || !id.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("not an edit id: {id}"));
+        }
+        let n = u128::from_str_radix(id, 16).map_err(|_| format!("not an edit id: {id}"))?;
+        if found.iter().any(|f| f.0 == n) {
+            continue;
+        }
+        let bytes = match std::fs::read(backups.join(format!("{id}.json"))) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("reading the backup record for {id}: {e}")),
+        };
+        let record: Record =
+            serde_json::from_slice(&bytes).map_err(|e| format!("reading the backup record for {id}: {e}"))?;
+        found.push((n, id.clone(), record));
+    }
+    // Oldest first: ids are wall-clock nanoseconds.
+    found.sort_by_key(|f| f.0);
+
+    // Where the file is now, and what it was before — `None` until a record that
+    // carries the bytes (or a create) says.
+    struct Chain {
+        display: String,
+        moved_to: Option<String>,
+        at: PathBuf,
+        before: Option<Content>,
+    }
+    let mut chains: Vec<Chain> = Vec::new();
+    for (_, id, r) in &found {
+        let slot = chains.iter().position(|c| key(&c.at) == key(&r.path));
+        let original = || match read_content(&backups.join(format!("{id}.bak"))) {
+            Ok(Content::Absent) => Err(format!("the backup of {} is missing", r.display)),
+            other => other,
+        };
+        match r.op() {
+            Op::Create | Op::Edit | Op::Delete => {
+                let before = match r.op() {
+                    Op::Create => Content::Absent,
+                    _ => original()?,
+                };
+                match slot {
+                    Some(i) => {
+                        chains[i].before.get_or_insert(before);
+                    }
+                    None => chains.push(Chain {
+                        display: r.display.clone(),
+                        moved_to: None,
+                        at: r.path.clone(),
+                        before: Some(before),
+                    }),
+                }
+            }
+            Op::Move => {
+                let to = r.to.clone().ok_or("that move has no destination on record")?;
+                match slot {
+                    Some(i) => {
+                        chains[i].moved_to = Some(r.to_shown());
+                        chains[i].at = to;
+                    }
+                    None => chains.push(Chain {
+                        display: r.display.clone(),
+                        moved_to: Some(r.to_shown()),
+                        at: to,
+                        before: None,
+                    }),
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for c in chains {
+        let after = read_content(&c.at)?;
+        // A rename alone changed no bytes.
+        let before = c.before.unwrap_or_else(|| after.clone());
+        out.push(Net { display: c.display, moved_to: c.moved_to, before, after });
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

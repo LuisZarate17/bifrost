@@ -331,7 +331,42 @@ pub fn run(
     let (program, args) = argv.split_first().ok_or("no command was given")?;
     let mut cmd = Command::new(program);
     cmd.args(args);
-    run_prepared(cmd, root, &label(argv), program, timeout, env, cancelled)
+    run_prepared(cmd, root, &label(argv), program, timeout, env, Io::default(), cancelled)
+}
+
+/// [`run`] with `input` written to the command's standard input, and room for
+/// `keep` bytes of output instead of the usual head and tail — for a command whose
+/// output is one document that has to arrive whole, such as `claude -p
+/// --output-format json`. Everything else is [`run`]'s: one job for the tree,
+/// no window, the timeout and Stop. The input is written on a thread of its own,
+/// so a command that never reads it cannot stall the wait.
+pub fn run_with_input(
+    root: &Path,
+    argv: &[String],
+    input: &[u8],
+    keep: usize,
+    timeout: Duration,
+    env: &[(String, String)],
+    cancelled: impl Fn() -> bool,
+) -> Result<Outcome, String> {
+    let (program, args) = argv.split_first().ok_or("no command was given")?;
+    let mut cmd = Command::new(program);
+    cmd.args(args);
+    let io = Io { input: Some(input), head: keep, tail: 0 };
+    run_prepared(cmd, root, &label(argv), program, timeout, env, io, cancelled)
+}
+
+/// What a run is fed, and how much of its output is kept.
+struct Io<'a> {
+    input: Option<&'a [u8]>,
+    head: usize,
+    tail: usize,
+}
+
+impl Default for Io<'_> {
+    fn default() -> Self {
+        Io { input: None, head: HEAD, tail: TAIL }
+    }
 }
 
 /// Run `command` in `shell`, in `root`, until it ends, times out, or `cancelled()`
@@ -350,11 +385,12 @@ pub fn run_shell(
 ) -> Result<Outcome, String> {
     let cmd = shell_command(shell, command)?;
     let program = cmd.get_program().to_string_lossy().into_owned();
-    run_prepared(cmd, root, command, &program, timeout, env, cancelled)
+    run_prepared(cmd, root, command, &program, timeout, env, Io::default(), cancelled)
 }
 
 /// The one runner: `cmd` is the program and its arguments, and `shown` is what an
 /// error names it as.
+#[allow(clippy::too_many_arguments)]
 fn run_prepared(
     mut cmd: Command,
     root: &Path,
@@ -362,6 +398,7 @@ fn run_prepared(
     program: &str,
     timeout: Duration,
     env: &[(String, String)],
+    io: Io,
     cancelled: impl Fn() -> bool,
 ) -> Result<Outcome, String> {
     let dir = plain(root);
@@ -372,7 +409,7 @@ fn run_prepared(
     let writer2 = writer.try_clone().map_err(|e| format!("could not make a pipe: {e}"))?;
 
     cmd.current_dir(&dir)
-        .stdin(Stdio::null())
+        .stdin(if io.input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(writer)
         .stderr(writer2)
         // Colour codes are noise to a model and cost tokens.
@@ -420,7 +457,17 @@ fn run_prepared(
     // backs the job up on Stop.
     let job = job.filter(|j| j.assign(&child));
 
-    let captured = Arc::new(Mutex::new(Capture::default()));
+    if let (Some(input), Some(mut stdin)) = (io.input, child.stdin.take()) {
+        let input = input.to_vec();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            // A command that exits without reading it all closes the pipe; that is
+            // its answer, not an error here. Dropping `stdin` is the end of input.
+            let _ = stdin.write_all(&input);
+        });
+    }
+
+    let captured = Arc::new(Mutex::new(Capture::new(io.head, io.tail)));
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     {
         let captured = Arc::clone(&captured);
@@ -592,22 +639,36 @@ fn kill_tree(child: &mut std::process::Child, job: Option<&Job>) {
 }
 
 /// The start and the end of the output, and how much there was.
-#[derive(Default)]
 struct Capture {
     head: Vec<u8>,
     tail: std::collections::VecDeque<u8>,
     total: u64,
+    head_cap: usize,
+    tail_cap: usize,
+}
+
+impl Default for Capture {
+    fn default() -> Self {
+        Capture::new(HEAD, TAIL)
+    }
 }
 
 impl Capture {
+    fn new(head_cap: usize, tail_cap: usize) -> Self {
+        Capture { head: Vec::new(), tail: Default::default(), total: 0, head_cap, tail_cap }
+    }
+
     fn push(&mut self, mut bytes: &[u8]) {
         self.total += bytes.len() as u64;
-        let room = HEAD.saturating_sub(self.head.len());
+        let room = self.head_cap.saturating_sub(self.head.len());
         let take = room.min(bytes.len());
         self.head.extend_from_slice(&bytes[..take]);
         bytes = &bytes[take..];
+        if self.tail_cap == 0 {
+            return;
+        }
         for &b in bytes {
-            if self.tail.len() == TAIL {
+            if self.tail.len() == self.tail_cap {
                 self.tail.pop_front();
             }
             self.tail.push_back(b);
@@ -888,6 +949,21 @@ mod tests {
         let out = run(&f.0, &cmd(&["cmd", "/c", "echo all good"]), CHECK_TIMEOUT, &[], never).unwrap();
         assert!(out.passed());
         assert!(out.output.contains("all good"), "{:?}", out.output);
+    }
+
+    /// What a run is given on standard input reaches the command, and `keep` bytes of
+    /// output arrive whole where a plain run would cut them.
+    #[cfg(windows)]
+    #[test]
+    fn input_reaches_the_command_and_its_output_is_kept_whole() {
+        let f = Folder::new("input");
+        let lines = "x".repeat(99) + "\n";
+        let input = lines.repeat(500);
+        let argv = cmd(&["findstr", "^"]);
+        let out = run_with_input(&f.0, &argv, input.as_bytes(), 1024 * 1024, CHECK_TIMEOUT, &[], never).unwrap();
+        assert!(out.passed());
+        assert!(out.output.len() > HEAD + TAIL && !out.output.contains("bytes cut"), "{}", out.output.len());
+        assert_eq!(out.output.lines().count(), 500);
     }
 
     #[cfg(windows)]

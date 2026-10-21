@@ -12,6 +12,28 @@ const SCHEMES: { value: Scheme; label: string }[] = [
   { value: "dark", label: "Dark" },
 ];
 
+/** `claude_status` with `probe`: the switch, and what `claude auth status` said. */
+type ClaudeState = {
+  checks: boolean;
+  command: { found: boolean; signedIn: boolean; email: string | null } | null;
+} | null;
+
+/** The status line under the Claude switch. */
+function claudeLine(c: ClaudeState, error: string) {
+  if (error) return `Could not read the Claude status: ${error}`;
+  if (!c) return "Looking for the claude command…";
+  if (!c.checks) return "Not checked while Claude checks are off";
+  const cmd = c.command;
+  if (!cmd) return "Looking for the claude command…";
+  if (!cmd || !cmd.found) return "claude command not found";
+  if (cmd.signedIn) return cmd.email ? `Signed in as ${cmd.email}` : "Signed in";
+  return (
+    <>
+      Not signed in — run <code>claude</code> in a terminal to sign in
+    </>
+  );
+}
+
 const current = (): Theme => loadTheme() ?? makeTheme(DEFAULT_SEED, "preset", "system");
 
 /**
@@ -37,15 +59,43 @@ export async function syncWindowsAccent() {
  * Theme and accent. Every change applies at once — the app behind the dialog is
  * the preview — and is saved as it is made, so there is no Save button to miss.
  */
-export function Appearance({ onClose }: { onClose: () => void }) {
+export function Appearance({
+  onClose,
+  onClaudeChecks,
+}: {
+  onClose: () => void;
+  /** Told when the Claude checks switch is changed, so the thread can show or hide
+   *  its button without waiting for a reload. */
+  onClaudeChecks: (on: boolean) => void;
+}) {
   const [theme, setTheme] = useState<Theme>(current);
   const [windows, setWindows] = useState<string | null>(null);
+  const [claude, setClaude] = useState<ClaudeState>(null);
+  const [claudeError, setClaudeError] = useState("");
   const panel = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     panel.current?.focus();
     invoke<string | null>("system_accent").then(setWindows).catch(() => {});
+    // `claude auth status` — no model call, nothing sent — and only while the switch is
+    // on: with it off Rust does not look at `claude` at all.
+    invoke<ClaudeState>("claude_status", { probe: true })
+      .then(setClaude)
+      .catch((e) => setClaudeError(String(e)));
   }, []);
+
+  const setChecks = async (on: boolean) => {
+    try {
+      await invoke("set_claude_checks", { on });
+      setClaudeError("");
+      onClaudeChecks(on);
+      // Turned on: now look for the command. Turned off: forget what was found.
+      setClaude((c) => (c ? { ...c, checks: on, command: null } : c));
+      if (on) setClaude(await invoke<ClaudeState>("claude_status", { probe: true }));
+    } catch (e) {
+      setClaudeError(String(e));
+    }
+  };
 
   const update = (seed: string, source: Source, scheme: Scheme = theme.scheme) => {
     const next = makeTheme(seed, source, scheme);
@@ -150,6 +200,26 @@ export function Appearance({ onClose }: { onClose: () => void }) {
                 </span>
               </span>
               {theme.source === "windows" && <Check className="mw-check" />}
+            </button>
+          </section>
+
+          <section className="setting">
+            <div className="setting-text">
+              <h3>Claude</h3>
+              <p>Sends a turn's question and changes to Claude only when you press Check with Claude.</p>
+              <p className="claude-status" role="status">
+                {claudeLine(claude, claudeError)}
+              </p>
+            </div>
+            <button
+              className={"toggle" + (claude?.checks ? " on" : "")}
+              role="switch"
+              aria-checked={!!claude?.checks}
+              disabled={!claude}
+              onClick={() => void setChecks(!claude?.checks)}
+            >
+              Claude checks
+              <span className="toggle-state">{claude?.checks ? "On" : "Off"}</span>
             </button>
           </section>
         </div>

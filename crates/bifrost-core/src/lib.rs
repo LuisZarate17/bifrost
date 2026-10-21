@@ -30,6 +30,7 @@
 pub mod agent;
 pub mod chat;
 pub mod check;
+pub mod claude;
 pub mod colors;
 pub mod compact;
 pub mod config;
