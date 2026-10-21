@@ -1,37 +1,40 @@
-//! The interactive interface: inline, like Claude Code. It scrolls in the normal terminal and
-//! never takes the alternate screen. Everything finished goes into the terminal's own
-//! scrollback ([`render::scrollback`], by `insert_before`); only the live area at the bottom,
-//! a status line and the input box, is redrawn.
+//! The interactive interface: full screen, like Claude Code's. It takes the terminal's alternate
+//! screen and gives it back on the way out, so the shell's own screen is as it was left.
 //!
 //! **Two threads.** The turn runs on a worker that owns the [`Session`]; its [`Ui`] is a
 //! [`Proxy`] that sends [`Event`]s over a channel, and an approval is a message with a reply
-//! channel to wait on. This thread reads the keyboard and draws. [`run`] is generic over the
-//! backend and over where keys come from ([`Keys`]), so a test drives a whole session over a
-//! `TestBackend` with scripted keys.
+//! channel to wait on. This thread reads the keyboard and the mouse and draws. [`run`] is generic
+//! over the backend and over where keys come from ([`Keys`]), so a test drives a whole session
+//! over a `TestBackend` with scripted keys.
 //!
-//! **The live area's height changes** with the input, and a ratatui inline viewport has a
-//! height fixed when it is made. So when the height changes the old viewport is cleared and a
-//! new terminal is made at the same place, over a [`Shared`] backend both can use.
+//! **The scrollback is Hugin's own.** What is said is kept ([`Transcript`]) and laid out, as rows,
+//! for the width the screen has. The screen is, top to bottom: a pinned row (the person's last
+//! prompt, once it has scrolled off the top), a window onto those rows, and the box (the input
+//! between two rules, with the status line under it) on the last rows. A resize lays the rows out
+//! again for the new width, and the next frame draws them.
+//!
+//! **Scrolling** is the wheel (3 rows), PgUp and PgDn (a page), Ctrl+Home and Ctrl+End. Home and
+//! End stay with the input. At the end the window follows new rows; scrolled up it stays where it
+//! is, and the status line says there is more below. The mouse is captured for this, so the
+//! terminal's own selection needs shift held.
 
-use std::cell::RefCell;
 use std::io::{self, Write};
-use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use bifrost_core::agent::turn::Decision;
-use crossterm::event::{Event as Term, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::backend::{Backend, ClearType, CrosstermBackend, WindowSize};
-use ratatui::buffer::Cell;
-use ratatui::layout::{Position, Size};
-use ratatui::text::Line;
-use ratatui::{Terminal, TerminalOptions, Viewport};
+use crossterm::event::{Event as Term, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind};
+use ratatui::Frame;
+use ratatui::Terminal;
+use ratatui::backend::{Backend, CrosstermBackend};
 
 use crate::input::Input;
-use crate::render::{self, Status, Theme};
+use crate::render::{self, Follow, Status, Theme};
 use crate::session::Session;
 use crate::stop::Stopper;
+use crate::transcript::{Said, Transcript};
 use crate::ui::{Approval, Event, Ui};
 
 /// How long the loop waits for a key before it looks at the worker and the clock again.
@@ -40,6 +43,9 @@ const POLL: Duration = Duration::from_millis(50);
 /// The most key events handled before the screen is drawn: a paste without bracketed paste
 /// arrives as one key per character.
 const BURST: usize = 512;
+
+/// The rows one turn of the wheel scrolls.
+const WHEEL: usize = 3;
 
 // ── the worker ──────────────────────────────────────────────────────────────
 
@@ -110,135 +116,8 @@ impl Worker {
     }
 }
 
-// ── the screen ──────────────────────────────────────────────────────────────
-
-/// A backend several owners hold, so a terminal can be made again over the same one.
-pub struct Shared<B>(Rc<RefCell<B>>);
-
-impl<B> Shared<B> {
-    pub fn new(backend: B) -> Self {
-        Self(Rc::new(RefCell::new(backend)))
-    }
-
-    #[cfg(test)]
-    pub fn with<T>(&self, f: impl FnOnce(&B) -> T) -> T {
-        f(&self.0.borrow())
-    }
-}
-
-impl<B> Clone for Shared<B> {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-impl<B: Backend> Backend for Shared<B> {
-    type Error = B::Error;
-
-    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
-    where
-        I: Iterator<Item = (u16, u16, &'a Cell)>,
-    {
-        self.0.borrow_mut().draw(content)
-    }
-
-    fn append_lines(&mut self, n: u16) -> Result<(), Self::Error> {
-        self.0.borrow_mut().append_lines(n)
-    }
-
-    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
-        self.0.borrow_mut().hide_cursor()
-    }
-
-    fn show_cursor(&mut self) -> Result<(), Self::Error> {
-        self.0.borrow_mut().show_cursor()
-    }
-
-    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
-        self.0.borrow_mut().get_cursor_position()
-    }
-
-    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
-        self.0.borrow_mut().set_cursor_position(position)
-    }
-
-    fn clear(&mut self) -> Result<(), Self::Error> {
-        self.0.borrow_mut().clear()
-    }
-
-    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
-        self.0.borrow_mut().clear_region(clear_type)
-    }
-
-    fn size(&self) -> Result<Size, Self::Error> {
-        self.0.borrow().size()
-    }
-
-    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
-        self.0.borrow_mut().window_size()
-    }
-
-    fn flush(&mut self) -> Result<(), Self::Error> {
-        self.0.borrow_mut().flush()
-    }
-}
-
 fn io_err(e: impl std::error::Error) -> io::Error {
     io::Error::other(e.to_string())
-}
-
-/// The terminal, with a live area of a height that can change.
-struct Screen<B: Backend> {
-    shared: Shared<B>,
-    term: Terminal<Shared<B>>,
-    height: u16,
-}
-
-impl<B: Backend> Screen<B> {
-    fn new(shared: Shared<B>, height: u16) -> io::Result<Self> {
-        let term = Self::make(&shared, height)?;
-        Ok(Self { shared, term, height })
-    }
-
-    fn make(shared: &Shared<B>, height: u16) -> io::Result<Terminal<Shared<B>>> {
-        Terminal::with_options(shared.clone(), TerminalOptions { viewport: Viewport::Inline(height) }).map_err(io_err)
-    }
-
-    fn width(&self) -> u16 {
-        self.term.size().map_or(80, |s| s.width)
-    }
-
-    /// Give the live area `height` rows: clear the old one and start a new one where it began.
-    fn set_height(&mut self, height: u16) -> io::Result<()> {
-        if height != self.height {
-            self.term.clear().map_err(io_err)?;
-            self.term = Self::make(&self.shared, height)?;
-            self.height = height;
-        }
-        Ok(())
-    }
-
-    /// Put lines into the scrollback, above the live area.
-    fn push(&mut self, lines: &[Line<'static>]) -> io::Result<()> {
-        if lines.is_empty() {
-            return Ok(());
-        }
-        self.term.autoresize().map_err(io_err)?;
-        let height = u16::try_from(lines.len()).unwrap_or(u16::MAX);
-        self.term.insert_before(height, |buf| render::paint(lines, buf)).map_err(io_err)
-    }
-
-    fn draw(&mut self, status: &Status, input: &Input, theme: &Theme) -> io::Result<()> {
-        self.term.draw(|f| render::draw_live(f, status, input, theme)).map_err(io_err)?;
-        Ok(())
-    }
-
-    /// Take the live area away, leaving the cursor where it began, so the scrollback ends
-    /// at the last thing said and the shell carries on below it.
-    fn finish(&mut self) -> io::Result<()> {
-        self.term.clear().map_err(io_err)?;
-        self.term.show_cursor().map_err(io_err)
-    }
 }
 
 // ── keys ────────────────────────────────────────────────────────────────────
@@ -294,8 +173,14 @@ struct App {
     /// worker begins the turn would be reset by it, so it is pressed again until it holds.
     stop_asked: bool,
     quit: bool,
-    /// Lines for the scrollback, not yet put there.
-    pending: Vec<Line<'static>>,
+    /// Everything said, as the rows of the scrollback.
+    transcript: Transcript,
+    /// How many rows the window is above the end; 0 follows new rows.
+    scroll: usize,
+    /// Rows came while scrolled up.
+    behind: bool,
+    /// The rows a page scrolls: one less than the window's, as last drawn.
+    page: usize,
 }
 
 impl App {
@@ -325,12 +210,12 @@ impl App {
         }
     }
 
-    fn say(&mut self, e: &Event, width: u16) {
-        self.pending.extend(render::scrollback(e, &self.theme, width));
+    fn say(&mut self, e: Event) {
+        self.transcript.push(Said::Event(e));
     }
 
     /// Something the worker said.
-    fn msg(&mut self, m: Msg, width: u16) {
+    fn msg(&mut self, m: Msg) {
         match m {
             Msg::Show(Event::Status(text)) => {
                 if matches!(self.phase, Phase::Turn { .. }) {
@@ -346,10 +231,12 @@ impl App {
                 if matches!(e, Event::Tool(_)) && matches!(self.phase, Phase::Turn { .. }) {
                     self.working(THINKING);
                 }
-                self.say(&e, width);
+                self.say(e);
             }
             Msg::Ask(ask, reply) => {
-                self.pending.extend(render::approval(&ask, &self.theme, width));
+                self.transcript.push(Said::Ask(ask.clone()));
+                // The card is at the end, and what it asks cannot be answered unseen.
+                self.scroll = 0;
                 self.phase = Phase::Approval { ask, reply, armed: Instant::now() + ARMING };
             }
         }
@@ -374,8 +261,21 @@ impl App {
         self.working("stopping");
     }
 
+    /// A key that moves the window and nothing else. Home and End are the input's.
+    fn scrolled_by(&mut self, key: KeyEvent) -> bool {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::PageUp => self.scroll = self.scroll.saturating_add(self.page),
+            KeyCode::PageDown => self.scroll = self.scroll.saturating_sub(self.page),
+            KeyCode::End if ctrl => self.scroll = 0,
+            KeyCode::Home if ctrl => self.scroll = usize::MAX,
+            _ => return false,
+        }
+        true
+    }
+
     fn key(&mut self, key: KeyEvent) {
-        if key.kind == KeyEventKind::Release {
+        if key.kind == KeyEventKind::Release || self.scrolled_by(key) {
             return;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -407,6 +307,8 @@ impl App {
                         self.quit = true;
                     } else {
                         self.stopper.begin();
+                        // What was asked is at the end, with the answer to come.
+                        self.scroll = 0;
                         self.phase = Phase::Turn { what: THINKING.into(), since: Instant::now() };
                         self.stop_asked = false;
                         if self.prompts.send(prompt).is_err() {
@@ -422,22 +324,54 @@ impl App {
         match e {
             Term::Key(k) => self.key(k),
             Term::Paste(text) => self.input.paste(&text),
+            Term::Mouse(m) => match m.kind {
+                MouseEventKind::ScrollUp => self.scroll = self.scroll.saturating_add(WHEEL),
+                MouseEventKind::ScrollDown => self.scroll = self.scroll.saturating_sub(WHEEL),
+                _ => {}
+            },
+            // The next frame is laid out for the size the screen has; the event only wakes the loop.
+            Term::Resize(..) => {}
             _ => {}
         }
     }
+
+    /// Draw the screen into `f`: lay out what is new for its width, keep the window where the
+    /// person left it, and show the window and the box.
+    fn paint(&mut self, f: &mut Frame) {
+        let area = f.area();
+        let added = self.transcript.lay(area.width, &self.theme);
+        if self.scroll > 0 && added > 0 {
+            self.scroll = self.scroll.saturating_add(added);
+            self.behind = true;
+        }
+        let room = usize::from(area.height.saturating_sub(render::live_height(&self.input, area.width)));
+        self.page = room.saturating_sub(1).max(1);
+        self.scroll = self.scroll.min(self.transcript.rows().saturating_sub(room));
+        if self.scroll == 0 {
+            self.behind = false;
+        }
+        let follow = match (self.scroll, self.behind) {
+            (0, _) => Follow::End,
+            (_, false) => Follow::Up,
+            (_, true) => Follow::Behind,
+        };
+        let view = self.transcript.view(room, self.scroll, &self.theme, area.width);
+        render::draw_screen(f, &view, &self.status(), follow, &self.input, &self.theme);
+    }
 }
+
 
 /// Run the interface until the person leaves. `header` and `notices` (a failed warm-up, say)
 /// are the first things said.
 pub fn run<B: Backend, K: Keys>(
-    backend: Shared<B>,
+    backend: B,
     keys: &mut K,
     theme: Theme,
     header: Option<Event>,
     notices: Receiver<String>,
     worker: Worker,
 ) -> io::Result<()> {
-    let mut screen = Screen::new(backend, 2)?;
+    let mut terminal = Terminal::new(backend).map_err(io_err)?;
     let Worker { prompts, events, stopper, handle } = worker;
     let mut app = App {
         input: Input::default(),
@@ -447,28 +381,29 @@ pub fn run<B: Backend, K: Keys>(
         prompts,
         stop_asked: false,
         quit: false,
-        pending: Vec::new(),
+        transcript: Transcript::default(),
+        scroll: 0,
+        behind: false,
+        page: 1,
     };
-    let width = screen.width();
     if let Some(h) = header {
-        app.say(&h, width);
+        app.say(h);
     }
 
     while !app.quit {
-        let width = screen.width();
         loop {
             match events.try_recv() {
-                Ok(m) => app.msg(m, width),
+                Ok(m) => app.msg(m),
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    app.say(&Event::Error("the session ended unexpectedly".into()), width);
+                    app.say(Event::Error("the session ended unexpectedly".into()));
                     app.quit = true;
                     break;
                 }
             }
         }
         while let Ok(notice) = notices.try_recv() {
-            app.say(&Event::Error(notice), width);
+            app.say(Event::Error(notice));
         }
         // Stop is held until the worker has seen it, and an approval it ended is left.
         if app.stop_asked && app.stopper.running() && !app.stopper.stopped() {
@@ -489,13 +424,10 @@ pub fn run<B: Backend, K: Keys>(
             }
         }
 
-        screen.push(&std::mem::take(&mut app.pending))?;
-        screen.set_height(render::live_height(&app.input, screen.width()))?;
-        screen.draw(&app.status(), &app.input, &app.theme)?;
+        // The frame is laid out for the size the screen has when it is drawn, a resize or not.
+        terminal.draw(|f| app.paint(f)).map_err(io_err)?;
     }
 
-    screen.push(&std::mem::take(&mut app.pending))?;
-    screen.finish()?;
     // Nobody is waiting on a prompt any more; an idle worker ends with its channel.
     drop(app);
     let _ = handle.join();
@@ -504,11 +436,25 @@ pub fn run<B: Backend, K: Keys>(
 
 // ── the real terminal ───────────────────────────────────────────────────────
 
-/// Put the terminal back: raw mode off, paste mode off, the cursor shown.
+/// Whether the terminal has been put back already: it is once, by whichever comes first.
+static RESTORED: AtomicBool = AtomicBool::new(false);
+
+/// Put the terminal back: the alternate screen left, the mouse and paste modes off, raw mode off,
+/// the cursor shown; then one line on the shell's own screen, so what comes next starts clean.
 fn restore() {
-    let _ = crossterm::terminal::disable_raw_mode();
+    if RESTORED.swap(true, Ordering::SeqCst) {
+        return;
+    }
     let mut out = io::stdout();
-    let _ = crossterm::execute!(out, crossterm::event::DisableBracketedPaste, crossterm::cursor::Show);
+    let _ = crossterm::execute!(
+        out,
+        crossterm::event::DisableMouseCapture,
+        crossterm::event::DisableBracketedPaste,
+        crossterm::terminal::LeaveAlternateScreen,
+        crossterm::cursor::Show
+    );
+    let _ = crossterm::terminal::disable_raw_mode();
+    let _ = write!(out, "\x1b[2mhugin · session saved\x1b[0m\r\n");
     let _ = out.flush();
 }
 
@@ -537,8 +483,12 @@ pub fn start(
     let theme = Theme::from_env();
     crossterm::terminal::enable_raw_mode()?;
     let _restore = Restore;
-    // Not every terminal has bracketed paste; those that do not send a paste as keys.
-    let _ = crossterm::execute!(io::stdout(), crossterm::event::EnableBracketedPaste);
-    let backend = Shared::new(CrosstermBackend::new(io::stdout()));
-    run(backend, &mut Crossterm, theme, Some(header), notices, worker)
+    // Not every terminal has bracketed paste or a mouse; those that do not just ignore the asking.
+    crossterm::execute!(
+        io::stdout(),
+        crossterm::terminal::EnterAlternateScreen,
+        crossterm::event::EnableMouseCapture,
+        crossterm::event::EnableBracketedPaste
+    )?;
+    run(CrosstermBackend::new(io::stdout()), &mut Crossterm, theme, Some(header), notices, worker)
 }

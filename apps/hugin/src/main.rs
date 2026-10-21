@@ -3,8 +3,8 @@
 //! - [`start`] — what it learns on start: the folder, git, the model, the warm-up
 //! - [`session`] — the conversation, turn by turn, and its saved record
 //! - [`ui`] — the seam: events out, approvals in; [`line`] is the plain mode behind it
-//! - [`inline`], [`input`], [`render`] — the interface for a terminal: its loop, its input box,
-//!   and how it looks
+//! - [`inline`], [`input`], [`render`], [`transcript`] — the full-screen interface for a terminal: its
+//!   loop, its input box, how it looks, and the scrollback it keeps
 //! - [`frontend`], [`view`] — the loop's frontend, and cards put into words
 //! - [`stop`] — Stop, for a thread that is not the one running the turn
 
@@ -23,6 +23,7 @@ mod start;
 mod stop;
 #[cfg(test)]
 mod tests;
+mod transcript;
 mod ui;
 mod view;
 
