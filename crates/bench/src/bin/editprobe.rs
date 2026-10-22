@@ -433,7 +433,7 @@ fn run(model: &str, task: &Task, format: Format, transport: Transport, opts: &Op
     let tools = format.tools();
 
     let mut messages = vec![Message::system(format.system(&ws)), Message::user(task.prompt)];
-    let setup = Setup { ws: &ws, backups: &backups, check: None, confine_reads: false, compact: true, commands: None };
+    let setup = Setup { ws: &ws, backups: &backups, check: None, confine_reads: false, compact: true, commands: None, unattended: false };
     let r = probe::run_loop(model, &mut messages, &tools, *opts, transport, tools::MAX_ROUNDS, &setup);
     let secs = started.elapsed().as_secs_f64();
 

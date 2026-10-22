@@ -346,7 +346,7 @@ fn run(model: &str, task: &Task, variant: Variant, opts: Options, scratch: &Path
     let with = variant == Variant::With;
     let offered = tools::available(true, with.then(|| check::label(&cargo.argv)).as_deref());
     let mut messages = vec![Message::system(tools::system_prompt(&ws, with)), Message::user(task.prompt)];
-    let setup = Setup { ws: &ws, backups: &backups, check: with.then_some(cargo), confine_reads: false, compact: true, commands: None };
+    let setup = Setup { ws: &ws, backups: &backups, check: with.then_some(cargo), confine_reads: false, compact: true, commands: None, unattended: false };
     let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, PROBE_ROUNDS, &setup);
 
     let mut out = Outcome {

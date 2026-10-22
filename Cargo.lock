@@ -2124,6 +2124,7 @@ dependencies = [
  "bifrost-core",
  "crossterm",
  "ratatui",
+ "serde",
  "serde_json",
  "unicode-width",
  "windows-sys 0.59.0",

@@ -38,6 +38,7 @@ use bifrost_core::agent::round::{round_in, Reply, Round};
 use bifrost_core::agent::run::{run_approved_in, Ran};
 use bifrost_core::agent::ticket::PendingCall;
 use bifrost_core::agent::turn::{self, Card, Decision, Frontend, Patch, RoundNumbers};
+use bifrost_core::agent::unattended;
 use bifrost_core::chat::{Message, Options, Tool, ToolCall};
 use bifrost_core::config::Config;
 use bifrost_core::edit::Workspace;
@@ -90,6 +91,12 @@ pub struct Setup<'a> {
     /// every other probe's: the call is turned away as a tool that does not exist. The
     /// tool itself is in the probe's `offered` list, as `write_file` is.
     pub commands: Option<check::Shell>,
+    /// Nobody to ask, as in `hugin -p` (I5): a card is answered by
+    /// [`unattended::decide`] instead of being approved, so a read outside the folder, a
+    /// command and a check after a build or runner file changed ([`unattended::runs_code`])
+    /// are turned away, and what is allowed is edits and the check. The task probe's propose
+    /// mode sets it; every other probe approves.
+    pub unattended: bool,
 }
 
 /// Commands a probe never approves, though it approves every other call: the model is
@@ -478,6 +485,13 @@ impl Book {
         self.finished(&call, "declined: read outside the folder", true);
     }
 
+    /// The call that asked was turned away by the rule for a turn with nobody to ask
+    /// ([`unattended::decide`]), and the model is told so, as the app tells it.
+    fn refused(&mut self) {
+        let Some(call) = self.waiting.take() else { return };
+        self.finished(&call, "declined: not allowed when nobody is there to ask", true);
+    }
+
     /// A command the probe refuses to run, because its text matches `pattern`: counted
     /// and logged, and the model is told it was declined, as the app tells it.
     fn denied(&mut self, pattern: &str) {
@@ -530,6 +544,12 @@ struct Fe<'a> {
     book: &'a RefCell<Book>,
     ws: &'a Workspace,
     confine_reads: bool,
+    /// Cards are answered by [`unattended::decide`], not approved.
+    unattended: bool,
+    /// Each card shown: the path it names, and where a move goes.
+    shown: Vec<(String, Option<String>)>,
+    /// The files the turn has changed so far, as the cards named them: what the rule is told.
+    edited: Vec<String>,
 }
 
 impl Frontend for Fe<'_> {
@@ -551,13 +571,30 @@ impl Frontend for Fe<'_> {
         self.book.borrow_mut().said(message);
     }
 
-    fn card(&mut self, _card: Card) -> usize {
-        0
+    fn card(&mut self, card: Card) -> usize {
+        self.shown.push((card.path, card.to));
+        self.shown.len() - 1
     }
 
-    fn update(&mut self, _card: usize, _patch: Patch) {}
+    /// A change that was written has an undo handle: its file is one the turn has changed.
+    fn update(&mut self, card: usize, patch: Patch) {
+        if patch.undo.is_some()
+            && let Some((path, to)) = self.shown.get(card)
+        {
+            self.edited.push(path.clone());
+            self.edited.extend(to.clone());
+        }
+    }
 
     fn decide(&mut self, _card: usize, call: &PendingCall) -> Decision {
+        // With nobody to ask, the rule decides, and nothing else is looked at.
+        if self.unattended {
+            let decision = unattended::decide(call, &self.edited);
+            if decision == Decision::Deny {
+                self.book.borrow_mut().refused();
+            }
+            return decision;
+        }
         // The one thing a probe that approves everything still refuses.
         if call.name == "run_command"
             && let Some(pattern) = destructive(&call.path)
@@ -606,7 +643,14 @@ fn drive(
             }
             got
         },
-        &mut Fe { book: &book, ws: s.ws, confine_reads: s.confine_reads },
+        &mut Fe {
+            book: &book,
+            ws: s.ws,
+            confine_reads: s.confine_reads,
+            unattended: s.unattended,
+            shown: Vec::new(),
+            edited: Vec::new(),
+        },
     );
     book.into_inner().finish(done)
 }
@@ -718,7 +762,15 @@ mod tests {
         }
 
         fn setup(&self, confine_reads: bool) -> Setup<'_> {
-            Setup { ws: &self.ws, backups: &self.backups, check: None, confine_reads, compact: true, commands: None }
+            Setup {
+                ws: &self.ws,
+                backups: &self.backups,
+                check: None,
+                confine_reads,
+                compact: true,
+                commands: None,
+                unattended: false,
+            }
         }
     }
 
@@ -991,6 +1043,102 @@ mod tests {
         assert!(!r.runaway && !r.hit_bound);
         // It was asked about, and nothing came of it.
         assert_eq!((r.asks, r.edit_errors), (1, 0));
+    }
+
+    // ── nobody to ask ───────────────────────────────────────────────────────
+
+    /// **An unattended setup answers by the rule `hugin -p` ships**, not by approving
+    /// everything: an edit and the check run; a read outside the folder and a command do not,
+    /// and the model is told so in the app's words.
+    #[test]
+    fn an_unattended_setup_answers_cards_by_the_rule_the_app_ships() {
+        let dir = Sandbox::new("unattended");
+        let mut setup = dir.setup(false);
+        setup.unattended = true;
+        let played = play(
+            &setup,
+            10,
+            vec![
+                asks_about("read_file", json!({ "path": "C:/Windows/win.ini" }), "C:/Windows/win.ini"),
+                asks_about("run_command", json!({ "command": "dir" }), "dir"),
+                asks_about("edit_file", json!({ "path": "a.txt" }), "a.txt"),
+                asks_about("run_check", json!({}), "cargo check"),
+                answer("Done."),
+            ],
+            vec![ran("Edited a.txt: 1 line removed, 1 added."), checked(outcome(check::Ended::Exited(Some(0)), None))],
+        );
+        assert_eq!(played.ran, ["edit_file:a.txt:t-a.txt", "run_check:cargo check:t-cargo check"]);
+        let r = played.run;
+        assert_eq!((r.checks.as_slice(), r.commands, r.answer.as_str()), (&[true][..], 0, "Done."));
+        assert!(r.log[0].contains("declined") && r.log[1].contains("declined"), "{:?}", r.log);
+        assert!(r.log[2].contains("Edited a.txt"), "the refusals took nobody else's line: {:?}", r.log);
+        let told: Vec<&str> = played.convo.iter().filter(|m| m.role == "tool").map(|m| m.content.as_str()).collect();
+        assert!(told[0].starts_with("The user declined to let you read"), "{told:?}");
+        assert!(told[1].starts_with("The user declined to run `dir`"), "{told:?}");
+    }
+
+    /// A check after a build file changed is the one check the rule turns away.
+    #[test]
+    fn an_unattended_setup_turns_away_a_check_after_a_build_file_changed() {
+        let dir = Sandbox::new("unattended-build");
+        let mut setup = dir.setup(false);
+        setup.unattended = true;
+        let after_a_manifest = round_of(Reply::Call {
+            call: PendingCall {
+                token: "t-check".into(),
+                name: "run_check".into(),
+                path: "cargo check".into(),
+                diff: None,
+                range: None,
+                changed_build_files: vec!["Cargo.toml".into()],
+                to: None,
+                folders: Vec::new(),
+                size: None,
+            },
+            raw_call: call("run_check", json!({})),
+        });
+        let played = play(&setup, 10, vec![after_a_manifest, answer("Done.")], vec![]);
+        assert!(played.ran.is_empty(), "{:?}", played.ran);
+        assert!(played.run.checks.is_empty());
+        let told = played.convo.iter().find(|m| m.role == "tool").map(|m| m.content.clone()).unwrap_or_default();
+        assert!(told.starts_with("The user declined to run `cargo check`"), "{told}");
+    }
+
+    /// **A runner file counts, though Mimir's list of build files does not name it**: after the
+    /// model edited a `conftest.py` the check is turned away, and an ordinary source file
+    /// does not stop it. The frontend learns what was changed from the cards.
+    #[test]
+    fn an_unattended_setup_turns_away_a_check_after_a_runner_file_was_edited() {
+        let dir = Sandbox::new("unattended-runner");
+        let mut setup = dir.setup(false);
+        setup.unattended = true;
+        let wrote = |what: &str| Ok(Ran { undo: Some("u1".into()), ..Ran::text(format!("Edited {what}: 1 line removed, 1 added.")) });
+        let source = play(
+            &setup,
+            10,
+            vec![
+                asks_about("edit_file", json!({ "path": "src/lib.rs" }), "src/lib.rs"),
+                asks_about("run_check", json!({}), "cargo check"),
+                answer("Done."),
+            ],
+            vec![wrote("src/lib.rs"), checked(outcome(check::Ended::Exited(Some(0)), None))],
+        );
+        assert_eq!(source.ran, ["edit_file:src/lib.rs:t-src/lib.rs", "run_check:cargo check:t-cargo check"]);
+
+        let runner = play(
+            &setup,
+            10,
+            vec![
+                asks_about("edit_file", json!({ "path": "tests/conftest.py" }), "tests/conftest.py"),
+                asks_about("run_check", json!({}), "cargo check"),
+                answer("Done."),
+            ],
+            vec![wrote("tests/conftest.py")],
+        );
+        assert_eq!(runner.ran, ["edit_file:tests/conftest.py:t-tests/conftest.py"], "the check never reached the runner");
+        assert!(runner.run.checks.is_empty());
+        let told = runner.convo.iter().filter(|m| m.role == "tool").map(|m| m.content.clone()).next_back().unwrap_or_default();
+        assert!(told.starts_with("The user declined to run `cargo check`"), "{told}");
     }
 
     // ── the end of a turn ───────────────────────────────────────────────────

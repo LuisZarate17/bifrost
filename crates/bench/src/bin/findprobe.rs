@@ -350,7 +350,7 @@ fn run(
 ) -> Outcome {
     let started = Instant::now();
     let mut messages = vec![Message::system(variant.system(ws)), Message::user(q.ask)];
-    let setup = Setup { ws, backups, check: None, confine_reads: false, compact: true, commands: None };
+    let setup = Setup { ws, backups, check: None, confine_reads: false, compact: true, commands: None, unattended: false };
     let r = probe::run_loop(model, &mut messages, &variant.tools(), opts, Transport::Recover, PROBE_ROUNDS, &setup);
     // Whatever happened, the next run must read the pinned tree. A reset that
     // fails means this run, and maybe the next, measured nothing.

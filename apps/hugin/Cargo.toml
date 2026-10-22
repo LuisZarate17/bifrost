@@ -12,6 +12,8 @@ edition = "2024"
 bifrost-core = { path = "../../crates/bifrost-core" }
 crossterm = "0.29"
 ratatui = "0.30"
+# For `hugin -p`'s JSON, whose fields have to come in an order that a map would not keep.
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 unicode-width = "0.2"
 

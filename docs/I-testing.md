@@ -241,6 +241,22 @@ driving the built app at Luis's request (one real check).
 
 ---
 
+## I5 — `hugin -p`, for Claude Code
+
+[I5-results.md](results/I5-results.md). **Saved for later** — the automated checks
+are in the results. Rebuild and reinstall Hugin first (`node tools/shortcuts.mjs`).
+
+- [ ] **A task from Claude Code.** Ask Claude Code to hand Hugin a small task in a repository, with a
+      check. **Expect:** Claude runs `hugin -p … --check … --json`, shows you the patch and the check
+      result, and applies it only after reading it.
+- [ ] **Your folder untouched.** Before the patch is applied, `git status` is as it was.
+- [ ] **The time limit.** Hand it something big with `--time 60`. **Expect:** it stops within about a
+      minute, says the proposal is partial, and leaves nothing running in Task Manager.
+- [ ] **The note.** `hugin --claude-note`. **Expect:** a short section you'd be happy to have in your
+      CLAUDE.md.
+
+---
+
 ## After this
 
 - Anything that failed goes back to the chunk, with what you saw.

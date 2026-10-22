@@ -604,7 +604,7 @@ impl Job {
 }
 
 #[cfg(windows)]
-fn no_window(cmd: &mut Command) {
+pub(crate) fn no_window(cmd: &mut Command) {
     use std::os::windows::process::CommandExt;
     // Mimir has no console, so every console program it starts would otherwise
     // get a window of its own flashing up. CREATE_NO_WINDOW alone — see
@@ -614,7 +614,7 @@ fn no_window(cmd: &mut Command) {
 }
 
 #[cfg(not(windows))]
-fn no_window(_: &mut Command) {}
+pub(crate) fn no_window(_: &mut Command) {}
 
 /// Kill the command **and everything it started.** `Child::kill` ends only the
 /// process itself; `cargo` would die and leave `rustc` compiling. The job does

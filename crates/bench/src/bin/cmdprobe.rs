@@ -337,7 +337,7 @@ fn run(model: &str, task: &Task, shell: Shell, opts: Options, scratch: &Path, en
     let system = format!("{} {}", tools::system_prompt(&ws, false), tools::command_sentence(shell));
     let mut messages = vec![Message::system(system), Message::user(task.prompt)];
     let setup =
-        Setup { ws: &ws, backups: &backups, check: Some(env), confine_reads: false, compact: true, commands: Some(shell) };
+        Setup { ws: &ws, backups: &backups, check: Some(env), confine_reads: false, compact: true, commands: Some(shell), unattended: false };
     let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, PROBE_ROUNDS, &setup);
 
     let (verdict, why, late) = judge(task, f, &r);

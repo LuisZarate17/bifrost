@@ -45,16 +45,33 @@
 //! `--selfcheck` runs no model at all: for every task it checks that the
 //! solution state passes scoring and the stripped state does not, which is what
 //! proves a task is actually testing what it claims to.
+//!
+//! **Propose mode (I5, `--mode propose`)** runs a task as `hugin -p` runs one. The task
+//! folder is the worktree with the scored file stripped and left uncommitted, as a person's
+//! folder would hold unfinished work; the model works in a scratch copy of it
+//! (`bifrost_core::scratch`), unattended (`agent::unattended`); and what it did comes back as
+//! a patch, which is applied to the task folder and scored there like an interactive run.
+//! A run is also booked **NOAPPLY** when its patch does not apply, and **touched** when the
+//! task folder — its worktree files and the worktree's own git files, its index among
+//! them, down to the time each was last written — is different before the patch is applied
+//! than it was when the run began.
+//! `--mode both` runs every task both ways and reports the paired difference.
+//! `--selfcheck --mode propose` runs no model either: it puts each task's solution through
+//! the same copy, patch and apply, and scores the result, which proves that round trip on
+//! every task.
 
 #[path = "../probe.rs"]
 mod probe;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
+use bifrost_core::agent::unattended;
 use bifrost_core::chat::{Message, Options, Tool};
 use bifrost_core::edit::Workspace;
+use bifrost_core::scratch::{self, Git, Scratch};
 use bifrost_core::{check, config, ollama, tools};
 
 use probe::{Check, Setup, Transport};
@@ -941,6 +958,43 @@ struct Outcome {
     plans: usize,
     /// R-03: automatic reads, listings and searches that succeeded and cost no round.
     autos: usize,
+    /// I5, propose mode: the patch did not apply to the task folder.
+    noapply: bool,
+    /// I5, propose mode: the task folder was different when the run ended, before the patch
+    /// was applied, than when it began.
+    touched: bool,
+}
+
+impl Outcome {
+    /// A run that failed before the model was asked anything: an ERROR with its reason, and
+    /// nothing counted.
+    fn early(started: Instant, why: String) -> Self {
+        Outcome {
+            verdict: Verdict::Error,
+            why,
+            rounds: 0,
+            late: false,
+            checks: 0,
+            asks: 0,
+            asks_every_call: 0,
+            calls: Vec::new(),
+            files: Vec::new(),
+            secs: started.elapsed().as_secs_f64(),
+            log: Vec::new(),
+            ranged_reads: 0,
+            prompt_tokens: Vec::new(),
+            max_prompt: 0,
+            set_aside: 0,
+            truncated: 0,
+            deletes: 0,
+            moves: 0,
+            recreated: 0,
+            plans: 0,
+            autos: 0,
+            noapply: false,
+            touched: false,
+        }
+    }
 }
 
 fn run(
@@ -968,90 +1022,18 @@ fn run(
 
     let tree = match Worktree::add(&wt_path, &start, keep) {
         Ok(t) => t,
-        Err(e) => {
-            return Outcome {
-                verdict: Verdict::Error,
-                why: format!("could not check out {start}: {e}"),
-                rounds: 0,
-                late: false,
-                checks: 0,
-                asks: 0,
-                asks_every_call: 0,
-                calls: Vec::new(),
-                files: Vec::new(),
-                secs: started.elapsed().as_secs_f64(),
-                log: Vec::new(),
-                ranged_reads: 0,
-                prompt_tokens: Vec::new(),
-                max_prompt: 0,
-                set_aside: 0,
-                truncated: 0,
-                deletes: 0,
-                moves: 0,
-                recreated: 0,
-                plans: 0,
-                autos: 0,
-            };
-        }
+        Err(e) => return Outcome::early(started, format!("could not check out {start}: {e}")),
     };
     let ws = match Workspace::open(&tree.path) {
         Ok(w) => w,
-        Err(e) => {
-            return Outcome {
-                verdict: Verdict::Error,
-                why: e,
-                rounds: 0,
-                late: false,
-                checks: 0,
-                asks: 0,
-                asks_every_call: 0,
-                calls: Vec::new(),
-                files: Vec::new(),
-                secs: started.elapsed().as_secs_f64(),
-                log: Vec::new(),
-                ranged_reads: 0,
-                prompt_tokens: Vec::new(),
-                max_prompt: 0,
-                set_aside: 0,
-                truncated: 0,
-                deletes: 0,
-                moves: 0,
-                recreated: 0,
-                plans: 0,
-                autos: 0,
-            };
-        }
+        Err(e) => return Outcome::early(started, e),
     };
 
     let full_path = tree.path.join(&path);
     let original = std::fs::read_to_string(&full_path).unwrap_or_default();
     let stripped = match strip(&original, &task.removal) {
         Ok(s) => s,
-        Err(e) => {
-            return Outcome {
-                verdict: Verdict::Error,
-                why: e,
-                rounds: 0,
-                late: false,
-                checks: 0,
-                asks: 0,
-                asks_every_call: 0,
-                calls: Vec::new(),
-                files: Vec::new(),
-                secs: started.elapsed().as_secs_f64(),
-                log: Vec::new(),
-                ranged_reads: 0,
-                prompt_tokens: Vec::new(),
-                max_prompt: 0,
-                set_aside: 0,
-                truncated: 0,
-                deletes: 0,
-                moves: 0,
-                recreated: 0,
-                plans: 0,
-                autos: 0,
-            };
-        }
+        Err(e) => return Outcome::early(started, e),
     };
     // a02 and a04 create a file that does not exist at the parent commit —
     // leave it absent so the model has to use create_file, not edit_file.
@@ -1084,7 +1066,7 @@ fn run(
     // A task that stubs out a safety function (b03's `contain_with`) stubs the
     // worktree's copy only: the tools the model calls run on the bifrost-core this
     // probe was built with, whose rules are intact.
-    let setup = Setup { ws: &ws, backups: &backups, check: Some(&cargo), confine_reads: true, compact, commands: None };
+    let setup = Setup { ws: &ws, backups: &backups, check: Some(&cargo), confine_reads: true, compact, commands: None, unattended: false };
     let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, PROBE_ROUNDS, &setup);
 
     let files = Command::new("git")
@@ -1124,6 +1106,8 @@ fn run(
         recreated: r.delete_then_create,
         plans: r.plan_updates,
         autos: r.auto_calls,
+        noapply: false,
+        touched: false,
     };
 
     if r.runaway {
@@ -1161,6 +1145,450 @@ fn run(
     }
     out.secs = started.elapsed().as_secs_f64();
     out
+}
+
+// ── propose mode (I5) ───────────────────────────────────────────────────────
+
+/// Which way a task is run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// The model works in the worktree itself and every card is approved: H3's run.
+    Interactive,
+    /// The model works in a scratch copy of the worktree, unattended, and its patch is applied.
+    Propose,
+}
+
+impl Mode {
+    fn name(self) -> &'static str {
+        match self {
+            Mode::Interactive => "interactive",
+            Mode::Propose => "propose",
+        }
+    }
+}
+
+/// The commit a task's worktree is made at: the parent of the solution commit for a real
+/// commit, the pin for a removal.
+fn start_commit(task: &Task) -> String {
+    match task.kind {
+        Kind::RealCommit => format!("{}^", task.commit),
+        Kind::Removal => task.commit.to_string(),
+    }
+}
+
+/// Put a task's starting state in its worktree: the scored file with its tests hidden and,
+/// for a removal, its function replaced with `todo!()`. Left uncommitted, as a person's
+/// unfinished work would be.
+fn start_state(tree: &Path, task: &Task) -> Result<(), String> {
+    let full_path = tree.join(format!("{CRATE}/{}", task.file));
+    let original = std::fs::read_to_string(&full_path).unwrap_or_default();
+    let stripped = strip(&original, &task.removal)?;
+    // a02 and a04 create a file that does not exist at the parent commit —
+    // leave it absent so the model has to use create_file, not edit_file.
+    if !original.is_empty() || full_path.exists() {
+        if let Some(parent) = full_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::write(&full_path, &stripped).map_err(|e| format!("could not write {}: {e}", full_path.display()))?;
+    }
+    Ok(())
+}
+
+/// What a task folder holds: every file of the worktree, and every file of the worktree's
+/// own git folder — its index among them — which lives beside the repository's, found by
+/// the `.git` file the worktree has. For showing that a run left the folder alone.
+fn folder_state(tree: &Path) -> Result<BTreeMap<String, scratch::Print>, String> {
+    let read = |dir: &Path| scratch::fingerprints(dir).map_err(|e| format!("could not read {}: {e}", dir.display()));
+    let mut state = read(tree)?;
+    let link = std::fs::read_to_string(tree.join(".git")).unwrap_or_default();
+    if let Some(admin) = link.trim().strip_prefix("gitdir:") {
+        for (name, print) in read(Path::new(admin.trim()))? {
+            state.insert(format!("<worktree's git folder>/{name}"), print);
+        }
+    }
+    Ok(state)
+}
+
+/// How a patch's files read in a run's list: `M path`, as `git status --porcelain` has them.
+fn file_lines(patch: &scratch::Patch) -> Vec<String> {
+    let letter = |status: &str| match status {
+        "added" => "A",
+        "deleted" => "D",
+        "renamed" => "R",
+        _ => "M",
+    };
+    patch.files.iter().map(|c| format!("{} {}", letter(c.status), c.path)).collect()
+}
+
+/// A task run the way `hugin -p` runs one. The worktree is the task folder, with the starting
+/// state left uncommitted in it; the model works in a scratch copy of it, with nobody to ask
+/// ([`unattended`]); what it did comes back as a patch, which is applied to the task folder,
+/// and then the reference tests go back in and the folder is scored as an interactive run is.
+///
+/// **NOAPPLY**, a patch that does not apply, and **touched**, a task folder that is different
+/// before the patch than it was at the start, are the two ways the copy can fail the folder it
+/// copies. Both are ERRORs — the model did nothing wrong — and both are counted apart.
+fn run_propose(
+    model: &str,
+    task: &Task,
+    opts: Options,
+    scratch_dir: &Path,
+    target_dir: &Path,
+    keep: bool,
+    (compact, parts, ops, plan): (bool, bool, bool, bool),
+) -> Outcome {
+    let started = Instant::now();
+    let start = start_commit(task);
+    let (wt_path, backups, appdata) = (scratch_dir.join("wt"), scratch_dir.join("backups"), scratch_dir.join("appdata"));
+    let path = format!("{CRATE}/{}", task.file);
+
+    let tree = match Worktree::add(&wt_path, &start, keep) {
+        Ok(t) => t,
+        Err(e) => return Outcome::early(started, format!("could not check out {start}: {e}")),
+    };
+    if let Err(e) = start_state(&tree.path, task) {
+        return Outcome::early(started, e);
+    }
+    let before = match folder_state(&tree.path) {
+        Ok(b) => b,
+        Err(e) => return Outcome::early(started, e),
+    };
+    let mut copy = match Scratch::of_in(&Git::new(), &scratch_dir.join("work"), &tree.path) {
+        Ok(c) => c,
+        Err(e) => return Outcome::early(started, format!("could not copy the task folder: {e}")),
+    };
+    let ws = match Workspace::open(copy.folder()) {
+        Ok(w) => w,
+        Err(e) => return Outcome::early(started, e),
+    };
+
+    let argv = vec!["cargo".to_string(), "check".to_string(), "-p".to_string(), "odin-core".to_string()];
+    let cargo = Check {
+        argv,
+        env: vec![
+            ("CARGO_TARGET_DIR".to_string(), target_dir.to_string_lossy().into_owned()),
+            ("CARGO_NET_OFFLINE".to_string(), "true".to_string()),
+        ],
+    };
+    let offered = tools::available(true, Some(&check::label(&cargo.argv)));
+    let offered = if parts { offered } else { whole_reads(offered) };
+    let offered = if ops { offered } else { without_ops(offered) };
+    let offered = if plan && ops { offered } else { without_plan(offered) };
+    let mut messages =
+        vec![Message::system(tools::system_prompt(&ws, true)), Message::user(task.prompt)];
+    // Unattended, as `hugin -p` is: the rule answers each card, and a read outside the copy is
+    // turned away by it (`confine_reads` is the interactive run's way of saying the same).
+    let setup = Setup {
+        ws: &ws,
+        backups: &backups,
+        check: Some(&cargo),
+        confine_reads: true,
+        compact,
+        commands: None,
+        unattended: true,
+    };
+    let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, unattended::ROUNDS, &setup);
+
+    // What the run did, and whether the task folder is still as it was.
+    let patch = copy.finish();
+    let touched = folder_state(&tree.path).map_or(true, |now| now != before);
+
+    let check_timeouts = r.check_timeouts;
+    let mut out = Outcome {
+        verdict: Verdict::Fail,
+        why: String::new(),
+        rounds: r.rounds,
+        late: r.rounds > tools::MAX_ROUNDS,
+        checks: r.checks.len(),
+        asks: r.asks,
+        asks_every_call: r.asks_every_call,
+        calls: r.calls,
+        files: patch.as_ref().map(file_lines).unwrap_or_default(),
+        secs: 0.0,
+        log: r.log,
+        ranged_reads: r.ranged_reads,
+        max_prompt: r.prompt_tokens.iter().copied().max().unwrap_or(0),
+        prompt_tokens: r.prompt_tokens,
+        set_aside: r.set_aside,
+        truncated: r.truncated,
+        deletes: r.delete_calls,
+        moves: r.move_calls,
+        recreated: r.delete_then_create,
+        plans: r.plan_updates,
+        autos: r.auto_calls,
+        noapply: false,
+        touched,
+    };
+
+    if touched {
+        out.verdict = Verdict::Error;
+        out.why = "the run changed the task folder before its patch was applied".to_string();
+    } else if r.runaway {
+        out.why = "the model wrote for five minutes without finishing a reply".to_string();
+    } else if let Some(e) = r.error {
+        out.verdict = Verdict::Error;
+        out.why = e;
+    } else if r.blocked {
+        out.verdict = Verdict::Error;
+        out.why = "Smart App Control blocked the model's own check".to_string();
+    } else if r.hit_bound {
+        out.why = format!("still calling tools after {} rounds", unattended::ROUNDS);
+    } else {
+        match patch {
+            Err(e) => {
+                out.verdict = Verdict::Error;
+                out.why = format!("could not make the patch: {e}");
+            }
+            Ok(patch) => {
+                let applied = if patch.bytes.is_empty() {
+                    Ok(())
+                } else {
+                    let file = scratch_dir.join("run.patch");
+                    std::fs::write(&file, &patch.bytes)
+                        .map_err(|e| format!("could not write the patch: {e}"))
+                        .and_then(|_| scratch::apply(&tree.path, &file, false))
+                };
+                match applied {
+                    Err(e) => {
+                        out.noapply = true;
+                        out.verdict = Verdict::Error;
+                        out.why = format!("NOAPPLY — the patch did not apply: {e}");
+                    }
+                    Ok(()) => {
+                        let full_path = tree.path.join(&path);
+                        let model_text = std::fs::read_to_string(&full_path).ok();
+                        match show(task.commit, &path) {
+                            Err(e) => {
+                                out.verdict = Verdict::Error;
+                                out.why = format!("could not read the reference tests: {e}");
+                            }
+                            Ok(solution_text) => {
+                                let scored = restore(model_text.as_deref(), &solution_text);
+                                let _ = std::fs::write(&full_path, &scored);
+                                (out.verdict, out.why) = score(&tree.path, task.module, target_dir, &appdata);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (out.verdict, out.why) = book_with_check_timeouts(out.verdict, std::mem::take(&mut out.why), check_timeouts);
+    if r.stopped && out.verdict != Verdict::Pass {
+        out.why = format!("stopped after repeating a failing call — {}", out.why);
+    }
+    if keep {
+        std::mem::forget(copy);
+    }
+    out.secs = started.elapsed().as_secs_f64();
+    out
+}
+
+/// `git show <treeish>:<path>` as the bytes it holds, for a file that is not text.
+fn show_bytes(treeish: &str, path: &str) -> Result<Vec<u8>, String> {
+    let out = Command::new("git")
+        .args(["show", &format!("{treeish}:{path}")])
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    Ok(out.stdout)
+}
+
+/// What a commit changed from its parent: `(status letter, path)` for each file.
+fn changed_by(commit: &str) -> Result<Vec<(char, String)>, String> {
+    let out = Command::new("git")
+        .args(["diff-tree", "-r", "-z", "--no-renames", "--name-status", &format!("{commit}^"), commit])
+        .output()
+        .map_err(|e| format!("could not run git: {e}"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+    }
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let mut names = text.split('\0').filter(|n| !n.is_empty());
+    let mut changed = Vec::new();
+    while let (Some(status), Some(path)) = (names.next(), names.next()) {
+        changed.push((status.chars().next().unwrap_or('M'), path.to_string()));
+    }
+    Ok(changed)
+}
+
+/// What the propose self-check found for one task.
+struct ProposeCheck {
+    untouched: bool,
+    applies: bool,
+    verdict: Verdict,
+    note: String,
+}
+
+/// One task's solution, put through the copy, the patch and the apply, with no model: the
+/// task folder as a run starts it, a copy of it with the solution written in, the patch between
+/// the two applied to the folder, the reference tests put back, and the folder scored.
+fn propose_self_check(task: &Task, scratch_root: &Path, target_dir: &Path, keep: bool) -> Result<ProposeCheck, String> {
+    let path = format!("{CRATE}/{}", task.file);
+    let appdata = scratch_root.join(format!("appdata-{}", task.id));
+    let tree = Worktree::add(&scratch_root.join(format!("prop-{}", task.id)), &start_commit(task), keep)
+        .map_err(|e| format!("could not check out: {e}"))?;
+    start_state(&tree.path, task)?;
+    let before = folder_state(&tree.path)?;
+    let mut copy = Scratch::of_in(&Git::new(), &scratch_root.join(format!("work-{}", task.id)), &tree.path)?;
+
+    // The solution, as a model that did the whole job would leave the copy: every file the
+    // solution commit changed as it made it, but the scored file without its tests.
+    let solution_text = show(task.commit, &path)?;
+    let in_copy = copy.copy_root();
+    let mut wrote_scored_file = false;
+    if task.kind == Kind::RealCommit {
+        for (status, name) in changed_by(task.commit)? {
+            let to = in_copy.join(&name);
+            if status == 'D' {
+                let _ = std::fs::remove_file(&to);
+                continue;
+            }
+            let bytes = if name == path { cut_tests(&solution_text).into_bytes() } else { show_bytes(task.commit, &name)? };
+            wrote_scored_file |= name == path;
+            if let Some(parent) = to.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            std::fs::write(&to, bytes).map_err(|e| format!("could not write {name} in the copy: {e}"))?;
+        }
+    }
+    if !wrote_scored_file {
+        std::fs::write(in_copy.join(&path), cut_tests(&solution_text)).map_err(|e| format!("could not write the scored file: {e}"))?;
+    }
+
+    let patch = copy.finish()?;
+    let untouched = folder_state(&tree.path)? == before;
+    let file = scratch_root.join(format!("{}.patch", task.id));
+    std::fs::write(&file, &patch.bytes).map_err(|e| format!("could not write the patch: {e}"))?;
+    let applied = if patch.bytes.is_empty() {
+        Err("the solution made no patch at all".to_string())
+    } else {
+        scratch::apply(&tree.path, &file, true).and_then(|_| scratch::apply(&tree.path, &file, false))
+    };
+    let mut check = ProposeCheck { untouched, applies: applied.is_ok(), verdict: Verdict::Error, note: String::new() };
+    match applied {
+        Err(e) => check.note = format!("did not apply: {e}"),
+        Ok(()) => {
+            let full_path = tree.path.join(&path);
+            let model_text = std::fs::read_to_string(&full_path).ok();
+            let scored = restore(model_text.as_deref(), &solution_text);
+            std::fs::write(&full_path, &scored).map_err(|e| format!("could not write the scored file: {e}"))?;
+            let (verdict, why) = score(&tree.path, task.module, target_dir, &appdata);
+            check.verdict = verdict;
+            check.note = format!("{why}, {} file(s) in the patch", patch.files.len());
+        }
+    }
+    if keep {
+        std::mem::forget(copy);
+    }
+    Ok(check)
+}
+
+/// `--selfcheck --mode propose`: for every task, the solution through the copy, the patch and
+/// the apply must leave the task folder untouched until the apply, apply cleanly, and pass the
+/// task's scoring.
+fn selfcheck_propose(tasks: &[Task], scratch_root: &Path, target_dir: &Path, keep: bool) -> bool {
+    println!("I5 — task probe selfcheck, propose mode (no model)\n");
+    println!("| task | kind | folder untouched before the apply? | patch applies? | solution scores |");
+    println!("|---|---|---|---|---|");
+    let (mut good, mut all_ok) = (0, true);
+    for task in tasks {
+        let yes = |b: bool| if b { "yes" } else { "NO" };
+        match propose_self_check(task, scratch_root, target_dir, keep) {
+            Err(e) => {
+                all_ok = false;
+                println!("| {} | {} | — | — | could not run: {e} |", task.id, task.kind.name());
+            }
+            Ok(c) => {
+                let ok = c.untouched && c.applies && c.verdict == Verdict::Pass;
+                good += usize::from(ok);
+                all_ok &= ok;
+                println!(
+                    "| {} | {} | {} | {} | {} ({}) |",
+                    task.id,
+                    task.kind.name(),
+                    yes(c.untouched),
+                    yes(c.applies),
+                    c.verdict.label(),
+                    c.note
+                );
+            }
+        }
+    }
+    println!();
+    println!("{good}/{} tasks round-trip through the copy, the patch and the apply.", tasks.len());
+    if all_ok {
+        println!("every task is OK in propose mode.");
+    } else {
+        println!("BROKEN ABOVE — the copy, the patch or the apply loses something.");
+    }
+    all_ok
+}
+
+/// One finished run, kept for the paired comparison of the modes.
+struct Paired {
+    setting: String,
+    task: &'static str,
+    run: usize,
+    mode: Mode,
+    /// Passed within the app's own rounds: what the headline counts.
+    pass: bool,
+}
+
+/// How the propose runs did against the interactive ones, run for run: the same setting, the
+/// same task, the same run number. One line a setting, and a closing line for all of them.
+fn paired_report(runs: &[Paired]) -> Vec<String> {
+    let mut settings: Vec<&str> = Vec::new();
+    for r in runs {
+        if !settings.contains(&r.setting.as_str()) {
+            settings.push(&r.setting);
+        }
+    }
+    let mut lines = Vec::new();
+    let (mut total, mut sums) = (0usize, [0usize; 4]);
+    for setting in settings {
+        // [both pass, only interactive, only propose, neither]
+        let mut counts = [0usize; 4];
+        let (mut i_pass, mut p_pass) = (0, 0);
+        for i in runs.iter().filter(|r| r.setting == setting && r.mode == Mode::Interactive) {
+            let Some(p) = runs.iter().find(|p| p.mode == Mode::Propose && p.setting == setting && p.task == i.task && p.run == i.run)
+            else {
+                continue;
+            };
+            counts[match (i.pass, p.pass) {
+                (true, true) => 0,
+                (true, false) => 1,
+                (false, true) => 2,
+                (false, false) => 3,
+            }] += 1;
+            i_pass += usize::from(i.pass);
+            p_pass += usize::from(p.pass);
+        }
+        let n: usize = counts.iter().sum();
+        total += n;
+        for (sum, c) in sums.iter_mut().zip(counts) {
+            *sum += c;
+        }
+        lines.push(format!(
+            "  {setting}: interactive {i_pass}/{n} · propose {p_pass}/{n} · propose − interactive {:+} (both pass {} · only interactive {} · only propose {} · neither {})",
+            counts[2] as i64 - counts[1] as i64,
+            counts[0],
+            counts[1],
+            counts[2],
+            counts[3]
+        ));
+    }
+    lines.push(format!(
+        "  all: {total} pairs · propose − interactive {:+} (both pass {} · only interactive {} · only propose {} · neither {})",
+        sums[2] as i64 - sums[1] as i64,
+        sums[0],
+        sums[1],
+        sums[2],
+        sums[3]
+    ));
+    lines
 }
 
 // ── main ────────────────────────────────────────────────────────────────────
@@ -1219,6 +1647,19 @@ fn main() {
         }
     };
 
+    // Interactive, as H3 ran it. `--mode propose` runs each task the way `hugin -p` does (see
+    // `run_propose`), and `--mode both` runs every task both ways and reports the paired
+    // difference.
+    let modes: Vec<Mode> = match arg(&args, "--mode").as_deref() {
+        None | Some("interactive") => vec![Mode::Interactive],
+        Some("propose") => vec![Mode::Propose],
+        Some("both") => vec![Mode::Interactive, Mode::Propose],
+        Some(other) => {
+            eprintln!("--mode takes interactive, propose or both, not {other}");
+            std::process::exit(2);
+        }
+    };
+
     let tasks: Vec<Task> =
         tasks().into_iter().filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o))).collect();
 
@@ -1229,13 +1670,20 @@ fn main() {
     let target_dir = std::env::current_dir().unwrap_or_default().join("target");
 
     if do_selfcheck {
-        let ok = selfcheck(&tasks, &scratch_root, &target_dir, keep);
+        let mut ok = true;
+        for mode in &modes {
+            ok &= match mode {
+                Mode::Interactive => selfcheck(&tasks, &scratch_root, &target_dir, keep),
+                Mode::Propose => selfcheck_propose(&tasks, &scratch_root, &target_dir, keep),
+            };
+        }
         let _ = std::fs::remove_dir_all(&scratch_root);
         std::process::exit(if ok { 0 } else { 1 });
     }
 
     println!("H3 — task probe");
     println!("model:  {model}");
+    println!("mode:   {}", modes.iter().map(|m| m.name()).collect::<Vec<_>>().join(" and "));
     println!("ctx:    {}", cfg.num_ctx);
     println!("compact: {}", if compact { "on" } else { "off" });
     println!(
@@ -1277,8 +1725,15 @@ fn main() {
 
     let mut rows = Vec::new();
     let mut json = Vec::new();
+    // Every pass is one mode over one setting, the interactive ones first.
+    let passes: Vec<(Mode, &str, Options, usize)> =
+        modes.iter().flat_map(|m| settings.iter().map(move |(l, o, n)| (*m, *l, *o, *n))).collect();
+    let mut paired = Vec::new();
+    let (mut noapply_total, mut touched_total) = (0usize, 0usize);
 
-    for (label, opts, n) in &settings {
+    for (mode, setting, opts, n) in &passes {
+        // What a pass is called where it is shown: the setting, and the mode when it is not H3's.
+        let label = &if *mode == Mode::Propose { format!("{setting} {}", mode.name()) } else { setting.to_string() };
         let (mut pass, mut late, mut fail, mut error) = (0, 0, 0, 0);
         let (mut kind_a, mut kind_b) = ((0usize, 0usize), (0usize, 0usize));
         let (mut secs, mut rounds, mut checks) = (0.0, 0usize, 0usize);
@@ -1292,11 +1747,24 @@ fn main() {
         for task in &tasks {
             let mut line = String::new();
             for i in 0..*n {
-                let scratch = scratch_root.join(format!("{}-{}-{i}", label.replace('=', ""), task.id));
-                let o = run(&model, task, *opts, &scratch, &target_dir, keep, (compact, parts, ops, plan));
+                let scratch = scratch_root.join(format!("{}-{}-{}-{i}", mode.name(), setting.replace('=', ""), task.id));
+                let flags = (compact, parts, ops, plan);
+                let o = match mode {
+                    Mode::Interactive => run(&model, task, *opts, &scratch, &target_dir, keep, flags),
+                    Mode::Propose => run_propose(&model, task, *opts, &scratch, &target_dir, keep, flags),
+                };
                 if !keep {
                     let _ = std::fs::remove_dir_all(&scratch);
                 }
+                noapply_total += usize::from(o.noapply);
+                touched_total += usize::from(o.touched);
+                paired.push(Paired {
+                    setting: setting.to_string(),
+                    task: task.id,
+                    run: i + 1,
+                    mode: *mode,
+                    pass: o.verdict == Verdict::Pass && !o.late,
+                });
                 let counted = match task.kind {
                     Kind::RealCommit => &mut kind_a,
                     Kind::Removal => &mut kind_b,
@@ -1334,7 +1802,8 @@ fn main() {
                     }
                 }
                 json.push(serde_json::json!({
-                    "setting": label, "task": task.id, "kind": task.kind.name(), "run": i + 1,
+                    "setting": setting, "mode": mode.name(), "noApply": o.noapply, "touched": o.touched,
+                    "task": task.id, "kind": task.kind.name(), "run": i + 1,
                     "verdict": o.verdict.label(), "why": o.why, "rounds": o.rounds, "late": o.late,
                     "checks": o.checks, "asks": o.asks, "asksEveryCall": o.asks_every_call, "calls": o.calls, "filesChanged": o.files, "log": o.log,
                     "promptTokens": o.prompt_tokens, "maxPrompt": o.max_prompt, "setAside": o.set_aside,
@@ -1384,8 +1853,19 @@ fn main() {
     for r in &rows {
         println!("{r}");
     }
+    if modes.contains(&Mode::Propose) {
+        println!("\npropose mode: {noapply_total} NOAPPLY (a patch that did not apply) · {touched_total} touched the task folder");
+    }
+    if modes.len() > 1 {
+        println!("\npaired, run for run (passes within the app's {} rounds):", tools::MAX_ROUNDS);
+        for line in paired_report(&paired) {
+            println!("{line}");
+        }
+    }
 
-    let out = PathBuf::from("evals/out").join(format!("H3-task-{stamp}"));
+    // H3's own results keep H3's name; a run that includes propose mode is I5's.
+    let kind = if modes == [Mode::Interactive] { "H3" } else { "I5" };
+    let out = PathBuf::from("evals/out").join(format!("{kind}-task-{stamp}"));
     if std::fs::create_dir_all(&out).is_ok() {
         let _ = std::fs::write(
             out.join("results.json"),
@@ -1628,5 +2108,98 @@ mod tests {
                 assert_ne!(a.id, b.id);
             }
         }
+    }
+
+    // ── propose mode ────────────────────────────────────────────────────────
+
+    fn paired(setting: &str, task: &'static str, run: usize, mode: Mode, pass: bool) -> Paired {
+        Paired { setting: setting.into(), task, run, mode, pass }
+    }
+
+    /// **The pairs are the same setting, task and run number**, and a run with no partner is
+    /// not counted on either side.
+    #[test]
+    fn the_paired_report_compares_run_for_run() {
+        use Mode::{Interactive as I, Propose as P};
+        let runs = vec![
+            paired("app", "a01", 1, I, true),
+            paired("app", "a01", 1, P, true),
+            paired("app", "a01", 2, I, true),
+            paired("app", "a01", 2, P, false),
+            paired("app", "b01", 1, I, false),
+            paired("app", "b01", 1, P, true),
+            paired("app", "b01", 2, I, false),
+            paired("app", "b01", 2, P, false),
+            paired("app", "b01", 3, I, true),
+            paired("t=0", "a01", 1, I, true),
+            paired("t=0", "a01", 1, P, true),
+        ];
+        let lines = paired_report(&runs);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert_eq!(
+            lines[0],
+            "  app: interactive 2/4 · propose 2/4 · propose − interactive +0 (both pass 1 · only interactive 1 · only propose 1 · neither 1)"
+        );
+        assert_eq!(
+            lines[1],
+            "  t=0: interactive 1/1 · propose 1/1 · propose − interactive +0 (both pass 1 · only interactive 0 · only propose 0 · neither 0)"
+        );
+        assert_eq!(
+            lines[2],
+            "  all: 5 pairs · propose − interactive +0 (both pass 2 · only interactive 1 · only propose 1 · neither 1)"
+        );
+        // A run of one mode alone has no pairs.
+        assert!(paired_report(&[paired("app", "a01", 1, I, true)])[0].contains("interactive 0/0"));
+    }
+
+    #[test]
+    fn a_patchs_files_read_as_git_status_has_them() {
+        let change = |path: &str, status: &'static str| scratch::Change { path: path.into(), from: None, status, added: None, deleted: None };
+        let patch = scratch::Patch {
+            bytes: Vec::new(),
+            files: vec![
+                change("a.rs", "modified"),
+                change("b.rs", "added"),
+                change("c.rs", "deleted"),
+                change("d.rs", "renamed"),
+            ],
+        };
+        assert_eq!(file_lines(&patch), ["M a.rs", "A b.rs", "D c.rs", "R d.rs"]);
+    }
+
+    #[test]
+    fn a_tasks_starting_commit_is_its_parent_for_a_real_commit_and_the_pin_for_a_removal() {
+        let ts = tasks();
+        let real = ts.iter().find(|t| t.kind == Kind::RealCommit).unwrap();
+        assert_eq!(start_commit(real), format!("{}^", real.commit));
+        let removal = ts.iter().find(|t| t.kind == Kind::Removal).unwrap();
+        assert_eq!(start_commit(removal), PIN);
+    }
+
+    /// The starting state is left uncommitted in the worktree: the scored file without its
+    /// tests, and a removal's function as `todo!()`; a file the parent does not have stays absent.
+    #[test]
+    fn the_starting_state_strips_the_scored_file_in_place() {
+        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("bifrost-taskprobe-start-{}-{n}", std::process::id()));
+        let task = Task {
+            id: "t",
+            kind: Kind::Removal,
+            file: "src/x.rs",
+            module: "x",
+            prompt: "",
+            commit: PIN,
+            removal: Some(Removal { start: 2, end: 2, indent: 0 }),
+        };
+        let file = dir.join(CRATE).join(task.file);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, "fn f() -> i32 {\n    1\n}\n\n#[cfg(test)]\nmod tests {}\n").unwrap();
+        start_state(&dir, &task).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "fn f() -> i32 {\n    todo!()\n}\n\n");
+
+        let new_file = Task { removal: None, kind: Kind::RealCommit, file: "src/absent.rs", ..task };
+        start_state(&dir, &new_file).unwrap();
+        assert!(!dir.join(CRATE).join("src/absent.rs").exists(), "a file the parent lacks stays absent");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

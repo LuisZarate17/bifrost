@@ -5,7 +5,7 @@ Local AI tools that share one model and one machine. Nothing leaves the computer
 | | |
 |---|---|
 | **Mimir** | The main workspace: a local chat app that reads, finds and edits code in a folder you pick, runs the folder's check, and decides which model is loaded. **Built through Stage H** |
-| **Hugin** | A coding agent inline in the terminal, in the spirit of Claude Code, on Mimir's engine. **Built** (I2–I4b): reads, searches, edits, the folder's check and any shell command, each approved inline; **Ctrl+Alt+H** opens it in the last folder, and `hugin` works in any terminal. `hugin -p` comes next — [docs/I-status.md](docs/I-status.md) |
+| **Hugin** | A coding agent in the terminal, in the spirit of Claude Code, on Mimir's engine. **Built** (I2–I5): full screen, reads, searches, edits, the folder's check and any shell command, each approved first; **Ctrl+Alt+H** opens it in the last folder, and `hugin` works in any terminal. **`hugin -p`** lets Claude Code hand it a task: it works in a throwaway copy of the folder and hands back an answer, a patch and the check's result — [docs/I-status.md](docs/I-status.md) |
 | **`bifrost`** | Vidar's pipeline from the command line, plus `warm` / `off` / `status` power control |
 
 Things with an icon get a name; things you type get a description (PLAN.md §0b). Bifrost is the
@@ -133,7 +133,8 @@ Rust, Tauri 2, React + TypeScript, Ollama, Windows Graphics Capture.
 - Local. Bifrost never calls the cloud on its own, and if a local model is bad at something, the
   fix is a different local model, not a fallback. **One exception, on purpose (2026-10-12):** Stage
   I's *Check with Claude* button in Mimir — off by default, only on a click, and it says what it
-  sends before it sends it. Not built yet.
+  sends before it sends it. Built in I6. (Claude Code calling `hugin -p` is Claude's side
+  reaching in: Hugin itself still calls nothing.)
 - Summoned, never ambient — it only runs when the hotkey is pressed.
 - This is a personal daily-use tool, not a portfolio project. Features only earn their keep if
   Luis actually uses them.

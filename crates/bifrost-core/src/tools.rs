@@ -1196,6 +1196,14 @@ fn same_arguments(kept: &serde_json::Value, sent: &serde_json::Value) -> bool {
     }
 }
 
+/// Whether `path` names a build file, whatever folder it is in and however it is cased:
+/// `build.rs`, `Cargo.toml` or `package.json`.
+pub fn is_build_file(path: &str) -> bool {
+    const BUILD_FILES: [&str; 3] = ["build.rs", "cargo.toml", "package.json"];
+    let file = path.rsplit(['/', '\\']).next().unwrap_or_default().to_ascii_lowercase();
+    BUILD_FILES.contains(&file.as_str())
+}
+
 /// Build files changed by an edit since the user's last message: `build.rs`,
 /// `Cargo.toml`, `package.json` — written, deleted, or moved from or to.
 ///
@@ -1205,7 +1213,6 @@ fn same_arguments(kept: &serde_json::Value, sent: &serde_json::Value) -> bool {
 /// them, because approving a check after one changed is approving whatever the
 /// check now does.
 pub fn build_files_changed(history: &[Message]) -> Vec<String> {
-    const BUILD_FILES: [&str; 3] = ["build.rs", "cargo.toml", "package.json"];
     let since = history.iter().rposition(|m| m.role == "user").map_or(0, |i| i + 1);
     let turns = &history[since..];
     let mut out: Vec<String> = Vec::new();
@@ -1227,8 +1234,7 @@ pub fn build_files_changed(history: &[Message]) -> Vec<String> {
         // the model wrapped in quotes or backticks is still recognised.
         for key in ["path", "to"] {
             let path = edit::clean(&arg(call, key).unwrap_or_default());
-            let file = path.rsplit(['/', '\\']).next().unwrap_or_default().to_ascii_lowercase();
-            if written && BUILD_FILES.contains(&file.as_str()) && !out.contains(&path) {
+            if written && is_build_file(&path) && !out.contains(&path) {
                 out.push(path);
             }
         }
@@ -2048,6 +2054,16 @@ mod tests {
             Message::tool_result("edit_file", "error: old_text was not found"),
         ];
         assert_eq!(build_files_changed(&history), ["Cargo.toml", "crates/x/build.rs"]);
+    }
+
+    #[test]
+    fn a_build_file_is_known_by_its_name_in_any_folder_and_any_case() {
+        for yes in ["build.rs", "Cargo.toml", "crates/x/BUILD.RS", r"web\package.json", "a/b/cargo.toml"] {
+            assert!(is_build_file(yes), "{yes}");
+        }
+        for no in ["src/main.rs", "Cargo.lock", "notbuild.rs", "build.rs.bak", "package.json5", "", "build.rs/"] {
+            assert!(!is_build_file(no), "{no}");
+        }
     }
 
     #[test]

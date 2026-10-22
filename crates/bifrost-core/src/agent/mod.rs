@@ -23,6 +23,8 @@
 //!   turned away
 //! - [`turn`] — the loop over rounds, behind a [`turn::Frontend`] that shows a card,
 //!   asks for a decision and says whether Stop was pressed
+//! - [`unattended`] — what to answer a card when there is nobody to ask: `hugin -p`, and the
+//!   task probe's propose mode
 //! - [`workspace`] — the project folder the config names, if it still exists
 //!
 //! **Moved here unchanged (I1).** The first commit of I1 lifted the plain pieces out
@@ -42,6 +44,7 @@ pub mod send;
 pub mod stop;
 pub mod ticket;
 pub mod turn;
+pub mod unattended;
 
 use crate::{config, edit};
 

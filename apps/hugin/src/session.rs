@@ -174,8 +174,8 @@ impl Session {
 }
 
 /// Who Hugin says it is: put before the system prompt, because the model otherwise
-/// answers as the assistant it was trained as.
-const HUGIN_IDENTITY: &str = "You are Hugin, a coding agent running in the user's terminal on their own computer. If asked your name, say Hugin. Answer greetings and simple questions directly, without tools.";
+/// answers as the assistant it was trained as. `hugin -p` says the same.
+pub const HUGIN_IDENTITY: &str = "You are Hugin, a coding agent running in the user's terminal on their own computer. If asked your name, say Hugin. Answer greetings and simple questions directly, without tools.";
 
 /// The setting Hugin's rounds and runs are done in: the app's, with commands offered in
 /// `shell` and the config's time limit for them.

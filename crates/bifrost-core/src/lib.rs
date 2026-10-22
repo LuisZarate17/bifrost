@@ -24,6 +24,8 @@
 //!   the user has turned it on for that folder. Added at H10
 //! - [`compact`] — the prompt's budget inside one tool turn: which old results to
 //!   set aside before Ollama silently cuts the middle of the conversation. Added at H7
+//! - [`scratch`] — a copy of a git folder to work in, and the patch of what was done there:
+//!   what `hugin -p` runs in. Added at I5
 //!
 //! Nothing here prints or panics. Callers format, and a tray has no stdout.
 
@@ -38,6 +40,7 @@ pub mod edit;
 pub mod instructions;
 pub mod ollama;
 pub mod paths;
+pub mod scratch;
 pub mod search;
 pub mod store;
 pub mod toolcall;
