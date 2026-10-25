@@ -30,6 +30,9 @@ pub enum Event {
     Answer(String),
     /// Something went wrong, or a bound was reached.
     Error(String),
+    /// The turn is over and its work is not done: the check it ran last still fails, whatever the
+    /// model's last words said.
+    Unfinished(String),
     /// The turn was stopped.
     Stopped,
     /// The turn is over and the next prompt may be asked for.

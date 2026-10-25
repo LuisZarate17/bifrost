@@ -611,6 +611,13 @@ impl Frontend for Fe<'_> {
     }
 
     fn save(&mut self) {}
+
+    /// **Only where `hugin -p` does.** An unattended setup pushes a model back when it ends the
+    /// turn over a failing check, so that propose mode measures what `-p` ships; every other
+    /// probe takes the answer, as the app (Mimir) does.
+    fn insist_on_checks(&self) -> bool {
+        self.unattended
+    }
 }
 
 /// The app's turn, run to its end with the person taken out, and what it came to.
@@ -889,6 +896,7 @@ mod tests {
             bytes: 0,
             complete: true,
             blocked: blocked.map(str::to_string),
+            unfinished_tests: 0,
         }
     }
 
@@ -1139,6 +1147,38 @@ mod tests {
         assert!(runner.run.checks.is_empty());
         let told = runner.convo.iter().filter(|m| m.role == "tool").map(|m| m.content.clone()).next_back().unwrap_or_default();
         assert!(told.starts_with("The user declined to run `cargo check`"), "{told}");
+    }
+
+    /// **An unattended setup pushes a model back over a failed check, as `hugin -p` does**, so that
+    /// propose mode measures what ships; an interactive one takes the answer, as Mimir does.
+    #[test]
+    fn an_unattended_setup_pushes_a_model_back_over_a_failed_check_and_an_interactive_one_does_not() {
+        let dir = Sandbox::new("unattended-pushback");
+        let broken = || checked(outcome(check::Ended::Exited(Some(101)), None));
+        let asks = || {
+            vec![
+                asks_about("run_check", json!({}), "cargo check"),
+                answer("Done."),
+                answer("Done, really."),
+                answer("Done, truly."),
+                answer("It still fails."),
+            ]
+        };
+
+        let mut setup = dir.setup(false);
+        setup.unattended = true;
+        let unattended = play(&setup, 10, asks(), vec![broken()]);
+        // The check, three answers pushed back, and the fourth taken: each push-back is a request
+        // sent the answer before it and the loop's reply.
+        assert_eq!(unattended.sent, [1, 3, 5, 7, 9]);
+        assert_eq!(unattended.run.answer, "It still fails.");
+        let notes = unattended.convo.iter().filter(|m| m.role == "user" && m.content == tools::CHECK_FAILED_NOTE).count();
+        assert_eq!(notes, 3);
+
+        let interactive = play(&dir.setup(false), 10, asks(), vec![broken()]);
+        assert_eq!(interactive.sent, [1, 3]);
+        assert_eq!(interactive.run.answer, "Done.");
+        assert!(interactive.convo.iter().all(|m| m.content != tools::CHECK_FAILED_NOTE));
     }
 
     // ── the end of a turn ───────────────────────────────────────────────────

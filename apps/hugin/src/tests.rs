@@ -21,6 +21,7 @@ use bifrost_core::agent::run::Ran;
 use bifrost_core::agent::send::{Calibration, Sent, compact_for_send};
 use bifrost_core::agent::ticket::{DiffView, PendingCall};
 use bifrost_core::chat::{self, Message};
+use bifrost_core::check::{Ended, Outcome};
 use bifrost_core::edit::{DiffLine, Hunk};
 use bifrost_core::store;
 use bifrost_core::tools::{PlanStatus, PlanStep};
@@ -182,6 +183,39 @@ pub(crate) const EDITED: &str = "Edited a.rs: 1 line removed, 1 added.";
 
 pub(crate) fn edited() -> Result<Ran, String> {
     Ok(Ran::text(EDITED.into()))
+}
+
+/// The model asks to run `cargo test` as the project's check.
+fn check_call() -> Result<Round, String> {
+    round_of(Reply::Call {
+        call: PendingCall {
+            token: "t-cargo test".into(),
+            name: "run_check".into(),
+            path: "cargo test".into(),
+            diff: None,
+            range: None,
+            changed_build_files: Vec::new(),
+            to: None,
+            folders: Vec::new(),
+            size: None,
+        },
+        raw_call: raw("run_check", json!({})),
+    })
+}
+
+/// What the runner reports for a check that ran and ended with this exit code.
+fn checked(code: i32) -> Result<Ran, String> {
+    let outcome = Outcome {
+        ended: Ended::Exited(Some(code)),
+        elapsed: Duration::ZERO,
+        output: String::new(),
+        bytes: 0,
+        complete: true,
+        blocked: None,
+        unfinished_tests: 0,
+    };
+    let result = format!("`cargo test` exited with code {code}.");
+    Ok(Ran { result, ok: outcome.passed(), stopped: false, undo: None, check: Some(outcome) })
 }
 
 // ── the harness ─────────────────────────────────────────────────────────────
@@ -358,6 +392,49 @@ fn an_edit_declined_with_n_is_declined_and_the_model_is_told() {
         p.convo[2],
         Message::tool_result("edit_file", "The user declined this change to a.rs. Nothing was written.")
     );
+}
+
+#[test]
+fn a_model_that_says_done_after_a_failed_check_is_pushed_back_and_not_believed() {
+    // The check fails, and the model says it is done three times running; the fourth time its
+    // answer is taken, and the turn says plainly that the work is not done.
+    let script = Script::new(&["fix it"])
+        .answering(&["y"])
+        .model(vec![check_call(), answer("Done!"), answer("Really done!"), answer("Done, I swear."), answer("It still fails.")])
+        .running(vec![checked(101)]);
+    let p = play(script);
+    assert_eq!(p.asked.len(), 5, "the check and four answers");
+    assert!(p.out.contains("It still fails.\n✗ the check failed — not done\n"), "{}", p.out);
+    // The answers it was pushed back from were not shown as answers.
+    for pushed in ["Done!", "Really done!", "Done, I swear."] {
+        assert!(!p.out.contains(pushed), "{pushed} was shown: {}", p.out);
+    }
+    // They are in the conversation, each with the loop's reply, and the final answer after them.
+    let notes = p.convo.iter().filter(|m| m.role == "user" && m.content == bifrost_core::tools::CHECK_FAILED_NOTE).count();
+    assert_eq!(notes, 3);
+    assert_eq!(p.convo[3].content, "Done!");
+    let last = p.convo.last().unwrap();
+    assert_eq!((last.role.as_str(), last.content.as_str()), ("assistant", "It still fails."));
+}
+
+#[test]
+fn a_failed_check_the_model_then_fixes_ends_the_turn_without_a_word_of_it() {
+    let script = Script::new(&["fix it"])
+        .answering(&["y", "y"])
+        .model(vec![check_call(), answer("Done!"), check_call(), answer("Fixed, and it passes.")])
+        .running(vec![checked(101), checked(0)]);
+    let p = play(script);
+    assert_eq!(p.asked.len(), 4);
+    assert!(p.out.contains("Fixed, and it passes.\n"), "{}", p.out);
+    assert!(!p.out.contains("Done!") && !p.out.contains('✗'), "{}", p.out);
+}
+
+#[test]
+fn a_turn_whose_check_never_failed_says_nothing_about_one() {
+    let p = play(Script::new(&["fix it"]).answering(&["y"]).model(vec![check_call(), answer("All green.")]).running(vec![checked(0)]));
+    assert_eq!(p.asked.len(), 2);
+    assert!(p.out.contains("All green.\n"), "{}", p.out);
+    assert!(!p.out.contains('✗'), "{}", p.out);
 }
 
 #[test]

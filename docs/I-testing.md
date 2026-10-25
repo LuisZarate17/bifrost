@@ -254,6 +254,11 @@ are in the results. Rebuild and reinstall Hugin first (`node tools/shortcuts.mjs
       minute, says the proposal is partial, and leaves nothing running in Task Manager.
 - [ ] **The note.** `hugin --claude-note`. **Expect:** a short section you'd be happy to have in your
       CLAUDE.md.
+- [ ] **Not done is not done.** Hand it a task whose check can't pass. **Expect:** `hugin: FAILED`,
+      exit 3, a *draft patch* line and no `to apply:` line.
+- [ ] **A question.** `hugin --ask "where is the tray menu built?"` in this repo. **Expect:** an answer
+      naming `apps/vidar/src-tauri/src/tray.rs` and a `looked_at:` list, in under a minute, and
+      `git status` unchanged.
 
 ---
 

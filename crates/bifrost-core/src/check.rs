@@ -304,12 +304,36 @@ pub struct Outcome {
     /// build needed — what was refused, in words. See
     /// [`blocked_by_smart_app_control`].
     pub blocked: Option<String>,
+    /// For a `cargo test` that exited 0: how many of its test programs began (`running N
+    /// tests`) and never reported (`test result:`). **Counted over everything the command
+    /// wrote**, not the part kept. A test program that calls `std::process::exit(0)` ends the
+    /// run there with a good exit code, and cargo goes on to the next one; this is the only
+    /// sign that most of the tests never ran. Always 0 for any other command.
+    pub unfinished_tests: usize,
 }
 
 impl Outcome {
+    /// It exited 0 **and no test program was cut short**: a `cargo test` that stopped early
+    /// has not passed, whatever its exit code says.
     pub fn passed(&self) -> bool {
-        self.ended == Ended::Exited(Some(0))
+        self.ended == Ended::Exited(Some(0)) && self.unfinished_tests == 0
     }
+}
+
+/// What the model is told when a test program ended without reporting its result.
+pub const UNFINISHED_NOTE: &str = "A test program ended without reporting its result — something in the code exited or \
+     aborted the test run (std::process::exit, abort, a panic in a destructor…). This counts as a failure.";
+
+/// Whether `argv` is `cargo test` (or `cargo t`), whose output says when a test program began
+/// and when it reported. A run that only builds or lists the tests has no results to count.
+fn counts_test_runs(argv: &[String]) -> bool {
+    let Some((program, args)) = argv.split_first() else { return false };
+    let is_cargo = Path::new(program).file_stem().is_some_and(|stem| stem.eq_ignore_ascii_case("cargo"));
+    // The subcommand is the first word that is not a flag or a `+toolchain`.
+    let subcommand = args.iter().find(|a| !a.starts_with('-') && !a.starts_with('+'));
+    is_cargo
+        && matches!(subcommand.map(String::as_str), Some("test" | "t"))
+        && !args.iter().any(|a| matches!(a.as_str(), "--no-run" | "--list" | "--help" | "-h"))
 }
 
 /// Run `argv` in `root` until it ends, times out, or `cancelled()` says stop.
@@ -331,7 +355,8 @@ pub fn run(
     let (program, args) = argv.split_first().ok_or("no command was given")?;
     let mut cmd = Command::new(program);
     cmd.args(args);
-    run_prepared(cmd, root, &label(argv), program, timeout, env, Io::default(), cancelled)
+    let io = Io { count_tests: counts_test_runs(argv), ..Io::default() };
+    run_prepared(cmd, root, &label(argv), program, timeout, env, io, cancelled)
 }
 
 /// [`run`] with `input` written to the command's standard input, and room for
@@ -352,7 +377,7 @@ pub fn run_with_input(
     let (program, args) = argv.split_first().ok_or("no command was given")?;
     let mut cmd = Command::new(program);
     cmd.args(args);
-    let io = Io { input: Some(input), head: keep, tail: 0 };
+    let io = Io { input: Some(input), head: keep, tail: 0, count_tests: false };
     run_prepared(cmd, root, &label(argv), program, timeout, env, io, cancelled)
 }
 
@@ -361,11 +386,13 @@ struct Io<'a> {
     input: Option<&'a [u8]>,
     head: usize,
     tail: usize,
+    /// The command is `cargo test`: count its test programs as the output goes by.
+    count_tests: bool,
 }
 
 impl Default for Io<'_> {
     fn default() -> Self {
-        Io { input: None, head: HEAD, tail: TAIL }
+        Io { input: None, head: HEAD, tail: TAIL, count_tests: false }
     }
 }
 
@@ -444,6 +471,7 @@ fn run_prepared(
                 bytes: 0,
                 complete: true,
                 blocked: Some(format!("the program `{program}`")),
+                unfinished_tests: 0,
             });
         }
         Err(e) => return Err(format!("could not start `{shown}` in {}: {e}", dir.display())),
@@ -467,7 +495,7 @@ fn run_prepared(
         });
     }
 
-    let captured = Arc::new(Mutex::new(Capture::new(io.head, io.tail)));
+    let captured = Arc::new(Mutex::new(Capture::new(io.head, io.tail).counting_tests(io.count_tests)));
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     {
         let captured = Arc::clone(&captured);
@@ -509,11 +537,15 @@ fn run_prepared(
     // Whatever arrives in time. A reader still blocked past this is left behind:
     // it ends by itself when whatever holds the pipe exits.
     let complete = done_rx.recv_timeout(DRAIN).is_ok();
-    let capture = captured.lock().expect("capture lock");
+    let mut capture = captured.lock().expect("capture lock");
     let output = capture.render();
     let passed = ended == Ended::Exited(Some(0));
     let blocked = if passed { None } else { blocked_by_smart_app_control(&dir, &output) };
-    Ok(Outcome { ended, elapsed, output, bytes: capture.total, complete, blocked })
+    // Only a run that ended by itself with a good exit code can have stopped early without
+    // saying so, and only a stream read to its end can be counted: a test program whose result
+    // line is still on its way is not one that never reported.
+    let unfinished_tests = if passed && complete { capture.unfinished_tests() } else { 0 };
+    Ok(Outcome { ended, elapsed, output, bytes: capture.total, complete, blocked, unfinished_tests })
 }
 
 /// `\\?\C:\x` → `C:\x`, and `\\?\UNC\server\share\x` → `\\server\share\x`.
@@ -638,6 +670,63 @@ fn kill_tree(child: &mut std::process::Child, job: Option<&Job>) {
     let _ = child.wait();
 }
 
+/// How many bytes of a line are looked at when the output is counted for test programs: a
+/// `running N tests` line and the start of a `test result:` line are far shorter.
+const LINE_LOOKED_AT: usize = 128;
+
+/// Counts the test programs of a `cargo test` as its output goes by: how many began, with the
+/// line libtest writes first (`running 12 tests`), and how many reported, with the line it
+/// writes last (`test result: ok. 12 passed; …`). **Every program that runs tests writes both**, a
+/// doc-test run and a filtered run that found nothing included, so a difference between the two
+/// counts is a program that was ended in between. Output that has no `running` line — a build,
+/// a compile error, `--no-run`, a program with its own `main` — adds nothing to either.
+#[derive(Default)]
+struct TestRuns {
+    /// The start of the line being read.
+    line: Vec<u8>,
+    began: usize,
+    reported: usize,
+}
+
+impl TestRuns {
+    fn push(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            if b == b'\n' {
+                self.end_line();
+            } else if self.line.len() < LINE_LOOKED_AT {
+                self.line.push(b);
+            }
+        }
+    }
+
+    fn end_line(&mut self) {
+        let text = String::from_utf8_lossy(&self.line);
+        let line = text.trim_end_matches('\r');
+        if is_libtest_header(line) {
+            self.began += 1;
+        } else if line.starts_with("test result: ") {
+            self.reported += 1;
+        }
+        self.line.clear();
+    }
+
+    /// The programs that began and did not report, once the last line is counted.
+    fn unfinished(&mut self) -> usize {
+        if !self.line.is_empty() {
+            self.end_line();
+        }
+        self.began.saturating_sub(self.reported)
+    }
+}
+
+/// `running 12 tests` or `running 1 test`: the line libtest, and rustdoc's doc-test runner,
+/// write before the first test.
+fn is_libtest_header(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("running ") else { return false };
+    let count = rest.strip_suffix(" tests").or_else(|| rest.strip_suffix(" test"));
+    count.is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// The start and the end of the output, and how much there was.
 struct Capture {
     head: Vec<u8>,
@@ -645,6 +734,8 @@ struct Capture {
     total: u64,
     head_cap: usize,
     tail_cap: usize,
+    /// Counts the test programs over the whole stream, not only the part kept: set for `cargo test`.
+    runs: Option<TestRuns>,
 }
 
 impl Default for Capture {
@@ -655,10 +746,24 @@ impl Default for Capture {
 
 impl Capture {
     fn new(head_cap: usize, tail_cap: usize) -> Self {
-        Capture { head: Vec::new(), tail: Default::default(), total: 0, head_cap, tail_cap }
+        Capture { head: Vec::new(), tail: Default::default(), total: 0, head_cap, tail_cap, runs: None }
+    }
+
+    /// Count the test programs in what is pushed, if `on`.
+    fn counting_tests(mut self, on: bool) -> Self {
+        self.runs = on.then(TestRuns::default);
+        self
+    }
+
+    /// The test programs that began and did not report, when they are being counted.
+    fn unfinished_tests(&mut self) -> usize {
+        self.runs.as_mut().map_or(0, TestRuns::unfinished)
     }
 
     fn push(&mut self, mut bytes: &[u8]) {
+        if let Some(runs) = &mut self.runs {
+            runs.push(bytes);
+        }
         self.total += bytes.len() as u64;
         let room = self.head_cap.saturating_sub(self.head.len());
         let take = room.min(bytes.len());
@@ -745,6 +850,10 @@ pub fn for_model(argv: &[String], outcome: &Outcome) -> String {
     }
 
     let head = match &outcome.ended {
+        // An exit code of 0 that is not a pass: a test program ended the run early.
+        Ended::Exited(Some(0)) if outcome.unfinished_tests > 0 => {
+            format!("`{name}` failed (exit 0, {secs:.1} s). {UNFINISHED_NOTE}")
+        }
         Ended::Exited(Some(0)) => format!("`{name}` passed (exit 0, {secs:.1} s)."),
         Ended::Exited(Some(code)) => format!("`{name}` failed (exit {code}, {secs:.1} s)."),
         Ended::Exited(None) => format!("`{name}` ended without an exit code after {secs:.1} s."),
@@ -1073,6 +1182,7 @@ mod tests {
             bytes: output.len() as u64,
             complete: true,
             blocked: None,
+            unfinished_tests: 0,
         }
     }
 
@@ -1239,6 +1349,337 @@ mod tests {
         assert_eq!(plain(Path::new(r"\\?\UNC\server\share\proj")), PathBuf::from(r"\\server\share\proj"));
         assert_eq!(plain(Path::new(r"\\?\C:\work\proj")), PathBuf::from(r"C:\work\proj"));
         assert_eq!(plain(Path::new(r"C:\work\proj")), PathBuf::from(r"C:\work\proj"));
+    }
+
+    // ── test programs that stop early ──
+    //
+    // What `cargo test` wrote, recorded from a crate with a library, a binary, an integration
+    // test and a doc-test (the paths shortened). The early exits are a test that calls
+    // `std::process::exit(0)`: cargo sees a good exit code and goes on to the next program.
+
+    /// Four test programs, four results.
+    const CARGO_NORMAL: &str = r#"   Compiling sample v0.1.0 (C:\work\sample)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+     Running unittests src\lib.rs (target\debug\deps\sample-0c397b863d7a06b2.exe)
+
+running 2 tests
+test tests::adds ... ok
+test tests::adds_more ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (target\debug\deps\sample-2c8e0ac1960a88c0.exe)
+
+running 1 test
+test tests::main_runs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\it.rs (target\debug\deps\it-5374f0f9f2da8122.exe)
+
+running 2 tests
+test integration_adds_again ... ok
+test integration_adds ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests sample
+
+running 1 test
+test src\lib.rs - add (line 3) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+"#;
+
+    /// The library's third test exits. Its line is cut off, and cargo's next line lands on it.
+    const CARGO_EARLY_EXIT: &str = r#"   Compiling sample v0.1.0 (C:\work\sample)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.38s
+     Running unittests src\lib.rs (target\debug\deps\sample-0c397b863d7a06b2.exe)
+
+running 3 tests
+test tests::adds ... ok
+test tests::adds_more ... ok
+test tests::zz_exits ...      Running unittests src\main.rs (target\debug\deps\sample-2c8e0ac1960a88c0.exe)
+
+running 1 test
+test tests::main_runs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\it.rs (target\debug\deps\it-5374f0f9f2da8122.exe)
+
+running 2 tests
+test integration_adds ... ok
+test integration_adds_again ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests sample
+
+running 1 test
+test src\lib.rs - add (line 3) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+"#;
+
+    /// The same, with the tests running side by side: it exits before any of them reports.
+    const CARGO_EARLY_EXIT_PARALLEL: &str = r#"    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running unittests src\lib.rs (target\debug\deps\sample-0c397b863d7a06b2.exe)
+
+running 3 tests
+     Running unittests src\main.rs (target\debug\deps\sample-2c8e0ac1960a88c0.exe)
+
+running 1 test
+test tests::main_runs ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests\it.rs (target\debug\deps\it-5374f0f9f2da8122.exe)
+
+running 2 tests
+test integration_adds ... ok
+test integration_adds_again ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests sample
+
+running 1 test
+test src\lib.rs - add (line 3) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+"#;
+
+    /// A filter that matches nothing: every program still begins and reports, with 0 tests.
+    const CARGO_FILTERED: &str = r#"    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running unittests src\lib.rs (target\debug\deps\sample-0c397b863d7a06b2.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running unittests src\main.rs (target\debug\deps\sample-2c8e0ac1960a88c0.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests\it.rs (target\debug\deps\it-5374f0f9f2da8122.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+"#;
+
+    /// `--no-run` builds the programs and runs none.
+    const CARGO_NO_RUN: &str = r#"    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+  Executable unittests src\lib.rs (target\debug\deps\sample-0c397b863d7a06b2.exe)
+  Executable unittests src\main.rs (target\debug\deps\sample-2c8e0ac1960a88c0.exe)
+  Executable tests\it.rs (target\debug\deps\it-5374f0f9f2da8122.exe)
+"#;
+
+    /// `-- --list` runs each program to list its tests: a `Running` line, and no `running` line.
+    const CARGO_LIST: &str = r#"    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s
+     Running unittests src\lib.rs (target\debug\deps\sample-0c397b863d7a06b2.exe)
+tests::adds: test
+tests::adds_more: test
+
+2 tests, 0 benchmarks
+     Running unittests src\main.rs (target\debug\deps\sample-2c8e0ac1960a88c0.exe)
+tests::main_runs: test
+
+1 test, 0 benchmarks
+   Doc-tests sample
+src\lib.rs - add (line 3): test
+
+1 test, 0 benchmarks
+"#;
+
+    /// `-q`: no `Running` lines, only the programs' own words.
+    const CARGO_QUIET: &str = r#"
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+"#;
+
+    /// Nothing was built, so nothing ran; cargo exits 101 for it.
+    const CARGO_COMPILE_ERROR: &str = r#"   Compiling sample v0.1.0 (C:\work\sample)
+error[E0308]: mismatched types
+ --> src\main.rs:1:26
+  |
+1 | fn main() { let x: i32 = "not a number"; println!("{x}"); }
+  |                    ---   ^^^^^^^^^^^^^^ expected `i32`, found `&str`
+  |                    |
+  |                    expected due to this
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `sample` (bin "sample") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `sample` (bin "sample" test) due to 1 previous error
+"#;
+
+    /// The test programs of `output` that began and did not report, counted as the runner counts
+    /// them: the stream comes in pieces, and a piece can end anywhere in a line.
+    fn unfinished_in(output: &str) -> usize {
+        let mut runs = TestRuns::default();
+        for piece in output.as_bytes().chunks(37) {
+            runs.push(piece);
+        }
+        runs.unfinished()
+    }
+
+    #[test]
+    fn a_normal_run_of_several_test_programs_and_the_doc_tests_reports_every_one() {
+        assert_eq!(unfinished_in(CARGO_NORMAL), 0);
+        let mut runs = TestRuns::default();
+        runs.push(CARGO_NORMAL.as_bytes());
+        runs.unfinished();
+        assert_eq!((runs.began, runs.reported), (4, 4), "the library, the binary, the integration test, the doc-tests");
+        // One byte at a time, and with Windows line ends: the same.
+        let mut slow = TestRuns::default();
+        CARGO_NORMAL.as_bytes().iter().for_each(|b| slow.push(&[*b]));
+        assert_eq!(slow.unfinished(), 0);
+        assert_eq!(unfinished_in(&CARGO_NORMAL.replace('\n', "\r\n")), 0);
+    }
+
+    #[test]
+    fn a_test_program_that_exits_in_the_middle_is_one_that_began_and_never_reported() {
+        assert_eq!(unfinished_in(CARGO_EARLY_EXIT), 1);
+        assert_eq!(unfinished_in(CARGO_EARLY_EXIT_PARALLEL), 1);
+        assert_eq!(unfinished_in(&CARGO_EARLY_EXIT.replace('\n', "\r\n")), 1);
+    }
+
+    #[test]
+    fn the_last_program_cut_short_and_the_last_line_without_its_newline_are_counted() {
+        // The doc-tests begin and nothing follows.
+        let at = CARGO_NORMAL.rfind("test result:").unwrap();
+        assert_eq!(unfinished_in(&CARGO_NORMAL[..at]), 1);
+        // The last result is there, only its newline is not.
+        assert_eq!(unfinished_in(CARGO_NORMAL.trim_end()), 0);
+        // Two cut short are two.
+        assert_eq!(unfinished_in(&format!("{CARGO_EARLY_EXIT}{CARGO_EARLY_EXIT}")), 2);
+    }
+
+    /// The five outputs the counting must leave alone.
+    #[test]
+    fn output_that_is_not_a_run_that_stopped_early_adds_nothing() {
+        let cases = [
+            ("a compile error", CARGO_COMPILE_ERROR),
+            ("--no-run", CARGO_NO_RUN),
+            ("-- --list", CARGO_LIST),
+            ("a filter that matches no test", CARGO_FILTERED),
+            ("-q", CARGO_QUIET),
+            ("nothing at all", ""),
+            ("a program with a main of its own", "     Running tests\\custom.rs (target\\debug\\deps\\custom-1.exe)\nall checks done\n"),
+        ];
+        for (what, output) in cases {
+            assert_eq!(unfinished_in(output), 0, "{what}");
+        }
+    }
+
+    /// The runner keeps the start and the end of what a command writes; the count is of all of it.
+    #[test]
+    fn the_count_is_of_the_whole_output_not_of_the_part_that_is_kept() {
+        let mut capture = Capture::default().counting_tests(true);
+        let filler = "test some::module::a_passing_test ... ok\n".repeat(20_000);
+        capture.push(filler.as_bytes());
+        capture.push(CARGO_EARLY_EXIT.as_bytes());
+        capture.push(filler.as_bytes());
+        let kept = capture.render();
+        assert!(kept.contains("bytes cut"), "most of it was cut");
+        assert!(!kept.contains("zz_exits") && !kept.contains("running 3 tests"), "and what was cut held the early exit");
+        assert_eq!(capture.unfinished_tests(), 1);
+        // A command that is not `cargo test` is not counted at all.
+        let mut other = Capture::default();
+        other.push(CARGO_EARLY_EXIT.as_bytes());
+        assert_eq!(other.unfinished_tests(), 0);
+    }
+
+    #[test]
+    fn only_cargo_test_is_counted_and_not_when_it_builds_or_lists() {
+        let counted = |parts: &[&str]| counts_test_runs(&cmd(parts));
+        for yes in [
+            &["cargo", "test"][..],
+            &["cargo", "t", "-p", "hugin"],
+            &["cargo.exe", "test", "--workspace"],
+            &[r"C:\Users\me\.cargo\bin\cargo.exe", "test"],
+            &["CARGO.EXE", "test"],
+            &["cargo", "+nightly", "test"],
+            &["cargo", "--locked", "test", "-p", "x", "--", "--nocapture"],
+            &["cargo", "test", "--doc"],
+            &["cargo", "test", "-q"],
+        ] {
+            assert!(counted(yes), "{yes:?}");
+        }
+        for no in [
+            &["cargo", "check"][..],
+            &["cargo", "build", "--tests"],
+            &["cargo", "run", "--", "test"],
+            &["cargo", "TEST"],
+            &["cargo", "test", "--no-run"],
+            &["cargo", "test", "--", "--list"],
+            &["cargo", "test", "--help"],
+            &["cargo", "nextest", "run"],
+            &["npm.cmd", "test"],
+            &["node", "test.js"],
+            &["cargo"],
+            &[],
+        ] {
+            assert!(!counted(no), "{no:?}");
+        }
+    }
+
+    /// Exit code 0 is not a pass when a test program was cut short, and the model is told why.
+    #[test]
+    fn a_test_run_that_exited_0_but_stopped_early_has_not_passed_and_the_model_is_told_why() {
+        let early = Outcome { unfinished_tests: 1, ..outcome(Ended::Exited(Some(0)), "running 3 tests\n") };
+        assert!(!early.passed());
+        let said = for_model(&cmd(&["cargo", "test", "-p", "hugin"]), &early);
+        assert!(
+            said.starts_with("`cargo test -p hugin` failed (exit 0, 1.5 s). A test program ended without reporting its result"),
+            "{said}"
+        );
+        assert!(said.contains("std::process::exit") && said.ends_with("running 3 tests") && !said.starts_with("error:"), "{said}");
+        assert!(said.contains("This counts as a failure."), "{said}");
+        // A pass is still a pass, and a failure that is a failure for other reasons says what it did.
+        assert!(outcome(Ended::Exited(Some(0)), "").passed());
+        assert!(for_model(&cmd(&["cargo", "test"]), &outcome(Ended::Exited(Some(0)), "")).contains("passed (exit 0"));
+        assert!(for_model(&cmd(&["cargo", "test"]), &outcome(Ended::Exited(Some(101)), "")).starts_with("`cargo test` failed (exit 101"));
+    }
+
+    /// The whole way through the runner, on output a command writes: what `type` prints is what
+    /// `cargo test` printed.
+    #[cfg(windows)]
+    #[test]
+    fn a_run_that_exits_0_with_a_test_program_cut_short_is_not_a_pass() {
+        let f = Folder::new("early");
+        f.write("early.txt", CARGO_EARLY_EXIT);
+        f.write("normal.txt", CARGO_NORMAL);
+        let print = |file: &str, count_tests: bool, then: &str| {
+            let mut c = Command::new("cmd");
+            c.args(["/c", &format!("type {file}{then}")]);
+            run_prepared(c, &f.0, "type", "cmd", CHECK_TIMEOUT, &[], Io { count_tests, ..Io::default() }, never).unwrap()
+        };
+        let early = print("early.txt", true, "");
+        assert_eq!((early.ended.clone(), early.unfinished_tests, early.passed()), (Ended::Exited(Some(0)), 1, false), "{early:?}");
+        assert!(early.complete && for_model(&cmd(&["cargo", "test"]), &early).contains("failed (exit 0"));
+        // The programs that did report, and the same text when the command is not `cargo test`.
+        assert!(print("normal.txt", true, "").passed());
+        let plain = print("early.txt", false, "");
+        assert!(plain.passed() && plain.unfinished_tests == 0, "{plain:?}");
+        // A run that failed says it failed by its exit code, and is not counted twice over.
+        let failed = print("early.txt", true, " & exit 3");
+        assert_eq!((failed.ended, failed.unfinished_tests), (Ended::Exited(Some(3)), 0));
     }
 
     // ── shells ──

@@ -57,7 +57,7 @@ $problems = @()
 if (Test-Path $new) { $problems += "$new already exists" }
 
 $holders = Get-Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.ProcessName -in @('Code', 'claude', 'vidar', 'mimir', 'heimdall', 'ollama', 'ollama app') }
+    Where-Object { $_.ProcessName -in @('Code', 'claude', 'vidar', 'mimir', 'hugin', 'heimdall', 'ollama', 'ollama app') }
 if ($holders) {
     $names = ($holders | Select-Object -ExpandProperty ProcessName -Unique) -join ', '
     $problems += "close these first: $names"

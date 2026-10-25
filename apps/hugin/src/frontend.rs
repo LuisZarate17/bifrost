@@ -141,4 +141,15 @@ impl Frontend for Fe<'_> {
     /// Nothing to do: the loop cannot lend the conversation, and the session saves it
     /// when the turn ends, which is where every Stop ends up.
     fn save(&mut self) {}
+
+    /// **A model that ran the check, saw it fail and says it is done is not believed.** The
+    /// loop pushes it back to fix the code, and when it ends the turn anyway, the turn says
+    /// so ([`Frontend::ended_failing`]) — the person is not left with only the model's word.
+    fn insist_on_checks(&self) -> bool {
+        true
+    }
+
+    fn ended_failing(&mut self) {
+        self.ui.show(Event::Unfinished(view::NOT_DONE.to_string()));
+    }
 }

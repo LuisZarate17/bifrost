@@ -28,8 +28,10 @@ pub struct Ran {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub undo: Option<String>,
     /// For a check that ran: how it ended, and what it wrote. Kept for a probe's
-    /// counts — a check that timed out told the model nothing about its code — and
-    /// **never serialized**: Mimir does not read it, and the webview is not sent it.
+    /// counts — a check that timed out told the model nothing about its code — and for
+    /// the turn loop, which tells a check that failed from one that never judged the code
+    /// (`turn::Frontend::insist_on_checks`). **Never serialized**: Mimir does not read it,
+    /// and the webview is not sent it.
     #[serde(skip)]
     pub check: Option<check::Outcome>,
 }

@@ -8,7 +8,13 @@
 //! - [`frontend`], [`view`] — the loop's frontend, and cards put into words
 //! - [`stop`] — Stop, for a thread that is not the one running the turn
 //! - [`print`] — `hugin -p`: one task handed over, a proposal handed back
+//! - [`ask`] — `hugin --ask`: one question about the code, answered by reading it, read-only
+//! - [`bent`] — the existing tests a `-p` patch changes, which it warns about
 
+mod ask;
+#[cfg(test)]
+mod ask_tests;
+mod bent;
 mod frontend;
 mod inline;
 #[cfg(test)]
@@ -45,6 +51,7 @@ hugin - a terminal agent that works in a folder
 
 usage: hugin [--folder <path>] [--shell <powershell|cmd|bash>] [--line] [--launch]
        hugin -p <task> [--check <command>] [--json] [--folder <path>] [--time <seconds>]
+       hugin --ask <question> [--json] [--folder <path>] [--time <seconds>]
 
   --folder <path>   the folder to work in (default: the current directory)
   --shell <name>    the shell the model's commands run in (default: hugin_shell in the config,
@@ -62,10 +69,26 @@ usage: hugin [--folder <path>] [--shell <powershell|cmd|bash>] [--line] [--launc
                     only (no pipes, && or redirects); without it, the folder's check in Mimir's
                     settings, else none. Not run at the end if Hugin changed a file that makes a
                     check run code (Cargo.toml, package.json, a makefile, conftest.py...)
-  --json            with -p: the result as one JSON object
-  --time <seconds>  with -p: how long the whole run may take (default 540)
+  --ask <question>  answer one question about the code, with nobody to ask: Hugin reads the folder
+                    in place, on this machine, and writes nothing (it can only read, list and
+                    search), then prints its answer and the files it looked at. `--ask -` reads
+                    the question from standard input. Any folder; git is not needed. It can be
+                    wrong: open the files it names
+  --json            with -p or --ask: the result as one JSON object
+  --time <seconds>  with -p or --ask: how long the whole run may take (default 540; 300 for --ask)
   --claude-note     print the section for Claude Code's CLAUDE.md that says when to use -p
   --help            show this help
+
+With -p the exit code says how it came out: 0 done; 3 not done (the check failed, the patch
+changes existing tests, the run was cut short, or the check gave no verdict: don't apply the
+patch as it is); 1 it could not run; 2 the command line could not be read. A model that says it
+is done after its check failed is not believed: the report says FAILED, and gives a draft patch
+to read, not a command to apply. A passing check can still be wrong: a patch that changes
+existing tests, which may have been bent to fit the code, is REVIEW, not done, until someone
+confirms the change was asked for. A cargo test run in which a test program stops early (a
+process::exit, an abort) counts as failed, whatever its exit code.
+With --ask: 0 answered; 3 partial (stopped at the time limit); 1 it could not run; 2 the command
+line could not be read.
 
 Type a request at the prompt. Enter sends; Shift+Enter, Alt+Enter, Ctrl+J or a \\ at
 the end of the line starts a new line. Esc stops the turn that is running; Ctrl+D or /exit
@@ -78,6 +101,8 @@ enum Cmd {
     Help,
     /// `-p`: one task, done unattended in a copy of the folder.
     Print(print::Args),
+    /// `--ask`: one question about the code, answered by reading it in place.
+    Ask(ask::Args),
     /// `--claude-note`: print the CLAUDE.md section, and write nothing.
     ClaudeNote,
     /// `--launch`: open Hugin in a terminal window, as the shortcut key does.
@@ -89,13 +114,14 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
     let mut folder = None;
     let mut line = false;
     let mut shell = None;
-    let (mut task, mut check, mut time) = (None, None, None);
+    let (mut task, mut check, mut time, mut question) = (None, None, None, None);
     let (mut json, mut note) = (false, false);
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => return Ok(Cmd::Help),
             "-p" => task = Some(args.next().ok_or("-p needs a task, or - to read it from standard input")?),
+            "--ask" => question = Some(args.next().ok_or("--ask needs a question, or - to read it from standard input")?),
             "--launch" => return Ok(Cmd::Launch),
             "--line" => line = true,
             "--json" => json = true,
@@ -119,9 +145,23 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
     if note {
         return Ok(Cmd::ClaudeNote);
     }
+    if let Some(question) = question {
+        if task.is_some() {
+            return Err("-p and --ask are two ways to run Hugin; give one".to_string());
+        }
+        if check.is_some() {
+            return Err("--check goes with -p, not --ask: a question has nothing to check".to_string());
+        }
+        if line || shell.is_some() {
+            return Err("--line and --shell are for the interactive Hugin, not --ask".to_string());
+        }
+        let question = if question == "-" { ask::Question::Stdin } else { ask::Question::Text(question) };
+        let time = ask::parse_time(time.as_deref())?;
+        return Ok(Cmd::Ask(ask::Args { question, json, folder, time }));
+    }
     let Some(task) = task else {
         if check.is_some() || json || time.is_some() {
-            return Err("--check, --json and --time go with -p".to_string());
+            return Err("--check goes with -p; --json and --time go with -p or --ask".to_string());
         }
         return Ok(Cmd::Run { folder, line, shell });
     };
@@ -145,6 +185,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Ok(Cmd::Print(args)) => print::run(args),
+        Ok(Cmd::Ask(args)) => ask::run(args),
         Ok(Cmd::ClaudeNote) => {
             print!("{}", print::CLAUDE_NOTE);
             ExitCode::SUCCESS
@@ -295,6 +336,64 @@ mod tests_main {
         // The flags that only mean something with -p.
         for alone in [&["--check", "cargo test"][..], &["--json"], &["--time", "9"]] {
             assert!(args(alone).unwrap_err().contains("go with -p"), "{alone:?}");
+        }
+    }
+
+    fn asked(list: &[&str]) -> ask::Args {
+        match args(list) {
+            Ok(Cmd::Ask(a)) => a,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn ask_takes_a_question_and_the_flags_that_go_with_it() {
+        let a = asked(&["--ask", "where is the parser?"]);
+        assert_eq!(a.question, ask::Question::Text("where is the parser?".into()));
+        assert_eq!((a.json, a.folder, a.time), (false, PathBuf::from("."), Duration::from_secs(300)));
+
+        let a = asked(&["--folder", "C:\\work", "--ask", "how does it work?", "--json", "--time", "60"]);
+        assert_eq!(a.question, ask::Question::Text("how does it work?".into()));
+        assert!(a.json);
+        assert_eq!((a.folder, a.time), (PathBuf::from("C:\\work"), Duration::from_secs(60)));
+        // The `=` forms, and the question from standard input.
+        let a = asked(&["--ask", "-", "--time=5", "--folder=sub"]);
+        assert_eq!(a.question, ask::Question::Stdin);
+        assert_eq!((a.time, a.folder), (Duration::from_secs(5), PathBuf::from("sub")));
+    }
+
+    #[test]
+    fn ask_refuses_what_it_cannot_do_and_says_so() {
+        assert!(args(&["--ask"]).unwrap_err().contains("needs a question"));
+        assert!(args(&["-p", "x", "--ask", "y"]).unwrap_err().contains("two ways to run Hugin"));
+        assert!(args(&["--ask", "y", "-p", "x"]).unwrap_err().contains("two ways to run Hugin"));
+        assert!(args(&["--ask", "q", "--check", "cargo test"]).unwrap_err().contains("--check goes with -p"));
+        assert!(args(&["--ask", "q", "--line"]).is_err());
+        assert!(args(&["--ask", "q", "--shell", "cmd"]).is_err());
+        assert!(args(&["--ask", "q", "--time", "0"]).is_err());
+        assert!(args(&["--ask", "q", "--time", "soon"]).is_err());
+        // Without a question or a task, the flags have nothing to go with.
+        for alone in [&["--json"][..], &["--time", "9"]] {
+            assert!(args(alone).unwrap_err().contains("go with -p or --ask"), "{alone:?}");
+        }
+        // And -p is still -p: five minutes is --ask's own.
+        assert_eq!(printed(&["-p", "x"]).time, Duration::from_secs(540));
+    }
+
+    #[test]
+    fn the_help_names_what_each_exit_code_of_dash_p_means() {
+        let text: String = HELP.split_whitespace().collect::<Vec<_>>().join(" ");
+        for must in [
+            "0 done; 3 not done (the check failed, the patch changes existing tests,",
+            "don't apply the patch as it is); 1 it could not run; 2 the command line could not be read",
+            "the report says FAILED",
+            "A passing check can still be wrong: a patch that changes existing tests, which may have been bent to fit the code, is REVIEW, not done, until someone confirms the change was asked for",
+            "A cargo test run in which a test program stops early",
+            "hugin --ask <question> [--json] [--folder <path>] [--time <seconds>]",
+            "--ask <question> answer one question about the code, with nobody to ask: Hugin reads the folder in place, on this machine, and writes nothing",
+            "With --ask: 0 answered; 3 partial (stopped at the time limit); 1 it could not run; 2 the command line could not be read.",
+        ] {
+            assert!(text.contains(must), "{must}");
         }
     }
 

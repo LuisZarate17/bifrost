@@ -32,6 +32,16 @@
 //! and, where the earlier save may have missed it, [`Frontend::save`] is called
 //! again; nothing after the Stop is sent to the model.
 //!
+//! **A failing check can keep a turn going — for a frontend that asks for it.** The model
+//! may run the project's check, see it fail, and still end the turn with an answer that
+//! says the work is done. A frontend that [insists on checks](Frontend::insist_on_checks)
+//! does not take that answer: while the model's latest `run_check` is failing (a failed
+//! check stays failing until a later one passes), the answer goes into the conversation
+//! and the model is told the work is not done ([`tools::CHECK_FAILED_NOTE`]) — at most
+//! [`MAX_PUSH_BACKS`] times in a turn, each one a round. Past that the answer is taken,
+//! and the frontend is told the turn ended with its check failing
+//! ([`Frontend::ended_failing`]). Mimir does not ask, so for it nothing changes.
+//!
 //! **Mimir runs it (I1).** Its `run_turn` command drives [`run_turn`] with the
 //! window as the [`Frontend`], and the webview only shows what it is told. The probes
 //! (2c) drive [`run_turn_with`] with a frontend that approves everything and writes
@@ -44,7 +54,14 @@ use super::run::{run_approved, Ran};
 use super::send::Calibration;
 use super::ticket::{DiffView, PendingCall};
 use crate::chat::{self, Message};
+use crate::check::Ended;
 use crate::{config, ollama, tools};
+
+/// The most times one turn pushes the model back to fix a failing check instead of taking
+/// its answer, for a frontend that [insists on checks](Frontend::insist_on_checks). Three
+/// is enough for a model that was careless once; one that has been told three times and
+/// still ends the turn is not going to fix it, and the turn should end rather than loop.
+pub const MAX_PUSH_BACKS: usize = 3;
 
 /// What a person, or a rule, said to a card that asked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,6 +257,27 @@ pub trait Frontend {
     /// Save the thread as it now stands. Called only where the turn ends on a Stop
     /// with a card on screen that the Stop's own save may have missed.
     fn save(&mut self);
+
+    /// Whether a check that failed keeps the turn going. **Off unless a frontend says
+    /// otherwise**: Mimir's turns end on the model's answer, failing check or not.
+    ///
+    /// When it is on and the model answers while its latest `run_check` is failing, that
+    /// answer does not end the turn. It goes into the conversation, the model is told the
+    /// work is not done and to fix it ([`tools::CHECK_FAILED_NOTE`]), and the loop goes on —
+    /// at most [`MAX_PUSH_BACKS`] times in a turn, after which the answer is taken as it is.
+    /// An answer pushed back is not passed to [`Frontend::answer`]. A check that failed
+    /// stays failing until a later one passes; one that never judged the code (it timed out,
+    /// was stopped or refused by Smart App Control, or could not start) changes nothing.
+    fn insist_on_checks(&self) -> bool {
+        false
+    }
+
+    /// The turn is over and the model's latest check is still failing, whatever its last
+    /// words said: the work is not done, and a person should be told so. Called after the
+    /// answer or the banner, and only for a frontend that insists
+    /// ([`Frontend::insist_on_checks`]) — not when Stop was pressed, nor when the turn ended
+    /// on an error, which was shown.
+    fn ended_failing(&mut self) {}
 }
 
 /// Run one tool turn on `convo`, which ends up the conversation as the model has
@@ -321,25 +359,16 @@ pub fn run_turn_with(
     run: &mut Run<'_>,
     fe: &mut dyn Frontend,
 ) -> Result<(), String> {
-    let mut turn = Turn { convo, calibration, last_ran: false, ask, run, fe };
-    // A bound, not a timeout. Without one, a model that keeps asking loops forever
-    // and the only symptom is the app getting warm.
-    let mut step = 0;
-    let mut requests = 0;
-    while step < bound && requests < bound + tools::MAX_FREE_CALLS {
-        match turn.go()? {
-            Flow::End => return Ok(()),
-            // `requests` counts everything. `step` does not count a free call: the
-            // webview's `step--` before its `continue`.
-            Flow::Again { free } => {
-                requests += 1;
-                if !free {
-                    step += 1;
-                }
-            }
-        }
+    let mut turn = Turn { convo, calibration, last_ran: false, check_failing: false, pushed_back: 0, ask, run, fe };
+    let result = turn.run(bound);
+    // Over with the check still failing: the model was pushed back as often as it is
+    // and ended the turn anyway, or a bound or its being stuck did. A frontend that
+    // insisted is told, since the model's own words may say otherwise. Not after a
+    // Stop, which the person asked for, nor an error, which they were shown.
+    if result.is_ok() && turn.check_failing && turn.fe.insist_on_checks() && !turn.fe.stopped() {
+        turn.fe.ended_failing();
     }
-    turn.close(bound, step, requests)
+    result
 }
 
 /// The loop's state: the conversation, what the next round is calibrated from, and
@@ -349,6 +378,10 @@ struct Turn<'a> {
     convo: &'a mut Vec<Message>,
     calibration: Option<Calibration>,
     last_ran: bool,
+    /// The model's latest `run_check` ran and failed, and none has passed since.
+    check_failing: bool,
+    /// How many times this turn has pushed the model back to fix a failing check.
+    pushed_back: usize,
     ask: &'a mut Ask<'a>,
     run: &'a mut Run<'a>,
     fe: &'a mut dyn Frontend,
@@ -364,6 +397,28 @@ enum Flow {
 }
 
 impl Turn<'_> {
+    /// Go round until the turn ends or a bound is reached.
+    fn run(&mut self, bound: usize) -> Result<(), String> {
+        // A bound, not a timeout. Without one, a model that keeps asking loops forever
+        // and the only symptom is the app getting warm.
+        let mut step = 0;
+        let mut requests = 0;
+        while step < bound && requests < bound + tools::MAX_FREE_CALLS {
+            match self.go()? {
+                Flow::End => return Ok(()),
+                // `requests` counts everything. `step` does not count a free call: the
+                // webview's `step--` before its `continue`.
+                Flow::Again { free } => {
+                    requests += 1;
+                    if !free {
+                        step += 1;
+                    }
+                }
+            }
+        }
+        self.close(bound, step, requests)
+    }
+
     /// One trip round the loop: ask, show what came back, and — if it was a call —
     /// run it and put the pair in the conversation.
     fn go(&mut self) -> Result<Flow, String> {
@@ -404,6 +459,24 @@ impl Turn<'_> {
 
         match reply {
             Reply::Answer { content, eval_count } => {
+                // Done, says the model, with its check failing. A frontend that insists
+                // does not take that: what the model said goes back into the conversation
+                // with the loop's reply to it, and the turn goes on. It is a round like
+                // any other, so a bound still ends the turn, and only so many times.
+                if self.check_failing && self.pushed_back < MAX_PUSH_BACKS && self.fe.insist_on_checks() {
+                    self.pushed_back += 1;
+                    if !content.trim().is_empty() {
+                        self.convo.push(Message {
+                            role: "assistant".to_string(),
+                            content,
+                            images: None,
+                            tool_calls: None,
+                            tool_name: None,
+                        });
+                    }
+                    self.convo.push(Message::user(tools::CHECK_FAILED_NOTE));
+                    return Ok(Flow::Again { free: false });
+                }
                 self.fe.answer(&content, prompt_eval_count, eval_count);
                 Ok(Flow::End)
             }
@@ -514,6 +587,7 @@ impl Turn<'_> {
                         return Err(e);
                     }
                 };
+                self.note_check(&call.name, &ran);
                 // An edit refused at the last moment — the file changed after the diff
                 // was shown — is failed: nothing was written. A check that finds
                 // errors is not: it ran, and `ok` says it did not pass.
@@ -543,6 +617,24 @@ impl Turn<'_> {
                 self.last_ran = !failed;
                 Ok(Flow::Again { free: false })
             }
+        }
+    }
+
+    /// What a finished `run_check` says about the work: **a check that ran and failed makes
+    /// it failing until a later check passes**, whatever the model does in between. One that
+    /// never judged the code — it timed out, was stopped, could not start or was refused by
+    /// Smart App Control — changes nothing: asking the model to fix its code over that would
+    /// send it after a fault it does not have.
+    fn note_check(&mut self, name: &str, ran: &Ran) {
+        if name != "run_check" {
+            return;
+        }
+        match &ran.check {
+            Some(outcome) if outcome.passed() => self.check_failing = false,
+            Some(outcome) if matches!(outcome.ended, Ended::Exited(_)) && outcome.blocked.is_none() => {
+                self.check_failing = true;
+            }
+            _ => {}
         }
     }
 
@@ -663,13 +755,19 @@ mod tests {
         stop_on_card: bool,
         /// Stop is pressed while the model is answering (or an automatic call is running).
         stop_in_ask: bool,
+        /// Stop is pressed while the model is answering its n-th request (counting from 0).
+        stop_at_ask: Option<usize>,
         /// Stop is pressed while an approved call runs.
         stop_in_run: bool,
+        /// The frontend insists on a passing check: see [`Frontend::insist_on_checks`].
+        insist: bool,
         cards: Vec<Card>,
         answers: Vec<(String, u32, u32)>,
         errors: Vec<String>,
         numbers: Vec<RoundNumbers>,
         saves: usize,
+        /// How often the turn said it ended with its check failing.
+        unfinished: usize,
     }
 
     impl Fake {
@@ -681,17 +779,25 @@ mod tests {
                 stop_in_decide: false,
                 stop_on_card: false,
                 stop_in_ask: false,
+                stop_at_ask: None,
                 stop_in_run: false,
+                insist: false,
                 cards: Vec::new(),
                 answers: Vec::new(),
                 errors: Vec::new(),
                 numbers: Vec::new(),
                 saves: 0,
+                unfinished: 0,
             }
         }
 
         fn deciding(decisions: &[Decision]) -> Self {
             Self { decisions: decisions.iter().copied().collect(), ..Self::new() }
+        }
+
+        /// A frontend that insists on a passing check, and allows what it is asked.
+        fn insisting(allows: usize) -> Self {
+            Self { insist: true, ..Self::deciding(&vec![Decision::Allow; allows]) }
         }
 
         fn events(&self) -> Vec<String> {
@@ -768,6 +874,15 @@ mod tests {
             self.say("save".into());
             self.saves += 1;
         }
+
+        fn insist_on_checks(&self) -> bool {
+            self.insist
+        }
+
+        fn ended_failing(&mut self) {
+            self.say("unfinished".into());
+            self.unfinished += 1;
+        }
     }
 
     /// Run the loop on a script: the model's replies in order, and what each approved
@@ -793,7 +908,7 @@ mod tests {
         fe: &mut Fake,
     ) -> (Result<(), String>, Vec<Asked>) {
         let (log, stop) = (fe.log.clone(), fe.stop.clone());
-        let (stop_in_ask, stop_in_run) = (fe.stop_in_ask, fe.stop_in_run);
+        let (stop_in_ask, stop_at_ask, stop_in_run) = (fe.stop_in_ask, fe.stop_at_ask, fe.stop_in_run);
         let (mut asks, mut runs) = (VecDeque::from(asks), VecDeque::from(runs));
         let mut asked = Vec::new();
         let result = run_turn_with(
@@ -802,10 +917,10 @@ mod tests {
             bound,
             &mut |messages: &[Message], calibration: Option<Calibration>, closing: bool| {
                 log.borrow_mut().push(format!("ask:{}", if closing { "closing" } else { "open" }));
-                asked.push((closing, messages.len(), calibration));
-                if stop_in_ask {
+                if stop_in_ask || stop_at_ask == Some(asked.len()) {
                     stop.set(true);
                 }
+                asked.push((closing, messages.len(), calibration));
                 asks.pop_front().expect("the loop asked the model more often than the script allows")
             },
             &mut |name: &str, path: &str, token: &str| {
@@ -1398,6 +1513,329 @@ mod tests {
         stopped.stop.set(true);
         assert!(!opening(&mut stopped, false), "nothing to wait for");
         assert!(stopped.events().is_empty());
+    }
+
+    // ── a failing check ─────────────────────────────────────────────────────
+
+    /// A `run_check` that finished: how it ended, and whether Smart App Control refused a
+    /// file — all the loop reads of it.
+    fn checked(ended: Ended, blocked: Option<&str>) -> Result<Ran, String> {
+        let outcome = crate::check::Outcome {
+            ended: ended.clone(),
+            elapsed: std::time::Duration::ZERO,
+            output: String::new(),
+            bytes: 0,
+            complete: true,
+            blocked: blocked.map(str::to_string),
+            unfinished_tests: 0,
+        };
+        Ok(Ran {
+            result: "the check's report".into(),
+            ok: outcome.passed(),
+            stopped: ended == Ended::Stopped,
+            undo: None,
+            check: Some(outcome),
+        })
+    }
+
+    fn check_failed() -> Result<Ran, String> {
+        checked(Ended::Exited(Some(101)), None)
+    }
+
+    fn check_passed() -> Result<Ran, String> {
+        checked(Ended::Exited(Some(0)), None)
+    }
+
+    /// The assistant's words, as the loop puts them in the conversation.
+    fn said(text: &str) -> Message {
+        Message { role: "assistant".into(), content: text.into(), images: None, tool_calls: None, tool_name: None }
+    }
+
+    /// The model runs the check once for each of `checks`, then answers "answer 1",
+    /// "answer 2" and so on: four of them, the three a turn can push back and the one it takes.
+    fn play_checks(insist: bool, checks: Vec<Result<Ran, String>>) -> (Fake, Vec<Message>, Vec<Asked>) {
+        let mut fe = Fake::insisting(checks.len());
+        fe.insist = insist;
+        let mut convo = vec![Message::user("fix it")];
+        let mut asks: Vec<_> = checks.iter().map(|_| asks_about("run_check", "cargo test")).collect();
+        asks.extend((1..=4).map(|n| answer(&format!("answer {n}"))));
+        let (result, asked) = play(&mut convo, None, asks, checks, &mut fe);
+        assert_eq!(result, Ok(()));
+        (fe, convo, asked)
+    }
+
+    /// The answers the frontend was shown.
+    fn answers_shown(fe: &Fake) -> Vec<&str> {
+        fe.answers.iter().map(|a| a.0.as_str()).collect()
+    }
+
+    #[test]
+    fn an_answer_after_a_failed_check_is_pushed_back_when_the_frontend_insists() {
+        let mut fe = Fake::insisting(2);
+        let mut convo = vec![Message::user("fix it")];
+        let asks = vec![
+            asks_about("run_check", "cargo test"),
+            answer("Fixed it."),
+            asks_about("run_check", "cargo test"),
+            answer("Now it passes."),
+        ];
+        let (result, asked) = play(&mut convo, None, asks, vec![check_failed(), check_passed()], &mut fe);
+        assert_eq!(result, Ok(()));
+        assert_eq!(asked.len(), 4);
+        // The answer that was pushed back was never shown; the one that ended the turn was.
+        assert_eq!(fe.answers, [("Now it passes.".to_string(), 0, 7)]);
+        assert_eq!(fe.unfinished, 0);
+        // What the model said is in the conversation, with the loop's reply to it, and the
+        // next request was sent both.
+        assert_eq!(convo[3], said("Fixed it."));
+        assert_eq!(convo[4], Message::user(tools::CHECK_FAILED_NOTE));
+        assert_eq!(asked[1].1, 3);
+        assert_eq!(asked[2].1, 5);
+        // The final answer is left to the frontend, as ever.
+        assert_eq!(convo.len(), 7);
+    }
+
+    #[test]
+    fn the_push_back_tells_the_model_the_work_is_not_done_and_what_to_do() {
+        let note = tools::CHECK_FAILED_NOTE;
+        assert!(note.starts_with("The last check failed, so the work is not done."), "{note}");
+        assert!(note.contains("Fix the code and run the check again."), "{note}");
+        assert!(note.contains("say plainly that it is not done and why"), "{note}");
+    }
+
+    #[test]
+    fn an_answer_after_a_check_that_failed_and_then_passed_ends_the_turn() {
+        let (fe, convo, asked) = play_checks(true, vec![check_failed(), check_passed()]);
+        assert_eq!(asked.len(), 3);
+        assert_eq!(answers_shown(&fe), ["answer 1"]);
+        assert_eq!(fe.unfinished, 0);
+        assert_eq!(convo.len(), 5, "nothing was pushed back");
+    }
+
+    #[test]
+    fn an_answer_with_no_check_run_or_a_check_that_passed_ends_the_turn() {
+        let cases: [Vec<Result<Ran, String>>; 3] = [vec![], vec![check_passed()], vec![check_passed(), check_passed()]];
+        for checks in cases {
+            let requests = checks.len() + 1;
+            let (fe, convo, asked) = play_checks(true, checks);
+            assert_eq!(answers_shown(&fe), ["answer 1"]);
+            assert_eq!(fe.unfinished, 0);
+            assert_eq!(asked.len(), requests, "one for each check, and the answer");
+            assert!(convo.iter().all(|m| m.content != tools::CHECK_FAILED_NOTE));
+        }
+    }
+
+    #[test]
+    fn a_failed_check_stays_failing_through_edits_until_a_check_passes() {
+        let mut fe = Fake::insisting(3);
+        let mut convo = vec![Message::user("fix it")];
+        let asks = vec![
+            asks_about("run_check", "cargo test"),
+            asks_about("edit_file", "a.rs"),
+            answer("Edited it."),
+            asks_about("run_check", "cargo test"),
+            answer("Passes now."),
+        ];
+        let runs = vec![check_failed(), ran("Edited a.rs: 1 line removed, 1 added."), check_passed()];
+        let (result, asked) = play(&mut convo, None, asks, runs, &mut fe);
+        assert_eq!(result, Ok(()));
+        assert_eq!(asked.len(), 5);
+        // "Edited it." was pushed back: the edit did not make the check pass.
+        assert_eq!(answers_shown(&fe), ["Passes now."]);
+        assert_eq!(convo.iter().filter(|m| m.content == tools::CHECK_FAILED_NOTE).count(), 1);
+    }
+
+    #[test]
+    fn a_turn_is_pushed_back_at_most_three_times_and_then_says_it_is_not_done() {
+        let (fe, convo, asked) = play_checks(true, vec![check_failed()]);
+        // The check, three answers pushed back, and the fourth taken.
+        assert_eq!(asked.len(), 5);
+        assert_eq!(answers_shown(&fe), ["answer 4"]);
+        let notes = convo.iter().filter(|m| m.content == tools::CHECK_FAILED_NOTE).count();
+        assert_eq!(notes, MAX_PUSH_BACKS);
+        assert_eq!(convo.len(), 3 + 2 * notes);
+        // Said after the answer, so a person reads the model's words and then the fact.
+        assert_eq!(fe.unfinished, 1);
+        let events = fe.events();
+        assert_eq!(events[events.len() - 2..], ["answer:answer 4", "unfinished"]);
+    }
+
+    /// A `cargo test` that exited 0 with a test program cut short: not a pass (`Outcome::passed`).
+    fn check_cut_short() -> Result<Ran, String> {
+        let mut ran = checked(Ended::Exited(Some(0)), None)?;
+        if let Some(outcome) = ran.check.as_mut() {
+            outcome.unfinished_tests = 1;
+            ran.ok = outcome.passed();
+        }
+        Ok(ran)
+    }
+
+    #[test]
+    fn a_check_that_exited_0_with_a_test_program_cut_short_is_a_failing_check() {
+        assert!(!check_cut_short().unwrap().ok);
+        // The model says it is done over it, and is pushed back as over any failed check.
+        let (fe, convo, asked) = play_checks(true, vec![check_cut_short()]);
+        assert_eq!(asked.len(), 5);
+        assert_eq!(answers_shown(&fe), ["answer 4"]);
+        assert_eq!(convo.iter().filter(|m| m.content == tools::CHECK_FAILED_NOTE).count(), MAX_PUSH_BACKS);
+        assert_eq!(fe.unfinished, 1);
+        // ...and a later check that really passes clears it.
+        let (fe, _, _) = play_checks(true, vec![check_cut_short(), check_passed()]);
+        assert_eq!((answers_shown(&fe), fe.unfinished), (vec!["answer 1"], 0));
+    }
+
+    #[test]
+    fn a_frontend_that_does_not_insist_gets_the_answer_after_a_failed_check_as_ever() {
+        let (fe, convo, asked) = play_checks(false, vec![check_failed()]);
+        assert_eq!(asked.len(), 2);
+        assert_eq!(answers_shown(&fe), ["answer 1"]);
+        assert_eq!(fe.unfinished, 0);
+        assert_eq!(convo.len(), 3, "the pair for the check, and nothing pushed back");
+        assert!(fe.events().iter().all(|e| e != "unfinished"));
+    }
+
+    /// A frontend that implements only what has to be, so what it gets is the trait's own.
+    struct Bare;
+
+    impl Frontend for Bare {
+        fn stopped(&self) -> bool {
+            false
+        }
+        fn status(&mut self, _: &str) {}
+        fn round(&mut self, _: RoundNumbers) {}
+        fn answer(&mut self, _: &str, _: u32, _: u32) {}
+        fn error(&mut self, _: &str) {}
+        fn card(&mut self, _: Card) -> usize {
+            0
+        }
+        fn update(&mut self, _: usize, _: Patch) {}
+        fn decide(&mut self, _: usize, _: &PendingCall) -> Decision {
+            Decision::Allow
+        }
+        fn save(&mut self) {}
+    }
+
+    #[test]
+    fn a_frontend_does_not_insist_on_checks_unless_it_says_so() {
+        let mut bare = Bare;
+        assert!(!bare.insist_on_checks());
+        // Run on a failed check, the loop takes its answer like every turn before it.
+        let mut convo = vec![Message::user("fix it")];
+        let asks = vec![asks_about("run_check", "cargo test"), answer("Done.")];
+        let mut asks = VecDeque::from(asks);
+        let mut runs = VecDeque::from(vec![check_failed()]);
+        let result = run_turn_with(
+            &mut convo,
+            None,
+            tools::MAX_ROUNDS,
+            &mut |_: &[Message], _: Option<Calibration>, _: bool| asks.pop_front().expect("one request too many"),
+            &mut |_: &str, _: &str, _: &str| runs.pop_front().expect("one run too many"),
+            &mut bare,
+        );
+        assert_eq!(result, Ok(()));
+        assert_eq!(convo.len(), 3);
+    }
+
+    #[test]
+    fn stop_after_a_push_back_ends_the_turn_and_says_nothing_of_the_check() {
+        let mut fe = Fake::insisting(1);
+        fe.stop_at_ask = Some(2);
+        let mut convo = vec![Message::user("fix it")];
+        let asks = vec![asks_about("run_check", "cargo test"), answer("Done."), answer("Really done.")];
+        let (result, asked) = play(&mut convo, None, asks, vec![check_failed()], &mut fe);
+        assert_eq!(result, Ok(()));
+        assert_eq!(asked.len(), 3, "no closing request");
+        assert!(fe.answers.is_empty() && fe.errors.is_empty(), "what comes back after Stop is not shown");
+        assert_eq!(fe.unfinished, 0, "the person ended it");
+        // What was pushed back before the Stop stays in the conversation the turn leaves.
+        assert_eq!(convo[3], said("Done."));
+    }
+
+    #[test]
+    fn stop_while_the_check_runs_ends_the_turn_without_a_word_about_it() {
+        let mut fe = Fake::insisting(2);
+        fe.stop_in_run = true;
+        let mut convo = vec![Message::user("fix it")];
+        let stopped = checked(Ended::Stopped, None);
+        let (result, asked) = play(&mut convo, None, vec![asks_about("run_check", "cargo test")], vec![stopped], &mut fe);
+        assert_eq!(result, Ok(()));
+        assert_eq!(asked.len(), 1);
+        assert_eq!(fe.unfinished, 0);
+        assert_eq!(fe.cards[0].state, CardState::Stopped);
+    }
+
+    #[test]
+    fn a_check_that_never_judged_the_code_neither_fails_the_turn_nor_clears_a_failure() {
+        let timed_out = || checked(Ended::TimedOut, None);
+        let blocked = || checked(Ended::Exited(Some(1)), Some("Smart App Control blocked build_script_build.exe"));
+        let could_not_start = || ran("error: program not found");
+        // The checks the model ran, and whether an answer after them is pushed back.
+        let cases: Vec<(Vec<Result<Ran, String>>, bool)> = vec![
+            (vec![timed_out()], false),
+            (vec![blocked()], false),
+            (vec![could_not_start()], false),
+            (vec![check_failed(), timed_out()], true),
+            (vec![check_failed(), blocked()], true),
+            (vec![check_failed(), could_not_start()], true),
+            (vec![check_failed(), check_passed(), timed_out()], false),
+            (vec![check_passed(), check_failed()], true),
+        ];
+        for (n, (checks, pushed_back)) in cases.into_iter().enumerate() {
+            let (fe, _, _) = play_checks(true, checks);
+            let taken = if pushed_back { "answer 4" } else { "answer 1" };
+            assert_eq!(answers_shown(&fe), [taken], "case {n}");
+            assert_eq!(fe.unfinished, usize::from(pushed_back), "case {n}");
+        }
+    }
+
+    #[test]
+    fn a_blank_answer_after_a_failed_check_is_pushed_back_without_putting_the_blank_in_the_conversation() {
+        let mut fe = Fake::insisting(2);
+        let mut convo = vec![Message::user("fix it")];
+        let asks = vec![asks_about("run_check", "cargo test"), answer("  "), asks_about("run_check", "cargo test"), answer("ok")];
+        let (result, asked) = play(&mut convo, None, asks, vec![check_failed(), check_passed()], &mut fe);
+        assert_eq!(result, Ok(()));
+        assert_eq!(asked[2].1, 4, "only the loop's reply was added");
+        assert_eq!(convo[3], Message::user(tools::CHECK_FAILED_NOTE));
+        assert_eq!(answers_shown(&fe), ["ok"]);
+    }
+
+    #[test]
+    fn a_push_back_is_a_round_so_the_bound_still_ends_the_turn() {
+        let mut fe = Fake::insisting(1);
+        let mut convo = vec![Message::user("fix it")];
+        let asks = vec![asks_about("run_check", "cargo test"), answer("one"), answer("two"), answer("closing words")];
+        let (result, asked) = play_bounded(3, &mut convo, None, asks, vec![check_failed()], &mut fe);
+        assert_eq!(result, Ok(()));
+        assert_eq!(asked.len(), 4, "three rounds and the closing request");
+        assert_eq!(asked[3], (true, 7, None));
+        // The closing words are the model's last, pushed back or not, and the banner follows.
+        assert_eq!(answers_shown(&fe), ["closing words"]);
+        assert_eq!(fe.errors, ["Stopped after 3 tool rounds. The last step ran — check the result."]);
+        let events = fe.events();
+        assert_eq!(events[events.len() - 2..], ["error:Stopped after 3 tool rounds. The last step ran — check the result.", "unfinished"]);
+    }
+
+    #[test]
+    fn a_stuck_model_with_its_check_failing_is_said_to_have_ended_unfinished() {
+        let mut fe = Fake::insisting(1);
+        let mut convo = vec![Message::user("fix it")];
+        let stuck = round_of(Reply::Stuck { error: "the model kept repeating a call to edit_file".into() });
+        let asks = vec![asks_about("run_check", "cargo test"), stuck];
+        let (result, _) = play(&mut convo, None, asks, vec![check_failed()], &mut fe);
+        assert_eq!(result, Ok(()));
+        assert_eq!(fe.errors, ["the model kept repeating a call to edit_file"]);
+        assert_eq!(fe.unfinished, 1);
+    }
+
+    #[test]
+    fn a_turn_that_fails_to_run_is_not_said_to_have_ended_unfinished() {
+        let mut fe = Fake::insisting(1);
+        let mut convo = vec![Message::user("fix it")];
+        let asks = vec![asks_about("run_check", "cargo test"), Err("POST /api/chat: connection refused".to_string())];
+        let (result, _) = play(&mut convo, None, asks, vec![check_failed()], &mut fe);
+        assert_eq!(result, Err("POST /api/chat: connection refused".to_string()));
+        assert_eq!(fe.unfinished, 0, "the error is what the person is shown");
     }
 
     // ── what the model was sent ─────────────────────────────────────────────

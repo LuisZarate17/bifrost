@@ -1890,6 +1890,7 @@ mod tests {
             bytes: 0,
             complete: true,
             blocked: None,
+            unfinished_tests: 0,
         }
     }
 

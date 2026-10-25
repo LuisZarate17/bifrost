@@ -1107,12 +1107,28 @@ pub fn plan_message(steps: &[PlanStep]) -> String {
     said
 }
 
+/// What the loop says, as a user message, when the model answers while its last check is
+/// failing and the frontend insists on a passing one
+/// ([`crate::agent::turn::Frontend::insist_on_checks`]). The model's answer goes back into
+/// the conversation first, so this reads as the reply to it. It is the loop's words, not the
+/// person's: the rules that count since the user's last message (`plan_updates`,
+/// `prior_failures`, `build_files_changed`) do not take it for the start of a new turn.
+pub const CHECK_FAILED_NOTE: &str = "The last check failed, so the work is not done. Fix the code and run the \
+     check again. If it cannot pass, say plainly that it is not done and why.";
+
+/// Where the turn that `history` ends begins: just after the user's last message. **The
+/// loop's own [`CHECK_FAILED_NOTE`] is not the user's message**, so a turn that was pushed
+/// back to fix its code keeps what it did before — the failures it has repeated, the plan
+/// updates it has made and the build files it has changed.
+fn turn_start(history: &[Message]) -> usize {
+    history.iter().rposition(|m| m.role == "user" && m.content != CHECK_FAILED_NOTE).map_or(0, |i| i + 1)
+}
+
 /// How many `update_plan` calls the model has made since the user's last message.
 /// The app and the probes share this one rule for the cap, whether or not the
 /// earlier calls were accepted.
 pub fn plan_updates(history: &[Message]) -> usize {
-    let since = history.iter().rposition(|m| m.role == "user").map_or(0, |i| i + 1);
-    history[since..]
+    history[turn_start(history)..]
         .iter()
         .filter(|m| m.role == "assistant")
         .flat_map(|m| m.tool_calls.as_deref().unwrap_or_default())
@@ -1163,8 +1179,7 @@ pub const MAX_IDENTICAL_FAILURES: usize = 3;
 /// which is how every kind of failure is reported (see the module header: the
 /// prefix means exactly that, nothing else starts with it).
 pub fn prior_failures(history: &[Message], call: &ToolCall) -> usize {
-    let since = history.iter().rposition(|m| m.role == "user").map_or(0, |i| i + 1);
-    let turns = &history[since..];
+    let turns = &history[turn_start(history)..];
     let mut count = 0;
     for (i, m) in turns.iter().enumerate() {
         let same = m.role == "assistant"
@@ -1213,8 +1228,7 @@ pub fn is_build_file(path: &str) -> bool {
 /// them, because approving a check after one changed is approving whatever the
 /// check now does.
 pub fn build_files_changed(history: &[Message]) -> Vec<String> {
-    let since = history.iter().rposition(|m| m.role == "user").map_or(0, |i| i + 1);
-    let turns = &history[since..];
+    let turns = &history[turn_start(history)..];
     let mut out: Vec<String> = Vec::new();
     for (i, m) in turns.iter().enumerate() {
         let Some(call) = m.tool_calls.as_deref().and_then(|c| c.first()) else { continue };
@@ -2161,6 +2175,35 @@ mod tests {
             Message::user("try again now, I fixed the file"),
         ];
         assert_eq!(prior_failures(&history, &a), 0);
+    }
+
+    /// The loop's push-back after a failed check is a user message, but not a new turn: what
+    /// the turn did before it still counts, and a later message of the user's still ends it.
+    #[test]
+    fn the_push_back_after_a_failed_check_does_not_start_a_new_turn() {
+        let manifest = call("edit_file", json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }));
+        let bad = call("edit_file", json!({ "path": "a", "old_text": "x", "new_text": "y" }));
+        let mut history = vec![
+            Message::user("go"),
+            asked(&manifest),
+            Message::tool_result("edit_file", "Edited Cargo.toml: 1 line removed, 1 added."),
+            asked(&bad),
+            Message::tool_result("edit_file", "error: old_text was not found"),
+            asked(&plan_call("[ ] a")),
+            Message::tool_result("update_plan", "Plan updated: 0 of 1 done."),
+            Message { role: "assistant".into(), content: "Done.".into(), images: None, tool_calls: None, tool_name: None },
+            Message::user(CHECK_FAILED_NOTE),
+        ];
+        assert_eq!(turn_start(&history), 1);
+        assert_eq!(build_files_changed(&history), ["Cargo.toml"]);
+        assert_eq!(prior_failures(&history, &bad), 1);
+        assert_eq!(plan_updates(&history), 1);
+        // Said by a person it is a message like any other (the same words, from the loop, are not).
+        history.push(Message::user("now something else"));
+        assert!(build_files_changed(&history).is_empty());
+        assert_eq!((prior_failures(&history, &bad), plan_updates(&history)), (0, 0));
+        // A turn that begins with nothing but the note has no user message before it to skip to.
+        assert_eq!(turn_start(&[Message::user(CHECK_FAILED_NOTE)]), 0);
     }
 
     #[test]

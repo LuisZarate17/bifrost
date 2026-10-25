@@ -118,6 +118,8 @@ pub fn scrollback(e: &Event, theme: &Theme, width: u16) -> Vec<Line<'static>> {
             .enumerate()
             .map(|(n, l)| if n == 0 { Line::from(vec![span("! ", theme.bold()), Span::raw(l.to_string())]) } else { plain(l) })
             .collect(),
+        // Marked like an error, and in words: the cross is not the only thing that says so.
+        Event::Unfinished(text) => vec![Line::from(vec![span("✗ ", theme.bold()), Span::raw(text.clone())])],
         Event::Stopped => vec![Line::from(span("· stopped", theme.dim()))],
         Event::Status(_) | Event::TurnEnd => Vec::new(),
     };
@@ -747,6 +749,18 @@ mod tests {
         assert_eq!(event_text(&Event::Stopped, &lit(), 80), ["· stopped"]);
         assert!(scrollback(&Event::Status("x".into()), &lit(), 80).is_empty());
         assert!(scrollback(&Event::TurnEnd, &lit(), 80).is_empty());
+    }
+
+    #[test]
+    fn a_turn_that_ended_with_its_work_not_done_says_so_in_words_after_a_bold_cross() {
+        let e = Event::Unfinished("the check failed — not done".into());
+        assert_eq!(event_text(&e, &lit(), 80), ["✗ the check failed — not done"]);
+        // Words, not just a mark, and the same with no color at all.
+        assert_eq!(event_text(&e, &mono(), 80), ["✗ the check failed — not done"]);
+        let lines = scrollback(&e, &mono(), 80);
+        assert!(lines[0].spans[0].style.add_modifier.contains(Modifier::BOLD), "the cross is bold, like an error's mark");
+        assert!(!colored(&shown(&lines, 80)));
+        assert_eq!(event_text(&e, &lit(), 12), ["✗ the check", "failed — not", "done"]);
     }
 
     #[test]

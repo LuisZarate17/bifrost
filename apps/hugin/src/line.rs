@@ -236,6 +236,7 @@ impl<W: Write> Ui for Line<W> {
             }
             Event::Answer(text) => self.say(&format!("{text}\n")),
             Event::Error(text) => self.say(&format!("! {text}\n")),
+            Event::Unfinished(text) => self.say(&format!("✗ {text}\n")),
             Event::Stopped => self.say("· stopped\n"),
             Event::TurnEnd => {}
         }

@@ -18,6 +18,7 @@ use bifrost_core::scratch::{self, Git};
 use bifrost_core::{check, edit, tools};
 use serde_json::json;
 
+use crate::bent::Bent;
 use crate::print::*;
 
 // ── a place to work ─────────────────────────────────────────────────────────
@@ -321,8 +322,8 @@ fn an_edit_and_an_answer_make_a_patch_and_the_users_folder_never_sees_it() {
     let (report, log) = w.run(&repo, None, 60, vec![Step::Edit("a.txt", "two", "2"), Step::Answer("Changed two to 2.")]);
 
     assert_eq!(report.answer, "Changed two to 2.");
-    assert!(report.error.is_none() && !report.stopped && !report.failed && !report.partial(), "{report:?}");
-    assert_eq!(report.exit_code(), 0);
+    assert!(report.error.is_none() && !report.stopped && !report.errored && !report.partial(), "{report:?}");
+    assert_eq!((report.status(), report.exit_code()), (Status::Done, 0), "no check was asked for, and nothing went wrong");
     assert_eq!(names(&log), ["edit_file"]);
     assert_eq!(report.model, "scripted-model");
     let patch = String::from_utf8(report.patch.clone()).unwrap();
@@ -448,13 +449,439 @@ fn a_failing_check_is_reported_with_its_code_and_the_end_of_its_output() {
     repo.commit();
     let failing = vec!["cmd".to_string(), "/c".to_string(), "echo boom: it broke & exit 3".to_string()];
     let (report, _) = w.run(&repo, Some(failing), 60, vec![Step::Edit("a.txt", "one", "1"), Step::Answer("Done.")]);
-    assert_eq!(report.exit_code(), 0, "a check that fails is a result, not a failed run");
+    assert_eq!((report.status(), report.exit_code()), (Status::Failed, 3), "the model said done; the check says not");
+    assert!(!report.errored, "a check that fails is a result, not a run that could not happen");
     let c = report.check.clone().unwrap();
     assert!((c.passed, c.exit_code) == (Some(false), Some(3)), "{c:?}");
     assert!(c.output_tail.contains("boom: it broke"), "{c:?}");
     let text = report.to_text();
     assert!(text.contains("FAILED (exit 3,") && text.contains("check output (the end):\nboom: it broke"), "{text}");
     assert_eq!(report.to_json()["check"]["passed"], false);
+    assert_eq!(report.to_json()["status"], "failed");
+}
+
+/// **A model that says "done" over a failing check is not believed.** It is pushed back three
+/// times; when it still ends the turn, the run is failed, whatever it says: exit 3, no command to
+/// apply, a draft patch to read.
+#[test]
+fn a_model_that_says_done_over_a_failing_check_is_pushed_back_and_the_run_is_failed() {
+    if !cfg!(windows) || !have_git() {
+        return;
+    }
+    let w = World::new("pushback");
+    let repo = w.repo("proj");
+    repo.write("a.txt", "one\n");
+    repo.commit();
+    let failing = vec!["cmd".to_string(), "/c".to_string(), "echo boom: it broke & exit 3".to_string()];
+    let steps = vec![
+        Step::Edit("a.txt", "one", "1"),
+        Step::Check,
+        Step::Answer("Done, it works."),
+        Step::Answer("Done, really."),
+        Step::Answer("Done, I tell you."),
+        Step::Answer("I could not make the check pass."),
+    ];
+    let (report, log) = w.run(&repo, Some(failing), 60, steps);
+    assert_eq!(names(&log), ["edit_file", "run_check"]);
+    // The words the run ended on, after three pushes: not the first "done".
+    assert_eq!(report.answer, "I could not make the check pass.");
+    assert_eq!((report.status(), report.exit_code()), (Status::Failed, 3), "{report:?}");
+    let c = report.check.clone().unwrap();
+    assert!((c.reused, c.passed, c.exit_code) == (true, Some(false), Some(3)), "the model's own last run is the final one: {c:?}");
+    let text = report.to_text();
+    assert!(text.starts_with("hugin: FAILED — the check failed; do not apply this patch as it is.\n"), "{text}");
+    assert!(text.contains("check output (the end):\nboom: it broke"), "{text}");
+    assert!(text.contains("draft patch (do not apply as is): ") && !text.contains("to apply:"), "{text}");
+    let json = report.to_json();
+    assert!(json["status"] == "failed" && json["apply"].is_null() && json["patch_file"].is_string(), "{json}");
+    assert_eq!(w.runs_left(), 0);
+}
+
+/// A model that is pushed back over a failing check and then fixes the code gets its answer
+/// taken, and the run is done.
+#[test]
+fn a_model_pushed_back_over_a_failing_check_that_then_fixes_it_ends_done() {
+    if !cfg!(windows) || !have_git() {
+        return;
+    }
+    let w = World::new("fixed");
+    let repo = w.repo("proj");
+    repo.write("a.txt", "one\n");
+    repo.commit();
+    // Passes when a.txt says "fixed".
+    let check = vec!["findstr".to_string(), "/c:fixed".to_string(), "a.txt".to_string()];
+    let steps = vec![
+        Step::Edit("a.txt", "one", "two"),
+        Step::Check,
+        Step::Answer("Done."),
+        Step::Edit("a.txt", "two", "fixed"),
+        Step::Check,
+        Step::Answer("Now it is fixed."),
+    ];
+    let (report, log) = w.run(&repo, Some(check), 60, steps);
+    assert_eq!(names(&log), ["edit_file", "run_check", "edit_file", "run_check"]);
+    assert_eq!(report.answer, "Now it is fixed.");
+    assert_eq!((report.status(), report.exit_code()), (Status::Done, 0), "{report:?}");
+    let c = report.check.clone().unwrap();
+    assert!((c.reused, c.passed) == (true, Some(true)), "{c:?}");
+    assert!(report.to_text().starts_with("hugin: done in "), "{}", report.to_text());
+    assert!(report.apply_command().is_some());
+}
+
+// ── tests that were changed ─────────────────────────────────────────────────
+
+/// A repository with code and the test beside it, which the scripted model can bend.
+fn code_and_test(w: &World) -> Repo {
+    let repo = w.repo("proj");
+    repo.write("src/lib.rs", "pub fn f() -> i32 {\n    1\n}\n");
+    repo.write("tests/it.rs", "#[test]\nfn f_is_one() {\n    assert_eq!(f(), 1);\n}\n");
+    repo.commit();
+    repo
+}
+
+/// The model changes the code, and the test to fit it: then it says it is done.
+fn bend_the_test() -> Vec<Step> {
+    vec![
+        Step::Edit("src/lib.rs", "    1\n", "    2\n"),
+        Step::Edit("tests/it.rs", "assert_eq!(f(), 1);", "assert_eq!(f(), 2);"),
+        Step::Answer("Changed f to return 2, and the test to expect it."),
+    ]
+}
+
+/// What each request of a scripted run was sent last: the role and the words.
+type Heard = Arc<Mutex<Vec<(String, String)>>>;
+
+/// `execute` over a script, writing down what each request to the model was sent last.
+fn run_noting(w: &World, repo: &Repo, check: Option<Vec<String>>, steps: Vec<Step>) -> (Report, Log, Heard) {
+    let (wire, log) = script(steps);
+    let sent = Heard::default();
+    let noted = sent.clone();
+    let noting = move |ctx: &Ctx| {
+        let wired = wire(ctx);
+        let mut inner = wired.ask;
+        let ask = move |messages: &[Message], calibration: Option<Calibration>, closing: bool| {
+            let last = messages.last().map(|m| (m.role.clone(), m.content.clone())).unwrap_or_default();
+            noted.lock().unwrap().push(last);
+            inner(messages, calibration, closing)
+        };
+        Wired { ask: Box::new(ask), run: wired.run }
+    };
+    let report = execute(&w.job(&repo.root, check, 60), &w.git, "scripted-model", noting).report;
+    (report, log, sent)
+}
+
+/// **A test changed to fit the code is put to the model once**, in the conversation it is in: the
+/// answer it gave, then the files and lines. It puts the test back, and the patch has no test in it.
+#[test]
+fn a_model_that_bends_a_test_is_told_once_and_puts_it_back() {
+    if !have_git() {
+        return;
+    }
+    let w = World::new("bent-restored");
+    let repo = code_and_test(&w);
+    let mut steps = bend_the_test();
+    steps.push(Step::Edit("tests/it.rs", "assert_eq!(f(), 2);", "assert_eq!(f(), 1);"));
+    steps.push(Step::Answer("Put the test back as it was."));
+    let (report, log, sent) = run_noting(&w, &repo, None, steps);
+
+    assert_eq!(names(&log), ["edit_file", "edit_file", "edit_file"]);
+    // The request after the answer was sent the answer's reply: the follow-up, a user's message.
+    let sent = sent.lock().unwrap().clone();
+    let (role, said) = sent.iter().find(|(_, said)| said.starts_with("Your patch changes existing tests:")).expect("the follow-up was sent");
+    assert_eq!(role, "user");
+    assert!(said.contains("tests/it.rs (-1):\n    assert_eq!(f(), 1);\n"), "{said}");
+    assert!(said.ends_with("The task did not ask to change them. Restore them exactly unless the task requires the change, then run the check again."), "{said}");
+    let at = sent.iter().position(|(_, s)| s.starts_with("Your patch changes")).unwrap();
+    assert_eq!(sent.len(), at + 2, "the follow-up, and the request after the edit that puts the test back");
+
+    // The test is as it was; the code change is the whole patch; nothing to warn about.
+    assert_eq!(report.answer, "Put the test back as it was.");
+    assert!(report.bent.is_empty(), "{:?}", report.bent);
+    let paths: Vec<&str> = report.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["src/lib.rs"]);
+    let json = report.to_json();
+    assert_eq!(json["warnings"], json!([]));
+    assert!(!report.to_text().contains("WARNING"));
+    assert_eq!(w.runs_left(), 0);
+}
+
+/// **A test that stays changed is not done**: the check passed, and the status is `review`, with
+/// exit code 3, no command to apply and the patch file as a draft to read. The files are in the
+/// JSON's `warnings`, right after the status.
+#[test]
+fn a_test_that_stays_changed_after_the_follow_up_is_for_review_when_the_check_passed() {
+    if !cfg!(windows) || !have_git() {
+        return;
+    }
+    let w = World::new("bent-kept");
+    let repo = code_and_test(&w);
+    let counter = w.dir.join("count.txt");
+    let mut steps = bend_the_test();
+    steps.push(Step::Answer("The task needs the test to say 2: f was changed on purpose."));
+    let (report, log, sent) = run_noting(&w, &repo, Some(counting(&counter)), steps);
+
+    // Told once; it kept the change; the follow-up is not repeated (the script holds no more steps).
+    assert_eq!(sent.lock().unwrap().iter().filter(|(_, said)| said.starts_with("Your patch changes")).count(), 1);
+    assert_eq!(names(&log), ["edit_file", "edit_file"]);
+    assert_eq!(report.answer, "The task needs the test to say 2: f was changed on purpose.");
+    assert_eq!(report.bent.len(), 1);
+    assert_eq!((report.bent[0].path.as_str(), report.bent[0].removed.len()), ("tests/it.rs", 1));
+
+    // The check passed (it only counts its runs); the run is not done all the same.
+    assert_eq!(report.check.as_ref().map(|c| c.passed), Some(Some(true)));
+    assert_eq!((report.status(), report.exit_code()), (Status::Review, 3));
+    assert!(report.apply_command().is_none(), "no way to apply it is offered");
+    let json = report.to_json();
+    assert_eq!((json["status"].as_str(), json["apply"].is_null()), (Some("review"), true), "{json}");
+    assert_eq!(json["warnings"], json!(["changes existing tests: tests/it.rs (-1)"]));
+    assert!(json["patch_file"].is_string(), "the draft is kept");
+    let text = report.to_text();
+    assert_eq!(
+        text.lines().next(),
+        Some("hugin: REVIEW — the check passed, but the patch changes existing tests (tests/it.rs); not done until someone confirms the change was asked for.")
+    );
+    assert!(text.contains("draft patch (do not apply as is): ") && !text.contains("to apply:"), "{text}");
+    assert!(text.contains("the existing tests the patch changes:\ntests/it.rs (-1):\n    assert_eq!(f(), 1);\n"), "{text}");
+    // The status and the warnings come first in the JSON text, and the record kept beside the patch has them.
+    assert!(report.to_json_string().starts_with("{\"status\":\"review\",\"warnings\":[\"changes existing tests: tests/it.rs (-1)\"],\"error\":null,"));
+    let record: serde_json::Value = serde_json::from_slice(&std::fs::read(report.patch_file.clone().unwrap().with_extension("json")).unwrap()).unwrap();
+    assert_eq!((record["status"].as_str(), record["apply"].is_null()), (Some("review"), true));
+    assert_eq!(record["warnings"], json["warnings"]);
+}
+
+/// **A check that fails is the status all the same**: the test changes are named above it, and
+/// the run is failed, not for review.
+#[test]
+fn a_failed_check_wins_over_a_changed_test() {
+    if !cfg!(windows) || !have_git() {
+        return;
+    }
+    let w = World::new("bent-failed");
+    let repo = code_and_test(&w);
+    let failing = vec!["cmd".to_string(), "/c".to_string(), "echo boom & exit 3".to_string()];
+    let mut steps = bend_the_test();
+    steps.push(Step::Answer("The task needs the test to say 2."));
+    let (report, _, _) = run_noting(&w, &repo, Some(failing), steps);
+    assert_eq!(report.bent.len(), 1);
+    assert_eq!((report.status(), report.exit_code()), (Status::Failed, 3));
+    assert!(report.apply_command().is_none());
+    let text = report.to_text();
+    assert_eq!(
+        text.lines().take(2).collect::<Vec<_>>(),
+        [
+            "hugin: WARNING — the patch changes existing tests (tests/it.rs); check they were not bent to fit.",
+            "hugin: FAILED — the check failed; do not apply this patch as it is."
+        ]
+    );
+    // The failure leads in the JSON, and the changed tests are still named.
+    let json = report.to_json();
+    assert_eq!((json["status"].as_str(), json["warnings"].as_array().map(Vec::len)), (Some("failed"), Some(1)));
+}
+
+/// A patch that changes no existing test is not asked about: one turn, and no warning.
+#[test]
+fn a_patch_that_changes_no_existing_test_is_not_asked_about() {
+    if !have_git() {
+        return;
+    }
+    let w = World::new("bent-none");
+    let repo = code_and_test(&w);
+    // The model changes the code, and adds a test of its own beside the one that was there.
+    let steps = vec![
+        Step::Edit("src/lib.rs", "    1\n", "    1 + 0\n"),
+        Step::Edit("tests/it.rs", "    assert_eq!(f(), 1);\n}\n", "    assert_eq!(f(), 1);\n}\n\n#[test]\nfn f_is_still_one() {\n    assert_eq!(f(), 1);\n}\n"),
+        Step::Answer("Done."),
+    ];
+    let (report, log, sent) = run_noting(&w, &repo, None, steps);
+    assert_eq!(names(&log), ["edit_file", "edit_file"]);
+    assert_eq!(sent.lock().unwrap().len(), 3, "three requests and no follow-up");
+    assert!(report.bent.is_empty() && report.to_json()["warnings"] == json!([]), "{:?}", report.bent);
+    assert!(report.to_text().starts_with("hugin: done in "), "{}", report.to_text());
+}
+
+/// **The time is what limits the follow-up**: with a sixth of the run left it is sent; with less
+/// it is not, and the warning is there all the same.
+#[test]
+fn the_follow_up_is_sent_only_while_a_sixth_of_the_time_is_left() {
+    if !have_git() {
+        return;
+    }
+    let w = World::new("bent-time");
+    let repo = code_and_test(&w);
+    let mut copy = scratch::Scratch::of_in(&w.git, &w.work(), &repo.root).unwrap();
+    // The model's change, made straight to the copy.
+    let test = copy.folder().join("tests").join("it.rs");
+    std::fs::write(&test, "#[test]\nfn f_is_one() {\n    assert_eq!(f(), 2);\n}\n").unwrap();
+    let total = Duration::from_secs(60);
+    let told = bent_follow_up(&mut copy, Instant::now() + Duration::from_secs(11), total);
+    assert!(told.is_some_and(|t| t.starts_with("Your patch changes existing tests:\ntests/it.rs (-1):")), "11 s of 60 is more than a sixth");
+    assert_eq!(bent_follow_up(&mut copy, Instant::now() + Duration::from_secs(9), total), None, "9 s of 60 is less");
+    assert_eq!(bent_follow_up(&mut copy, Instant::now(), total), None, "no time at all");
+    // Put back as it was, there is nothing to ask about, whatever the time.
+    std::fs::write(&test, "#[test]\nfn f_is_one() {\n    assert_eq!(f(), 1);\n}\n").unwrap();
+    assert_eq!(bent_follow_up(&mut copy, Instant::now() + Duration::from_secs(50), total), None);
+}
+
+/// Review does not depend on there having been a turn that ended by itself, or time to ask: a
+/// turn stopped at the deadline is not asked, and its patch is still for review — with no check,
+/// the first line does not claim that one passed.
+#[test]
+fn a_turn_stopped_on_time_is_not_asked_and_its_changed_test_is_still_for_review() {
+    if !have_git() {
+        return;
+    }
+    let w = World::new("bent-stopped");
+    let repo = code_and_test(&w);
+    let (wire, log) = script(vec![Step::Edit("tests/it.rs", "assert_eq!(f(), 1);", "assert_eq!(f(), 2);"), Step::Sleep(30)]);
+    let report = execute(&w.job(&repo.root, None, 5), &w.git, "scripted-model", wire).report;
+    assert_eq!(names(&log), ["edit_file"], "and no follow-up: the script has nothing for one");
+    assert!(report.stopped, "{report:?}");
+    assert_eq!(report.bent.len(), 1, "{report:?}");
+    assert_eq!((report.status(), report.exit_code()), (Status::Review, 3));
+    let text = report.to_text();
+    assert_eq!(
+        text.lines().next(),
+        Some("hugin: REVIEW — the patch changes existing tests (tests/it.rs); not done until someone confirms the change was asked for.")
+    );
+    // It was also stopped, and that is said below.
+    assert!(text.contains("the turn was also cut short:\n  stopped at the 5 s time limit"), "{text}");
+    assert!(report.to_json()["partial"] == true && report.apply_command().is_none());
+}
+
+// ── what the report says of them ────────────────────────────────────────────
+
+fn bent_report() -> Report {
+    Report { bent: vec![Bent { path: "tests/a.rs".into(), removed: vec!["    assert_eq!(a(), 1);".into(); 3] }], ..complete() }
+}
+
+/// **The first line, the layout and the way to apply**: a changed test is for review.
+#[test]
+fn a_changed_test_is_for_review_with_the_files_the_draft_patch_and_no_command_to_apply() {
+    let report = bent_report();
+    assert_eq!((report.status(), report.exit_code()), (Status::Review, 3));
+    assert!(report.apply_command().is_none());
+    assert_eq!(
+        report.to_text(),
+        "hugin: REVIEW — the check passed, but the patch changes existing tests (tests/a.rs); not done until someone confirms the change was asked for.\n\
+         \n\
+         the existing tests the patch changes:\n\
+         tests/a.rs (-3):\n    assert_eq!(a(), 1);\n    assert_eq!(a(), 1);\n    assert_eq!(a(), 1);\n\
+         \n\
+         The model's own words (it may say the change was needed; confirm that it was):\n\
+         Done.\n\
+         \n\
+         check: `cargo test -p x` passed (exit 0, 12.5 s, the model's own last run, with nothing edited after it)\n\
+         \n\
+         not carried into the copy:\n  big.bin (over 10 MB)\n\
+         \n\
+         draft patch (do not apply as is): C:\\t\\hugin-p\\patches\\p.patch\n\
+         \n\
+         --- patch: 1 file changed, +1 -1 ---\n\
+         modified x.rs  +1 -1  [by an edit]\n\
+         \n\
+         diff --git a/x.rs b/x.rs\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-a\n+b\n"
+    );
+    // Many files: the first few are named, and how many more.
+    let many = Report { bent: (0..6).map(|n| Bent { path: format!("t{n}.rs"), removed: vec!["x".into()] }).collect(), ..complete() };
+    assert!(
+        many.to_text().starts_with("hugin: REVIEW — the check passed, but the patch changes existing tests (t0.rs, t1.rs, t2.rs, t3.rs, and 2 more); not done"),
+        "{}",
+        many.to_text()
+    );
+}
+
+/// The line claims a passing check only when there was one.
+#[test]
+fn the_review_line_does_not_say_the_check_passed_when_there_was_none_or_it_gave_no_verdict() {
+    let first = |report: Report| report.to_text().lines().next().unwrap().to_string();
+    let none = Report { check: None, ..bent_report() };
+    let timed_out = Report { check: ending(Some(false), None, |c| c.timed_out = true).check, ..bent_report() };
+    for report in [none, timed_out] {
+        assert_eq!(report.status(), Status::Review);
+        assert_eq!(
+            first(report),
+            "hugin: REVIEW — the patch changes existing tests (tests/a.rs); not done until someone confirms the change was asked for."
+        );
+    }
+}
+
+#[test]
+fn a_failed_check_leads_over_a_changed_test_in_the_text_and_the_status() {
+    let failed = Report { bent: bent_report().bent, ..failed_check() };
+    assert_eq!((failed.status(), failed.exit_code()), (Status::Failed, 3));
+    let text = failed.to_text();
+    assert_eq!(
+        text.lines().take(2).collect::<Vec<_>>(),
+        [
+            "hugin: WARNING — the patch changes existing tests (tests/a.rs); check they were not bent to fit.",
+            "hugin: FAILED — the check failed; do not apply this patch as it is."
+        ]
+    );
+    assert!(!text.contains("to apply:") && text.contains("draft patch (do not apply as is):"), "{text}");
+}
+
+#[test]
+fn a_changed_test_beats_a_run_cut_short_and_an_unverified_check_but_not_an_error() {
+    let cut = Report { stopped: true, answer: String::new(), ..bent_report() };
+    assert_eq!((cut.status(), cut.exit_code()), (Status::Review, 3));
+    let unverified = Report { check: ending(Some(false), None, |c| c.timed_out = true).check, ..bent_report() };
+    assert_eq!(unverified.status(), Status::Review);
+    let no_proposal = Report { errored: true, error: Some("could not start Ollama".into()), ..bent_report() };
+    assert_eq!((no_proposal.status(), no_proposal.exit_code()), (Status::Error, 1));
+}
+
+#[test]
+fn the_warnings_are_in_the_json_right_after_the_status() {
+    let json = bent_report().to_json();
+    assert_eq!(json["status"], "review");
+    assert!(json["apply"].is_null());
+    assert_eq!(json["warnings"], json!(["changes existing tests: tests/a.rs (-3)"]));
+    assert!(bent_report().to_json_string().starts_with("{\"status\":\"review\",\"warnings\":[\"changes existing tests: tests/a.rs (-3)\"],\"error\":null,"));
+    let two = Report {
+        bent: vec![
+            Bent { path: "tests/a.rs".into(), removed: vec!["x".into()] },
+            Bent { path: "web/app.test.ts".into(), removed: vec!["x".into(), "y".into()] },
+        ],
+        ..complete()
+    };
+    assert_eq!(
+        two.to_json()["warnings"],
+        json!(["changes existing tests: tests/a.rs (-1)", "changes existing tests: web/app.test.ts (-2)"])
+    );
+    assert!(two.to_text().starts_with("hugin: REVIEW — the check passed, but the patch changes existing tests (tests/a.rs, web/app.test.ts);"));
+}
+
+/// **A `cargo test` that exits 0 with a test program cut short has not passed**: the run is failed,
+/// and the report says why. `cargo.cmd` in the repository stands in for cargo, printing what a run
+/// with an early exit printed: the first test program begins, then another begins in its place.
+#[test]
+fn a_cargo_test_that_exited_0_with_a_test_program_cut_short_is_a_failed_run() {
+    if !cfg!(windows) || !have_git() {
+        return;
+    }
+    let w = World::new("cutshort");
+    let repo = w.repo("proj");
+    repo.write("cargo.cmd", "@echo off\r\ntype transcript.txt\r\nexit /b 0\r\n");
+    repo.write(
+        "transcript.txt",
+        "     Running unittests src\\lib.rs (target\\debug\\deps\\sample-1.exe)\n\nrunning 3 tests\n\
+         test tests::adds ... ok\ntest tests::zz_exits ...      Running tests\\it.rs (target\\debug\\deps\\it-1.exe)\n\n\
+         running 1 test\ntest integration_adds ... ok\n\n\
+         test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n",
+    );
+    repo.write("a.txt", "one\n");
+    repo.commit();
+    let steps = vec![Step::Edit("a.txt", "one", "1"), Step::Answer("Done. All the tests pass.")];
+    let (report, _) = w.run(&repo, Some(argv(&[r".\cargo.cmd", "test"])), 60, steps);
+
+    let c = report.check.clone().unwrap();
+    assert!((c.passed, c.exit_code, c.timed_out, c.blocked.is_none()) == (Some(false), Some(0), false, true), "{c:?}");
+    assert!(c.output_tail.starts_with("A test program ended without reporting its result"), "{}", c.output_tail);
+    assert_eq!((report.status(), report.exit_code()), (Status::Failed, 3), "{report:?}");
+    let text = report.to_text();
+    assert!(text.starts_with("hugin: FAILED — the check failed; do not apply this patch as it is.\n"), "{text}");
+    assert!(text.contains("FAILED (exit 0,") && text.contains("A test program ended without reporting its result"), "{text}");
+    assert!(report.apply_command().is_none());
 }
 
 /// A check runs the build files, and the warning about it is for a person: with a build file
@@ -480,7 +907,9 @@ fn a_changed_build_file_means_the_check_is_not_run_at_the_end() {
     assert!(c.passed.is_none() && c.not_run.as_deref().is_some_and(|w| w.contains("Cargo.toml")), "{c:?}");
     assert!(report.to_text().contains("was not run: the turn changed Cargo.toml"));
     assert_eq!(report.to_json()["check"]["not_run"], c.not_run.unwrap());
-    assert_eq!(report.exit_code(), 0);
+    // Nothing says the work is right, so it is not done: partial, and the first line says why.
+    assert_eq!((report.status(), report.exit_code()), (Status::Partial, 3));
+    assert!(report.to_text().starts_with("hugin: PARTIAL proposal. The check was not run: the turn changed Cargo.toml"), "{}", report.to_text());
 }
 
 /// What the check writes is in the patch, and said not to be the model's.
@@ -540,7 +969,8 @@ fn a_slow_model_is_stopped_on_time_and_the_run_says_so() {
     let took = started.elapsed();
     assert!(took < Duration::from_secs(8), "took {took:?}");
     assert!(report.seconds <= 5.2, "the whole run had 5 seconds, and took {} s", report.seconds);
-    assert!(report.stopped && report.partial() && report.exit_code() == 0, "{report:?}");
+    assert!(report.stopped && report.partial() && report.exit_code() == 3, "{report:?}");
+    assert_eq!(report.status(), Status::Partial);
     assert!(report.answer.is_empty());
     // What was done before the stop is not lost.
     assert_eq!(report.files.len(), 1, "{report:?}");
@@ -559,10 +989,11 @@ fn a_request_that_fails_before_any_reply_is_a_run_that_could_not_run() {
     repo.write("a.txt", "one\n");
     repo.commit();
     let (report, _) = w.run(&repo, None, 60, vec![Step::Fail("could not start Ollama: not installed")]);
-    assert!(report.failed && report.exit_code() == 1, "{report:?}");
+    assert!(report.errored && report.exit_code() == 1, "{report:?}");
     assert_eq!(report.error.as_deref(), Some("could not start Ollama: not installed"));
     let json = report.to_json();
     assert_eq!((json["error"].as_str(), json["partial"].as_bool()), (Some("could not start Ollama: not installed"), Some(true)));
+    assert_eq!((report.status(), json["status"].as_str()), (Status::Error, Some("error")));
     assert!(report.to_text().starts_with("hugin -p could not make a proposal: could not start Ollama"));
     assert_eq!(w.runs_left(), 0);
 }
@@ -577,7 +1008,7 @@ fn a_request_that_fails_after_an_edit_is_a_partial_proposal_with_its_patch() {
     repo.write("a.txt", "one\n");
     repo.commit();
     let (report, _) = w.run(&repo, None, 60, vec![Step::Edit("a.txt", "one", "1"), Step::Fail("POST /api/chat: connection refused")]);
-    assert!(!report.failed && report.partial() && report.exit_code() == 0, "{report:?}");
+    assert!(!report.errored && report.partial() && report.exit_code() == 3, "{report:?}");
     assert_eq!(report.error.as_deref(), Some("POST /api/chat: connection refused"));
     assert_eq!(report.files.len(), 1);
     assert!(report.to_text().starts_with("hugin: PARTIAL proposal. POST /api/chat: connection refused"));
@@ -593,7 +1024,7 @@ fn a_folder_that_is_not_in_git_is_said_in_words_and_nothing_is_made() {
     std::fs::create_dir_all(&plain).unwrap();
     let (wire, log) = script(vec![]);
     let report = execute(&w.job(&plain, None, 60), &w.git, "m", wire).report;
-    assert!(report.failed && report.exit_code() == 1);
+    assert!(report.errored && report.exit_code() == 1);
     assert!(report.error.as_deref().is_some_and(|e| e.contains("not in a git repository")), "{report:?}");
     assert!(names(&log).is_empty());
     assert_eq!(w.runs_left(), 0);
@@ -612,10 +1043,10 @@ fn one_run_at_a_time() {
     repo.commit();
     let held = scratch::Lock::take(&w.work()).unwrap();
     let (report, _) = w.run(&repo, None, 60, vec![Step::Answer("Done.")]);
-    assert!(report.failed && report.error.as_deref().is_some_and(|e| e.contains("already running")), "{report:?}");
+    assert!(report.errored && report.error.as_deref().is_some_and(|e| e.contains("already running")), "{report:?}");
     drop(held);
     let (report, _) = w.run(&repo, None, 60, vec![Step::Answer("Done.")]);
-    assert!(!report.failed, "{report:?}");
+    assert!(!report.errored, "{report:?}");
 }
 
 // ── the check's program ─────────────────────────────────────────────────────
@@ -692,7 +1123,7 @@ fn a_program_in_the_users_repository_is_refused_before_anything_is_run() {
     let before = scratch::fingerprints(&repo.root).unwrap();
     let theirs = repo.root.join("verify.cmd").to_string_lossy().into_owned();
     let (report, log) = w.run(&repo, Some(vec![theirs]), 60, vec![Step::Answer("Done.")]);
-    assert!(report.failed && report.exit_code() == 1, "{report:?}");
+    assert!(report.errored && report.exit_code() == 1, "{report:?}");
     assert!(report.error.as_deref().is_some_and(|e| e.contains("a file in your repository")), "{report:?}");
     assert!(names(&log).is_empty());
     assert_eq!(w.runs_left(), 0);
@@ -755,30 +1186,175 @@ fn complete() -> Report {
         seconds: 41.2,
         time: 540,
         error: None,
-        failed: false,
+        errored: false,
+        bent: Vec::new(),
     }
 }
 
 /// **The JSON, field for field and in order**: Claude Code reads these names, and reads the
-/// start of the output first. What matters is at the front — whether it is whole, the check, the
-/// files, how to apply — then the answer, and the patch text, which can be long, last.
+/// start of the output first. What matters is at the front — how it came out, whether it is whole,
+/// the check, the files, how to apply — then the answer, and the patch text, which can be long, last.
 #[test]
 fn the_json_has_exactly_these_fields_in_this_order() {
-    let want = r##"{"error":null,"partial":false,"stopped":false,"check":{"command":"cargo test -p x","passed":true,"exit_code":0,"timed_out":false,"blocked":false,"reused":true,"cut_short":false,"not_run":null,"seconds":12.5,"output_tail":""},"files":[{"path":"x.rs","status":"modified","by":"edit","added":1,"deleted":1}],"apply":"git -C \"C:\\work\\demo\" apply --whitespace=nowarn \"C:\\t\\hugin-p\\patches\\p.patch\"","patch_file":"C:\\t\\hugin-p\\patches\\p.patch","skipped":["big.bin (over 10 MB)"],"notes":[],"answer":"Done.","seconds":41.2,"model":"qwen3-coder:30b","folder":"C:\\work\\demo","repo_root":"C:\\work\\demo","base":"abc123","task":"do it","diff_lossy":false,"diff_omitted":false,"diff":"diff --git a/x.rs b/x.rs\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-a\n+b\n"}"##;
+    let want = r##"{"status":"done","warnings":[],"error":null,"partial":false,"stopped":false,"check":{"command":"cargo test -p x","passed":true,"exit_code":0,"timed_out":false,"blocked":false,"reused":true,"cut_short":false,"not_run":null,"seconds":12.5,"output_tail":""},"files":[{"path":"x.rs","status":"modified","by":"edit","added":1,"deleted":1}],"apply":"git -C \"C:\\work\\demo\" apply --whitespace=nowarn \"C:\\t\\hugin-p\\patches\\p.patch\"","patch_file":"C:\\t\\hugin-p\\patches\\p.patch","skipped":["big.bin (over 10 MB)"],"notes":[],"answer":"Done.","seconds":41.2,"model":"qwen3-coder:30b","folder":"C:\\work\\demo","repo_root":"C:\\work\\demo","base":"abc123","task":"do it","diff_lossy":false,"diff_omitted":false,"diff":"diff --git a/x.rs b/x.rs\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-a\n+b\n"}"##;
     assert_eq!(complete().to_json_string(), want);
 
     // With no check, no patch and an error: the same fields, null or empty where there is nothing.
-    let bare = Report { check: None, patch: Vec::new(), patch_file: None, files: Vec::new(), error: Some("x".into()), failed: true, ..complete() };
+    let bare = Report { check: None, patch: Vec::new(), patch_file: None, files: Vec::new(), error: Some("x".into()), errored: true, ..complete() };
     let text = bare.to_json_string();
     let at = |key: &str| text.find(&format!("\"{key}\":")).unwrap_or_else(|| panic!("{key} in {text}"));
-    let keys = ["error", "partial", "stopped", "check", "files", "apply", "patch_file", "skipped", "notes", "answer", "seconds", "model", "folder", "repo_root", "base", "task", "diff_lossy", "diff_omitted", "diff"];
+    let keys = ["status", "warnings", "error", "partial", "stopped", "check", "files", "apply", "patch_file", "skipped", "notes", "answer", "seconds", "model", "folder", "repo_root", "base", "task", "diff_lossy", "diff_omitted", "diff"];
     for pair in keys.windows(2) {
         assert!(at(pair[0]) < at(pair[1]), "{} comes before {}", pair[0], pair[1]);
     }
+    assert!(text.starts_with("{\"status\":\"error\","), "how it came out is the first field: {text}");
     assert!(text.ends_with("\"diff\":\"\"}"), "the patch text is the last field: {text}");
     let json = bare.to_json();
     assert!(json["check"].is_null() && json["patch_file"].is_null() && json["apply"].is_null());
     assert_eq!((json["error"].as_str(), json["partial"].as_bool()), (Some("x"), Some(true)));
+}
+
+/// A check with this ending, in the report that `complete()` is.
+fn ending(passed: Option<bool>, exit_code: Option<i32>, f: impl FnOnce(&mut CheckReport)) -> Report {
+    let mut check = CheckReport { passed, exit_code, ..complete().check.unwrap() };
+    f(&mut check);
+    Report { check: Some(check), ..complete() }
+}
+
+/// The check, failed with exit 101 and the end of its output.
+fn failed_check() -> Report {
+    ending(Some(false), Some(101), |c| {
+        c.reused = false;
+        c.output_tail = "error[E0308]: mismatched types\ntest result: FAILED. 0 passed; 1 failed".into();
+    })
+}
+
+/// **Each way a run can end has a status and an exit code**, and only done is 0. The first that
+/// holds wins: no proposal, then a failed check, then a changed test, then cut short or unverified,
+/// then done.
+#[test]
+fn every_way_a_run_ends_has_a_status_and_an_exit_code() {
+    let cases: Vec<(&str, Report, Status, u8)> = vec![
+        ("done, check passed", complete(), Status::Done, 0),
+        ("done, no check asked for", Report { check: None, ..complete() }, Status::Done, 0),
+        ("done, nothing changed", Report { patch: Vec::new(), patch_file: None, files: Vec::new(), ..complete() }, Status::Done, 0),
+        ("the check failed", failed_check(), Status::Failed, 3),
+        ("the model's own last check failed, reused", ending(Some(false), Some(1), |c| c.reused = true), Status::Failed, 3),
+        ("the check failed, and no exit code", ending(Some(false), None, |_| {}), Status::Failed, 3),
+        ("the check failed, and the time ran out", Report { stopped: true, ..failed_check() }, Status::Failed, 3),
+        ("the check failed, and no answer", Report { answer: String::new(), ..failed_check() }, Status::Failed, 3),
+        ("the check failed, and a test was changed", Report { bent: bent_report().bent, ..failed_check() }, Status::Failed, 3),
+        ("the check passed, and a test was changed", bent_report(), Status::Review, 3),
+        ("no check, and a test was changed", Report { check: None, ..bent_report() }, Status::Review, 3),
+        ("a test was changed, and the time ran out", Report { stopped: true, ..bent_report() }, Status::Review, 3),
+        ("a test was changed, and the check gave no verdict", Report { check: ending(Some(false), None, |c| c.timed_out = true).check, ..bent_report() }, Status::Review, 3),
+        ("stopped by the time limit", Report { stopped: true, ..complete() }, Status::Partial, 3),
+        ("stopped at a bound", Report { notes: vec!["Stopped after 10 tool rounds.".into()], ..complete() }, Status::Partial, 3),
+        ("ended by an error after some work", Report { error: Some("connection refused".into()), ..complete() }, Status::Partial, 3),
+        ("no answer", Report { answer: String::new(), ..complete() }, Status::Partial, 3),
+        ("the check timed out", ending(Some(false), None, |c| c.timed_out = true), Status::Partial, 3),
+        ("the check ran out of the run's time", ending(Some(false), None, |c| (c.timed_out, c.cut_short) = (true, true)), Status::Partial, 3),
+        ("windows blocked the check", ending(Some(false), Some(1), |c| c.blocked = Some("a build script".into())), Status::Partial, 3),
+        ("the check was not run", ending(None, None, |c| c.not_run = Some("no time was left for it".into())), Status::Partial, 3),
+        ("no proposal", Report { errored: true, error: Some("could not start Ollama".into()), ..complete() }, Status::Error, 1),
+        ("no proposal, whatever its check said", Report { errored: true, ..failed_check() }, Status::Error, 1),
+        ("no proposal, whatever it changed", Report { errored: true, ..bent_report() }, Status::Error, 1),
+    ];
+    for (what, report, status, code) in cases {
+        assert_eq!((report.status(), report.exit_code()), (status, code), "{what}");
+        assert_eq!(report.to_json()["status"], serde_json::to_value(status).unwrap(), "{what}");
+    }
+    let all = [Status::Done, Status::Failed, Status::Review, Status::Partial, Status::Error];
+    let words: Vec<_> = all.iter().map(|s| serde_json::to_value(s).unwrap()).collect();
+    assert_eq!(words, ["done", "failed", "review", "partial", "error"]);
+}
+
+/// **A failed check: the JSON says failed first, and offers no way to apply.** The patch file is
+/// still named, to read; `apply` is null; the check says why, and the answer is still there.
+#[test]
+fn a_failed_check_is_failed_in_the_json_with_no_apply_command() {
+    let report = failed_check();
+    let text = report.to_json_string();
+    assert!(text.starts_with("{\"status\":\"failed\",\"warnings\":[],\"error\":null,\"partial\":false,"), "{text}");
+    let json = report.to_json();
+    assert_eq!((json["status"].as_str(), json["apply"].is_null()), (Some("failed"), true), "{json}");
+    assert_eq!(json["patch_file"], r"C:\t\hugin-p\patches\p.patch");
+    assert_eq!((json["check"]["passed"].as_bool(), json["check"]["exit_code"].as_i64()), (Some(false), Some(101)));
+    assert!(json["check"]["output_tail"].as_str().unwrap().contains("mismatched types"));
+    assert_eq!(json["answer"], "Done.", "what the model said is kept, whatever the check says");
+    assert!(report.apply_command().is_none());
+    // A check that passed has the command, and so does a run that was only cut short.
+    assert!(complete().to_json()["apply"].is_string());
+    assert!(Report { stopped: true, ..complete() }.to_json()["apply"].is_string());
+    // In the text too, not only the value: the record kept beside the patch file is this string.
+    assert!(text.contains("\"apply\":null"), "{text}");
+}
+
+/// **A failed check: the text starts with it.** The first line says not to apply the patch, the
+/// check and the end of its output come next, the model's words follow labelled as what they are,
+/// and the patch file is offered as a draft — never as a command to apply.
+#[test]
+fn a_failed_check_leads_the_text_and_offers_a_draft_patch_not_a_command() {
+    let text = failed_check().to_text();
+    assert_eq!(
+        text,
+        "hugin: FAILED — the check failed; do not apply this patch as it is.\n\
+         \n\
+         check: `cargo test -p x` FAILED (exit 101, 12.5 s)\n\
+         check output (the end):\n\
+         error[E0308]: mismatched types\n\
+         test result: FAILED. 0 passed; 1 failed\n\
+         \n\
+         The model's own last words (it can say the work is done when its check says it is not):\n\
+         Done.\n\
+         \n\
+         not carried into the copy:\n  big.bin (over 10 MB)\n\
+         \n\
+         draft patch (do not apply as is): C:\\t\\hugin-p\\patches\\p.patch\n\
+         \n\
+         --- patch: 1 file changed, +1 -1 ---\n\
+         modified x.rs  +1 -1  [by an edit]\n\
+         \n\
+         diff --git a/x.rs b/x.rs\n--- a/x.rs\n+++ b/x.rs\n@@ -1 +1 @@\n-a\n+b\n"
+    );
+    assert!(!text.contains("to apply:") && !text.contains("git -C"), "no way to apply is offered: {text}");
+
+    // Also cut short: the first line is still the check, and the rest is said below it.
+    let stopped = Report { stopped: true, notes: vec!["Stopped after 10 tool rounds.".into()], error: Some("connection refused".into()), ..failed_check() }.to_text();
+    assert!(stopped.starts_with("hugin: FAILED — the check failed; do not apply this patch as it is.\n"), "{stopped}");
+    assert!(
+        stopped.contains("the turn was also cut short:\n  stopped at the 540 s time limit (1 file changed by then)\n  ended with an error: connection refused\n  Stopped after 10 tool rounds.\n"),
+        "{stopped}"
+    );
+    assert!(!stopped.contains("to apply:"));
+    // No answer: nothing to label. No patch file: no draft line.
+    let bare = Report { answer: String::new(), patch: Vec::new(), patch_file: None, files: Vec::new(), skipped: Vec::new(), ..failed_check() }.to_text();
+    assert!(!bare.contains("last words") && !bare.contains("draft patch") && bare.contains("No files were changed."), "{bare}");
+}
+
+/// A run that is only cut short, or whose check gave no verdict, is partial: its first line says
+/// why, and it still offers the command to apply, with the word that it is not done.
+#[test]
+fn a_partial_run_says_why_on_its_first_line_and_still_offers_the_patch() {
+    let why = |report: Report| report.to_text().lines().next().unwrap().to_string();
+    let timed_out = ending(Some(false), None, |c| {
+        c.timed_out = true;
+        c.seconds = 85.0;
+    });
+    assert_eq!(why(timed_out.clone()), "hugin: PARTIAL proposal. The check timed out after 85 s (1 file changed, 41 s).");
+    let cut_short = ending(Some(false), None, |c| (c.timed_out, c.cut_short, c.seconds) = (true, true, 4.2));
+    assert_eq!(why(cut_short), "hugin: PARTIAL proposal. The check did not finish in the 4.2 s the run had left (1 file changed, 41 s).");
+    let blocked = ending(Some(false), Some(1), |c| c.blocked = Some("a program the build needed".into()));
+    assert_eq!(
+        why(blocked),
+        "hugin: PARTIAL proposal. Windows Smart App Control blocked a program the build needed, so the check could not finish (1 file changed, 41 s)."
+    );
+    // The error, a bound, or no answer come first when there are several reasons.
+    assert!(why(Report { error: Some("boom".into()), ..timed_out.clone() }).starts_with("hugin: PARTIAL proposal. boom ("));
+    assert!(why(Report { answer: String::new(), ..timed_out.clone() }).starts_with("hugin: PARTIAL proposal. the model gave no answer ("));
+    assert!(timed_out.to_text().contains("\nto apply: git -C "), "a partial proposal can still be applied after a read");
+    assert!(timed_out.to_json()["apply"].is_string());
+    assert_eq!(timed_out.to_json()["partial"], true);
 }
 
 #[test]
@@ -929,4 +1505,30 @@ fn the_note_for_claude_says_when_to_use_hugin_how_and_that_the_check_runs_what_h
         assert!(CLAUDE_NOTE.contains(must), "{must}");
     }
     assert!(CLAUDE_NOTE.starts_with("## Hugin"));
+}
+
+#[test]
+fn the_note_for_claude_says_that_exit_code_3_or_a_failed_review_or_partial_status_means_not_done() {
+    let note: String = CLAUDE_NOTE.split_whitespace().collect::<Vec<_>>().join(" ");
+    for must in [
+        "**Trust the check, not the answer.**",
+        "Exit code 3, or status failed, review or partial, means not done: don't apply it as it is — fix the patch or do the task yourself.",
+        "`review`, the check did not fail but the patch changes existing tests; for both, no apply command is given, only a draft patch to read",
+        "Exit code 0 is done, and 1 is a run that could not happen.",
+        "`failed`, the check failed; `review`, the check did not fail but the patch changes existing tests;",
+    ] {
+        assert!(note.contains(must), "{must}\n{note}");
+    }
+}
+
+#[test]
+fn the_note_for_claude_says_a_passing_check_can_still_be_wrong() {
+    let note: String = CLAUDE_NOTE.split_whitespace().collect::<Vec<_>>().join(" ");
+    for must in [
+        "**A passing check can still be wrong.** If the patch changes existing tests, which may have been bent to fit the code,",
+        "if they are still changed the status is `review` (the files are in `warnings`), and it is not done until you confirm the change was asked for",
+        "A `cargo test` run in which a test program stops early (a `process::exit`, an abort) counts as failed",
+    ] {
+        assert!(note.contains(must), "{must}\n{note}");
+    }
 }

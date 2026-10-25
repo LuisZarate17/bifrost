@@ -16,6 +16,23 @@
 //! makefile…; [`unattended::runs_code`]), and `--check` should be named only for a repository
 //! the user trusts. A program named with a folder in it is the copy's, never the user's.
 //!
+//! **A failed check is not "done".** A model that ran the check, saw it fail and says the work is
+//! done is pushed back to fix it (a few times, [`bifrost_core::agent::turn::MAX_PUSH_BACKS`]), and
+//! whatever it says in the end, the report says how the run came out: [`Status`] `done`, `failed`
+//! (the final check failed — no command to apply, only a draft patch to read), `review` (the
+//! patch changes existing tests — likewise), `partial` (cut short, or a check that gave no
+//! verdict) or `error` (no proposal). **The exit code is 0 for done, 3 for failed, review or
+//! partial — not done, so the patch is not to be applied as it is — 1 when there is no proposal,
+//! and 2 for a command line that could not be read.**
+//!
+//! **A passing check can still be wrong.** A model can make a check pass by changing the test that
+//! failed. A patch that changes existing tests ([`bent`]) is put to the model once, in the
+//! conversation it is in, while a sixth of the time is left. **If it still changes them, the run is
+//! not done**: the status is `review` until someone confirms the change was asked for (unless the
+//! check failed, which is the status then), and the files are in the report's `warnings`. A
+//! `cargo test` that exits 0 with a test program cut short has not passed either
+//! ([`bifrost_core::check::Outcome::passed`]).
+//!
 //! **It ends on time.** `--time` (nine minutes by default, under Claude Code's ten) is the
 //! whole run, counted from the start of the process, and every git command is given no more
 //! than what is left of it. The turn runs on a thread of its own, because a request to the
@@ -36,8 +53,8 @@
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::mpsc::RecvTimeoutError;
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use bifrost_core::agent::env::Env;
@@ -54,6 +71,7 @@ use bifrost_core::scratch::{self, Git, Lock, Scratch};
 use bifrost_core::config;
 use serde::Serialize;
 
+use crate::bent::{self, Bent};
 use crate::session::HUGIN_IDENTITY;
 use crate::start;
 use crate::stop::Stopper;
@@ -71,6 +89,14 @@ const MAX_SHOWN_TASK: usize = 1000;
 
 /// The most of a failed check's output that is kept.
 const OUTPUT_TAIL: usize = 4000;
+
+/// A patch that changes existing tests is put to the model once more, but only while a sixth of the
+/// run's time is left for it to answer: a follow-up cut short by the deadline costs more than the
+/// warning it was meant to spare.
+const FOLLOW_UP_SHARE: u32 = 6;
+
+/// The most rounds of that follow-up.
+const FOLLOW_UP_ROUNDS: usize = 10;
 
 // ── what was asked ──────────────────────────────────────────────────────────
 
@@ -146,7 +172,12 @@ pub fn parse_check(text: &str) -> Result<Vec<String>, String> {
 
 /// `--time`'s seconds, or [`DEFAULT_TIME`] when it is not given.
 pub fn parse_time(text: Option<&str>) -> Result<Duration, String> {
-    let Some(text) = text else { return Ok(Duration::from_secs(DEFAULT_TIME)) };
+    parse_time_or(text, DEFAULT_TIME)
+}
+
+/// [`parse_time`] with another default, in seconds: `--ask` gives itself five minutes.
+pub fn parse_time_or(text: Option<&str>, default: u64) -> Result<Duration, String> {
+    let Some(text) = text else { return Ok(Duration::from_secs(default)) };
     match text.trim().parse::<u64>() {
         Ok(secs) if secs > 0 => Ok(Duration::from_secs(secs)),
         _ => Err(format!("--time takes a whole number of seconds, 1 or more, not {text}")),
@@ -320,6 +351,9 @@ struct Unattended {
     shown: Vec<(String, Option<String>)>,
     /// The files the turn has changed so far, as the cards named them: what the rule is told.
     edited: Vec<String>,
+    /// What the next round is calibrated from: the last round that was measured, kept for a
+    /// follow-up in the same conversation.
+    calibration: Option<Calibration>,
 }
 
 impl Frontend for Unattended {
@@ -329,8 +363,11 @@ impl Frontend for Unattended {
 
     fn status(&mut self, _text: &str) {}
 
-    fn round(&mut self, _numbers: RoundNumbers) {
+    fn round(&mut self, numbers: RoundNumbers) {
         held(&self.progress).rounds += 1;
+        if numbers.prompt_eval_count > 0 {
+            self.calibration = Some(Calibration::new(numbers.prompt_chars, numbers.prompt_eval_count));
+        }
     }
 
     fn answer(&mut self, content: &str, _prompt_eval_count: u32, _eval_count: u32) {
@@ -363,6 +400,13 @@ impl Frontend for Unattended {
     }
 
     fn save(&mut self) {}
+
+    /// **A model that says it is done after its check failed is not believed**: the loop pushes
+    /// it back to fix the code (a few times), and the report says what the check came to however
+    /// the turn ends.
+    fn insist_on_checks(&self) -> bool {
+        true
+    }
 }
 
 // ── a run ───────────────────────────────────────────────────────────────────
@@ -426,6 +470,27 @@ pub struct CheckReport {
     pub not_run: Option<String>,
 }
 
+/// How a run came out, which is the first thing the report says. **Only `Done` is done**: any
+/// other status means the patch is not to be applied as it is — see [`Report::exit_code`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Status {
+    /// The turn ended by itself, and the check passed — or none was asked for or set.
+    Done,
+    /// The check ran and failed. The model's answer may say the work is done; it is not.
+    Failed,
+    /// The check did not fail, but **the patch changes existing tests** even after the model was
+    /// asked to put them back: a test may have been bent to fit the code. Not done until someone
+    /// confirms the change was asked for.
+    Review,
+    /// Cut short, or not verified: stopped by the time limit or a bound, ended by an error after
+    /// some work, no answer — or a check that gave no verdict (it timed out, Windows blocked it,
+    /// or it was not run), so nothing says the work is right.
+    Partial,
+    /// There is no proposal at all: the run could not start, or could not make its patch.
+    Error,
+}
+
 /// What a run came to.
 #[derive(Debug, Clone, Default)]
 pub struct Report {
@@ -453,14 +518,19 @@ pub struct Report {
     pub time: u64,
     pub error: Option<String>,
     /// There is no proposal at all: the run could not start, or could not make its patch.
-    pub failed: bool,
+    pub errored: bool,
+    /// The existing tests the patch changes, file by file: a test may have been bent to fit the
+    /// code. If there are any the run is not done — see [`Status::Review`].
+    pub bent: Vec<Bent>,
 }
 
 /// The report as `--json` writes it. **The order of the fields is the point**: what Claude
-/// needs first comes first — whether it is whole, the check, the files, how to apply — then the
-/// answer, and the patch text, which can be long, last.
+/// needs first comes first — how it came out, what to be careful of, whether it is whole, the
+/// check, the files, how to apply — then the answer, and the patch text, which can be long, last.
 #[derive(Serialize)]
 struct JsonReport<'a> {
+    status: Status,
+    warnings: Vec<String>,
     error: Option<&'a str>,
     partial: bool,
     stopped: bool,
@@ -508,26 +578,74 @@ struct JsonFile<'a> {
 }
 
 impl Report {
-    /// Short of a whole answer: stopped, ended by an error or a bound, or no answer given.
+    /// The final check ran, finished, and did not pass. A check that timed out, was blocked by
+    /// Windows or was not run gave no verdict on the work — see [`Report::unverified`].
+    fn check_failed(&self) -> bool {
+        self.check
+            .as_ref()
+            .is_some_and(|c| c.passed == Some(false) && c.not_run.is_none() && !c.timed_out && c.blocked.is_none())
+    }
+
+    /// A check was asked for and gave no verdict: it was not run, ran out of time, or was blocked
+    /// by Windows. Nothing then says the work is right.
+    fn unverified(&self) -> bool {
+        self.check.as_ref().is_some_and(|c| c.not_run.is_some() || c.timed_out || c.blocked.is_some())
+    }
+
+    /// Short of a whole answer: stopped, ended by an error or a bound, no answer given, or a
+    /// check that gave no verdict.
     pub fn partial(&self) -> bool {
-        self.stopped || self.error.is_some() || !self.notes.is_empty() || self.answer.is_empty()
+        self.stopped || self.error.is_some() || !self.notes.is_empty() || self.answer.is_empty() || self.unverified()
     }
 
-    /// 0 when a turn ran, whatever the check said; 1 when there is no proposal.
+    /// How the run came out: no proposal at all, a check that failed (**whatever the answer
+    /// says**), a patch that changes existing tests (**whatever the check says**, unless it
+    /// failed), cut short or unverified, or done. The first of those that holds.
+    pub fn status(&self) -> Status {
+        if self.errored {
+            Status::Error
+        } else if self.check_failed() {
+            Status::Failed
+        } else if !self.bent.is_empty() {
+            Status::Review
+        } else if self.partial() {
+            Status::Partial
+        } else {
+            Status::Done
+        }
+    }
+
+    /// The final check ran, and passed.
+    fn check_passed(&self) -> bool {
+        self.check.as_ref().is_some_and(|c| c.passed == Some(true))
+    }
+
+    /// **0 when done; 3 when not (the check failed, the patch changes existing tests, or the run
+    /// was cut short or unverified): the patch is not to be applied as it is; 1 when there is no
+    /// proposal at all.** (2, a command line that could not be read, never gets as far as a report.)
     pub fn exit_code(&self) -> u8 {
-        u8::from(self.failed)
+        match self.status() {
+            Status::Done => 0,
+            Status::Failed | Status::Review | Status::Partial => 3,
+            Status::Error => 1,
+        }
     }
 
-    /// The command that applies the patch, as a person would type it.
+    /// The command that applies the patch, as a person would type it. **None for a patch whose
+    /// check failed, or that changes existing tests**: its file is a draft to read, and no command
+    /// is offered.
     pub fn apply_command(&self) -> Option<String> {
+        if matches!(self.status(), Status::Failed | Status::Review) {
+            return None;
+        }
         let file = self.patch_file.as_ref()?;
         Some(format!("git -C \"{}\" apply --whitespace=nowarn \"{}\"", self.repo_root, file.display()))
     }
 
     /// This run has no proposal, and why.
-    fn fail(mut self, why: impl Into<String>) -> Self {
+    fn abort(mut self, why: impl Into<String>) -> Self {
         self.error = Some(why.into());
-        self.failed = true;
+        self.errored = true;
         self
     }
 
@@ -552,6 +670,8 @@ impl Report {
     fn json(&self) -> JsonReport<'_> {
         let (diff, diff_lossy, diff_omitted) = self.diff();
         JsonReport {
+            status: self.status(),
+            warnings: self.bent.iter().map(Bent::warning).collect(),
             error: self.error.as_deref(),
             partial: self.partial(),
             stopped: self.stopped,
@@ -608,45 +728,118 @@ impl Report {
         serde_json::to_value(self.json()).unwrap_or(serde_json::Value::Null)
     }
 
-    /// The report as plain text: a first line that says whether the proposal is partial, the
-    /// answer, **then the check and how to apply — before the patch, so that a long patch never
-    /// buries them** — and then the patch: its files with their counts, and its text if it is
-    /// short enough to print, else where to read it.
+    /// What else cut the turn short, when its first line is about something else: the time limit,
+    /// an error, a bound. Empty when nothing did.
+    fn also_cut_short(&self, files: &str) -> String {
+        let mut also: Vec<String> = Vec::new();
+        if self.stopped {
+            also.push(format!("stopped at the {} s time limit ({files} by then)", self.time));
+        }
+        also.extend(self.error.iter().map(|e| format!("ended with an error: {e}")));
+        also.extend(self.notes.iter().cloned());
+        if also.is_empty() {
+            return String::new();
+        }
+        let lines: String = also.iter().map(|line| format!("  {line}\n")).collect();
+        format!("\nthe turn was also cut short:\n{lines}")
+    }
+
+    /// Why a proposal is partial, as the clause its first line gives.
+    fn partial_why(&self) -> String {
+        if let Some(why) = self.error.clone().or_else(|| self.notes.first().cloned()) {
+            return why;
+        }
+        match self.check.as_ref().filter(|_| self.unverified() && !self.answer.is_empty()) {
+            Some(c) => unverified_why(c),
+            None => "the model gave no answer".to_string(),
+        }
+    }
+
+    /// The report as plain text: a first line that says how it came out, the answer, **then the
+    /// check and how to apply — before the patch, so that a long patch never buries them** — and
+    /// then the patch: its files with their counts, and its text if it is short enough to print,
+    /// else where to read it.
+    ///
+    /// **A check that failed leads instead.** The first line says not to apply the patch, the check
+    /// and the end of its output come next, and the model's own words follow, labelled: they can
+    /// say the work is done when it is not. The patch file is offered as a draft to read, with no
+    /// command to apply it.
+    ///
+    /// **A patch that changes existing tests is for review**: the first line says so
+    /// ([`bent::review_line`]), the files and lines come next, and the patch file is a draft to
+    /// read, as when the check failed. A check that failed is the status then, with a line above
+    /// it ([`bent::warning_line`]) saying the tests were changed as well.
     pub fn to_text(&self) -> String {
         let mut out = String::new();
+        let status = self.status();
+        if status == Status::Failed && !self.bent.is_empty() {
+            out.push_str(&bent::warning_line(&self.bent));
+            out.push('\n');
+        }
         let n = self.files.len();
         let files = format!("{n} file{} changed", if n == 1 { "" } else { "s" });
         let secs = self.seconds.round();
-        out.push_str(&match (&self.error, self.failed) {
-            (Some(why), true) => format!("hugin -p could not make a proposal: {why}\n"),
-            _ if self.stopped => format!(
+        out.push_str(&match status {
+            Status::Error => format!("hugin -p could not make a proposal: {}\n", self.error.as_deref().unwrap_or_default()),
+            Status::Failed => "hugin: FAILED — the check failed; do not apply this patch as it is.\n".to_string(),
+            Status::Review => format!("{}\n", bent::review_line(&self.bent, self.check_passed())),
+            Status::Partial if self.stopped => format!(
                 "hugin: PARTIAL proposal. Stopped at the {} s time limit; this is what it had done by then ({files}).\n",
                 self.time
             ),
-            _ if self.partial() => {
-                let why = self.error.clone().or_else(|| self.notes.first().cloned());
-                let why = why.unwrap_or_else(|| "the model gave no answer".to_string());
-                format!("hugin: PARTIAL proposal. {why} ({files}, {secs} s).\n")
-            }
-            _ => format!("hugin: done in {secs} s on {} ({files}).\n", self.model),
+            Status::Partial => format!("hugin: PARTIAL proposal. {} ({files}, {secs} s).\n", self.partial_why()),
+            Status::Done => format!("hugin: done in {secs} s on {} ({files}).\n", self.model),
         });
 
-        if !self.answer.is_empty() {
-            out.push_str(&format!("\n{}\n", self.answer));
+        match status {
+            Status::Error => {
+                if !self.answer.is_empty() {
+                    out.push_str(&format!("\n{}\n", self.answer));
+                }
+                return out;
+            }
+            Status::Failed => {
+                out.push('\n');
+                out.push_str(&self.check_line());
+                if !self.answer.is_empty() {
+                    out.push_str(&format!(
+                        "\nThe model's own last words (it can say the work is done when its check says it is not):\n{}\n",
+                        self.answer
+                    ));
+                }
+                out.push_str(&self.also_cut_short(&files));
+            }
+            Status::Review => {
+                out.push_str(&format!("\nthe existing tests the patch changes:\n{}\n", bent::listing(&self.bent)));
+                if !self.answer.is_empty() {
+                    out.push_str(&format!(
+                        "\nThe model's own words (it may say the change was needed; confirm that it was):\n{}\n",
+                        self.answer
+                    ));
+                }
+                out.push('\n');
+                out.push_str(&self.check_line());
+                out.push_str(&self.also_cut_short(&files));
+            }
+            Status::Done | Status::Partial => {
+                if !self.answer.is_empty() {
+                    out.push_str(&format!("\n{}\n", self.answer));
+                }
+                out.push('\n');
+                out.push_str(&self.check_line());
+            }
         }
-        if self.failed {
-            return out;
-        }
-
-        out.push('\n');
-        out.push_str(&self.check_line());
         if !self.skipped.is_empty() {
             out.push_str("\nnot carried into the copy:\n");
             for s in &self.skipped {
                 out.push_str(&format!("  {s}\n"));
             }
         }
-        if let Some(apply) = self.apply_command() {
+        if matches!(status, Status::Failed | Status::Review) {
+            if let Some(file) = &self.patch_file {
+                out.push_str(&format!("\ndraft patch (do not apply as is): {}\n", file.display()));
+            }
+        } else if let Some(apply) = self.apply_command() {
             out.push_str(&format!("\nto apply: {apply}\n"));
         }
 
@@ -714,6 +907,20 @@ impl Report {
     }
 }
 
+/// Why a check that was asked for gave no verdict, as the clause the first line of a partial
+/// proposal gives.
+fn unverified_why(c: &CheckReport) -> String {
+    if let Some(why) = &c.not_run {
+        format!("The check was not run: {why}")
+    } else if let Some(what) = &c.blocked {
+        format!("Windows Smart App Control blocked {what}, so the check could not finish")
+    } else if c.cut_short {
+        format!("The check did not finish in the {} s the run had left", c.seconds)
+    } else {
+        format!("The check timed out after {} s", c.seconds)
+    }
+}
+
 /// The task as echoed: whole unless it is very long.
 fn shown_task(task: &str) -> String {
     if task.chars().count() <= MAX_SHOWN_TASK {
@@ -736,7 +943,7 @@ fn tail_of(text: &str, max: usize) -> String {
     format!("…{}", &text[start..])
 }
 
-fn seconds(d: Duration) -> f64 {
+pub(crate) fn seconds(d: Duration) -> f64 {
     (d.as_secs_f64() * 10.0).round() / 10.0
 }
 
@@ -755,8 +962,11 @@ fn report_of(argv: &[String], o: &check::Outcome, reused: bool) -> CheckReport {
         reused,
         cut_short: false,
         // What a build had printed when it was cut off says nothing, and a block is not the code's.
+        // A test run that exited 0 and still failed says why first: its output alone would not.
         output_tail: if o.passed() || o.blocked.is_some() || matches!(o.ended, Ended::TimedOut | Ended::Stopped) {
             String::new()
+        } else if o.unfinished_tests > 0 {
+            format!("{}\n{}", check::UNFINISHED_NOTE, tail_of(&o.output, OUTPUT_TAIL))
         } else {
             tail_of(&o.output, OUTPUT_TAIL)
         },
@@ -789,6 +999,40 @@ pub struct Finished {
     _lock: Option<Lock>,
 }
 
+/// Wait for the turn to say it has ended, until `until`. At the deadline it is stopped and given
+/// `grace` to wind down, and **the lock every edit takes is taken from then on**, so that a turn
+/// still inside a request, which cannot be reached, writes nothing to the copy while the patch is
+/// made: it is handed back for the caller to hold, and it is what says the turn was stopped.
+pub(crate) fn await_turn(
+    rx: &Receiver<Result<(), String>>,
+    until: Instant,
+    grace: Duration,
+    stopper: &Stopper,
+) -> (Result<(), String>, Option<MutexGuard<'static, ()>>) {
+    match rx.recv_timeout(until.saturating_duration_since(Instant::now())) {
+        Ok(result) => (result, None),
+        Err(RecvTimeoutError::Disconnected) => (Err("the turn ended unexpectedly".to_string()), None),
+        Err(RecvTimeoutError::Timeout) => {
+            stopper.stop();
+            let wound_down = rx.recv_timeout(grace);
+            (wound_down.unwrap_or(Ok(())), Some(edits_lock()))
+        }
+    }
+}
+
+/// What to say to the model when the copy now holds a patch that changes existing tests
+/// ([`bent::changed_tests`]) and a sixth of the run's time is left for it to answer. The patch is
+/// made as it stands; nothing in the copy changes.
+pub fn bent_follow_up(copy: &mut Scratch, until: Instant, total: Duration) -> Option<String> {
+    if until.saturating_duration_since(Instant::now()) < total / FOLLOW_UP_SHARE {
+        return None;
+    }
+    let end = copy.snapshot().ok()?;
+    let patch = copy.patch(&end).ok()?;
+    let bent = bent::changed_tests(&patch.bytes);
+    (!bent.is_empty()).then(|| bent::follow_up(&bent))
+}
+
 /// The whole run: copy the folder, run the turn in the copy until it ends or its time is up,
 /// run the check once on what is there, and make the patch. **The user's folder is only read.**
 ///
@@ -815,12 +1059,12 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
     // One run at a time: two would wait on each other's cargo lock and both load the model.
     let lock = match Lock::take(&job.work) {
         Ok(lock) => lock,
-        Err(e) => return finish(report.fail(e), None, None),
+        Err(e) => return finish(report.abort(e), None, None),
     };
     scratch::sweep(&job.work);
     let mut copy = match Scratch::of_in(&git, &job.work, &job.folder) {
         Ok(copy) => copy,
-        Err(e) => return finish(report.fail(e), None, Some(lock)),
+        Err(e) => return finish(report.abort(e), None, Some(lock)),
     };
     report.repo_root = copy.repo_root.display().to_string();
     report.base = copy.base.clone();
@@ -828,13 +1072,13 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
 
     let ws = match Workspace::open(copy.folder()) {
         Ok(ws) => ws,
-        Err(e) => return finish(report.fail(e), Some(copy), Some(lock)),
+        Err(e) => return finish(report.abort(e), Some(copy), Some(lock)),
     };
     // The check as it runs in the copy; `job.check` stays what the report calls it. The three
     // places are compared as the file system has them, not as a short name or a prefix writes them.
     let (folder, copy_root, repo_root) = (real_path(ws.root()), real_path(copy.copy_root()), real_path(&copy.repo_root));
     let check = match job.check.as_deref().map(|argv| resolve_check(argv, &folder, &copy_root, &repo_root)) {
-        Some(Err(e)) => return finish(report.fail(e), Some(copy), Some(lock)),
+        Some(Err(e)) => return finish(report.abort(e), Some(copy), Some(lock)),
         Some(Ok(argv)) => Some(argv),
         None => None,
     };
@@ -879,36 +1123,59 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
         ran
     };
     let (tx, rx) = std::sync::mpsc::channel();
+    // The one follow-up the patch may earn, sent after the turn has ended; dropped unsent if not.
+    let (follow_tx, follow_rx) = std::sync::mpsc::channel::<String>();
     let (task, turn_progress, turn_stopper) = (job.task.clone(), progress.clone(), stopper.clone());
     stopper.begin();
     let worker = std::thread::Builder::new().name("hugin-p-turn".into()).spawn(move || {
-        let mut fe = Unattended { progress: turn_progress, stopper: turn_stopper, shown: Vec::new(), edited: Vec::new() };
+        let mut fe = Unattended {
+            progress: turn_progress.clone(),
+            stopper: turn_stopper,
+            shown: Vec::new(),
+            edited: Vec::new(),
+            calibration: None,
+        };
         let mut convo = vec![Message::user(&task)];
         let result = run_turn_with(&mut convo, None, unattended::ROUNDS, &mut *ask, &mut run, &mut fe);
+        let ended_by_itself = result.is_ok();
         let _ = tx.send(result);
+        // The patch is looked at now. If it changes existing tests the follow-up arrives, and the
+        // turn goes on **in the same conversation**; if none comes, the sender is dropped and this ends.
+        if ended_by_itself && let Ok(text) = follow_rx.recv() {
+            // The loop leaves the model's last words out of the conversation, and the follow-up answers them.
+            let said = held(&turn_progress).answer.clone();
+            if let Some(content) = said {
+                convo.push(Message { role: "assistant".to_string(), content, images: None, tool_calls: None, tool_name: None });
+            }
+            convo.push(Message::user(text));
+            let calibration = fe.calibration;
+            let result = run_turn_with(&mut convo, calibration, FOLLOW_UP_ROUNDS, &mut *ask, &mut run, &mut fe);
+            let _ = tx.send(result);
+        }
     });
     if let Err(e) = worker {
-        return finish(report.fail(format!("could not start the turn: {e}")), Some(copy), Some(lock));
+        return finish(report.abort(format!("could not start the turn: {e}")), Some(copy), Some(lock));
     }
 
     let turn_ends = started + budget.total.saturating_sub(budget.reserve);
     // Held from the deadline until the patch is made, once it has been taken.
-    let mut writers = None;
-    let turn = match rx.recv_timeout(turn_ends.saturating_duration_since(Instant::now())) {
-        Ok(result) => result,
-        Err(RecvTimeoutError::Disconnected) => Err("the turn ended unexpectedly".to_string()),
-        Err(RecvTimeoutError::Timeout) => {
-            // Out of time. Stop it and give it a moment to wind down. Then **take the lock every
-            // edit takes**, so that a turn still inside a request, which cannot be reached, writes
-            // nothing to the copy while the patch is made.
-            report.stopped = true;
-            stopper.stop();
-            let wound_down = rx.recv_timeout(budget.grace);
-            writers = Some(edits_lock());
-            wound_down.unwrap_or(Ok(()))
-        }
-    };
+    let (mut turn, mut writers) = await_turn(&rx, turn_ends, budget.grace, &stopper);
     stopper.end();
+    // **A check that passes may only be passing because a test was changed.** A turn that ended by
+    // itself, with time left, and whose patch changes existing tests is told so, once, and goes on.
+    let mut follow_tx = Some(follow_tx);
+    if turn.is_ok()
+        && writers.is_none()
+        && let Some(text) = bent_follow_up(&mut copy, turn_ends, budget.total)
+    {
+        stopper.begin();
+        if follow_tx.take().is_some_and(|tx| tx.send(text).is_ok()) {
+            (turn, writers) = await_turn(&rx, turn_ends, budget.grace, &stopper);
+        }
+        stopper.end();
+    }
+    drop(follow_tx);
+    report.stopped = writers.is_some();
 
     let (answer, notes, rounds, undo, last_check, edited_since) = {
         let p = held(&progress);
@@ -919,8 +1186,8 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
     if let Err(e) = turn {
         report.error = Some(e);
         // A turn that never got a reply and wrote nothing did not run: there is nothing to propose.
-        report.failed = rounds == 0 && undo.is_empty();
-        if report.failed {
+        report.errored = rounds == 0 && undo.is_empty();
+        if report.errored {
             return finish(report, Some(copy), Some(lock));
         }
     }
@@ -974,7 +1241,7 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
     drop(writers);
     let patch = match made {
         Ok(patch) => patch,
-        Err(e) => return finish(report.fail(format!("could not make the patch: {e}")), Some(copy), Some(lock)),
+        Err(e) => return finish(report.abort(format!("could not make the patch: {e}")), Some(copy), Some(lock)),
     };
     report.skipped = copy.skipped_lines();
     // A change is the model's own if one of its edits touched the file. Without the records to
@@ -993,6 +1260,8 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
         })
         .collect();
     report.patch = patch.bytes;
+    // Whatever the follow-up came to, the patch as it stands is what is warned about.
+    report.bent = bent::changed_tests(&report.patch);
     report.patch_file = keep_patch(&job.work, &report);
     finish(report, Some(copy), Some(lock))
 }
@@ -1070,6 +1339,14 @@ pub const CLAUDE_NOTE: &str = "\
 Hugin runs a coding model on this machine, so work handed to it costs nothing from the Claude
 plan. Hand it a task that is small, well described and checkable; review what it sends back.
 
+**Questions about a codebase** (where is X, how does Y work, what calls Z): ask Hugin first, with
+`hugin --ask \"<the question>\" --json`. It reads the code on this machine, in place and
+read-only, so it costs nothing from the Claude plan and writes nothing. Check its `looked_at`,
+and open those files yourself if the answer matters: it can be wrong. (`--folder <path>` names
+the folder. Exit code 0 is answered, 3 partial, 1 an error.)
+
+To hand it a task:
+
     hugin -p \"<the task, with the file names>\" --check \"<one test or build command>\" --json
 
 - **Good for:** a failing test to fix, a function or a module to write from a clear description,
@@ -1090,6 +1367,17 @@ plan. Hand it a task that is small, well described and checkable; review what it
 - **Trust the check, not the answer.** Hugin's answer can say the work is done when its check
   failed. A failed or missing check means: don't apply it as it is — fix the patch or do the
   task yourself.
+- **A passing check can still be wrong.** If the patch changes existing tests, which may have
+  been bent to fit the code, Hugin asks the model once to put them back; if they are still
+  changed the status is `review` (the files are in `warnings`), and it is not done until you
+  confirm the change was asked for. Read the patch either way. A `cargo test` run in which a
+  test program stops early (a `process::exit`, an abort) counts as failed, whatever its exit code.
+- **Read the status first** (`status` in the JSON, the `hugin:` status line in plain text): `done`;
+  `failed`, the check failed; `review`, the check did not fail but the patch changes existing
+  tests; for both, no apply command is given, only a draft patch to read. `partial`, cut short
+  or the check gave no verdict; `error`, no proposal. **Exit code 3, or status failed, review or
+  partial, means not done: don't apply it as it is — fix the patch or do the task yourself.**
+  Exit code 0 is done, and 1 is a run that could not happen.
 - To apply: `git -C \"<repo>\" apply --whitespace=nowarn \"<patch file>\"`, the exact command is
   in the output. A patch goes stale if the same files change first.
 - It stops itself at 9 minutes (`--time` changes that). Call it with a Bash timeout of

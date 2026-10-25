@@ -842,7 +842,7 @@ impl Lock {
         match open_exclusive(&path) {
             Ok(file) => Ok(Lock { _file: file }),
             Err(e) if e.raw_os_error() == Some(32) => {
-                Err("another hugin -p is already running; wait for it to finish".to_string())
+                Err("another hugin run (-p or --ask) is already running; wait for it to finish".to_string())
             }
             Err(e) => Err(format!("could not take the lock {}: {e}", path.display())),
         }

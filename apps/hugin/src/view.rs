@@ -222,6 +222,10 @@ pub fn tool_line(card: &Card) -> ToolLine {
 /// What a command allowed for the session shows in place of a question.
 pub const ALLOWED_NOTE: &str = "allowed for this session";
 
+/// What a turn says when it ends with the model's last check still failing, whatever the
+/// model's own last words were.
+pub const NOT_DONE: &str = "the check failed — not done";
+
 /// A command asked about: where it runs, then **the command exactly as it will run, every
 /// line of it** — never cut, whatever its length (the interface wraps; this does not).
 pub fn command_approval(command: &str, shell: Shell) -> Approval {
