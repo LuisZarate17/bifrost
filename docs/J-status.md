@@ -8,8 +8,8 @@ report after each.
 
 | Phase | Chunk | What it is | Status | Result |
 |---|---|---|---|---|
-| **0. Fair** | J0a | A clean start: commit and push the pending Hugin work, the folder move | ⏳ In progress — committed `fd3fa57` and pushed; the folder move is Luis's to run | |
-| | J0b | Tool-call repair for every model, not only Qwen | Not started | |
+| **0. Fair** | J0a | A clean start: commit and push the pending Hugin work, the folder move | 📌 Pinned — committed `fd3fa57` and pushed; the folder move is set aside for later (2026-10-25). The Desktop launcher "Move Bifrost folder" does it | |
+| | J0b | Tool-call repair for every model, not only Qwen | ✅ Built · local | Every model's unreadable call is fed back; Qwen keeps its own repair; real failures still end the turn; `--model` and `--trace` for the runs — [J0b](results/J0b-results.md) |
 | | J0c | Upgrade Ollama (0.33.3 → current) | Not started | |
 | | J0d | Thinking models: `think` and per-model settings | Not started | |
 | | Gate J0 | Review, all tests green | Not started | |

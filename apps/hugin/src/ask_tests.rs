@@ -13,7 +13,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use bifrost_core::agent::round::{Reply, Round};
+use bifrost_core::agent::round::{Metrics, Reply, Round};
 use bifrost_core::agent::run::run_auto;
 use bifrost_core::agent::send::{Calibration, compact_for_send};
 use bifrost_core::agent::stop::next_stop;
@@ -27,6 +27,7 @@ use serde_json::json;
 
 use crate::ask::*;
 use crate::print::Wired;
+use crate::trace::{self, Trace};
 
 // ── a place to work ─────────────────────────────────────────────────────────
 
@@ -128,6 +129,8 @@ enum Step {
     Sleep(u64),
     /// The request fails.
     Fail(&'static str),
+    /// Ollama could not read the call (the reason is Ollama's), and the engine fed it back.
+    Unreadable(&'static str),
 }
 
 /// The names of the calls that reached the runner: there should be none.
@@ -140,7 +143,21 @@ type Heard = Arc<Mutex<Vec<(String, String)>>>;
 type Seen = Arc<Mutex<Option<Ctx>>>;
 
 fn round(reply: Reply) -> Result<Round, String> {
-    Ok(Round { reply, prompt_eval_count: 0, recovered: false, sent: compact_for_send(&mut [], &[], 8192, None, 0) })
+    // A reply that is not words is one call.
+    let metrics = Metrics { tool_calls: usize::from(!matches!(reply, Reply::Answer { .. })), ..Metrics::default() };
+    Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, metrics, sent: compact_for_send(&mut [], &[], 8192, None, 0) })
+}
+
+/// What a model that is not Qwen leaves when Ollama cannot parse its call: the stand-in call the
+/// engine hands back, already turned into the rejection the model is told of.
+fn unreadable(why: &str) -> Result<Round, String> {
+    let rejected = Reply::Rejected {
+        name: "tool call".into(),
+        path: String::new(),
+        error: format!("error: {why}. Send one valid tool call."),
+        raw_call: raw(chat::INVALID_TOOL_CALL, json!({ "error": why })),
+    };
+    round(rejected).map(|r| Round { fed_back: true, metrics: Metrics { error: Some(why.to_string()), ..r.metrics }, ..r })
 }
 
 fn raw(name: &str, arguments: serde_json::Value) -> chat::ToolCall {
@@ -209,6 +226,7 @@ fn script(steps: Vec<Step>) -> (impl FnOnce(&Ctx) -> Wired, Reached, Heard, Seen
             match steps.pop_front().expect("the loop asked the model more often than the script allows") {
                 Step::Answer(text) => round(Reply::Answer { content: text.into(), eval_count: 7 }),
                 Step::Fail(why) => Err(why.to_string()),
+                Step::Unreadable(why) => unreadable(why),
                 Step::Sleep(secs) => {
                     std::thread::sleep(Duration::from_secs(secs));
                     round(Reply::Answer { content: "too late".into(), eval_count: 7 })
@@ -613,6 +631,54 @@ fn a_request_that_fails_is_a_run_that_could_not_be_made() {
     assert_eq!(report.error.as_deref(), Some("could not start Ollama: not installed"));
     assert!(report.to_text().starts_with("hugin --ask could not answer: could not start Ollama"));
     assert_eq!(report.to_json()["error"], "could not start Ollama: not installed");
+}
+
+/// The trace's lines of a run, as JSON.
+fn traced(dir: &Dir, steps: Vec<Step>) -> (Report, Heard, Vec<serde_json::Value>) {
+    let file = dir.root.join("trace.jsonl");
+    let (wire, _, heard, _) = script(steps);
+    let trace = Trace::open(&file);
+    let report = execute(&dir.job(60), "devstral:24b", |ctx| trace::wired(Some(trace), "devstral:24b", wire(ctx)));
+    let text = std::fs::read_to_string(&file).unwrap_or_default();
+    let lines = text.lines().map(|l| serde_json::from_str(l).expect("a line of JSON")).collect();
+    (report, heard, lines)
+}
+
+/// **A model that is not Qwen is not stopped by a call Ollama cannot read**: the first reply is a
+/// parse error, it is fed back to the model as a rejection, and the second reply's valid call
+/// runs. The trace has a line for each request, and the first is marked.
+#[test]
+fn a_call_sent_back_is_told_to_the_model_and_the_next_valid_call_runs() {
+    let dir = Dir::new("fedback");
+    project(&dir);
+    let why = "error parsing tool call: raw='{\"name\":', err=unexpected end of JSON input";
+    let steps = vec![Step::Unreadable(why), Step::Read("src/lib.rs", Some((1, Some(5)))), Step::Answer("It is in src/lib.rs.")];
+    let (report, heard, lines) = traced(&dir, steps);
+
+    assert_eq!((report.status(), report.exit_code()), (Status::Answered, 0), "{report:?}");
+    assert_eq!(looked(&report), [("src/lib.rs", Some("1-5"))]);
+    // The model was told, in words that name no format, and then it read the file.
+    let heard = heard.lock().unwrap();
+    assert_eq!(heard[1], ("tool".to_string(), format!("error: {why}. Send one valid tool call.")));
+
+    assert_eq!(lines.len(), 3, "a line for each request: {lines:?}");
+    let marks: Vec<_> = lines.iter().map(|l| (l["fed_back"].as_bool(), l["recovered"].as_bool(), l["tool_calls"].as_u64())).collect();
+    assert_eq!(marks, [(Some(true), Some(false), Some(1)), (Some(false), Some(false), Some(1)), (Some(false), Some(false), Some(0))]);
+    assert!(lines.iter().all(|l| l["model"] == "devstral:24b" && l["thinking_len"] == 0));
+    // The first line says why; the others have nothing to say.
+    assert_eq!(lines[0]["error"], why);
+    assert!(lines[1..].iter().all(|l| l["error"].is_null()));
+}
+
+#[test]
+fn a_request_that_failed_is_a_line_with_the_error_and_the_run_still_reports() {
+    let dir = Dir::new("tracefail");
+    project(&dir);
+    let (report, _, lines) = traced(&dir, vec![Step::Fail("/api/chat returned 500 Internal Server Error: {\"error\":\"EOF\"}")]);
+    assert_eq!(report.status(), Status::Error);
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["error"], "/api/chat returned 500 Internal Server Error: {\"error\":\"EOF\"}");
+    assert!(lines[0]["prompt_eval_count"].is_null());
 }
 
 /// The same lock as `-p`, so a `--ask` and a `-p` do not both load the model.

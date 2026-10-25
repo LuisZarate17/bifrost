@@ -199,6 +199,16 @@ pub struct ChatReply {
     /// had to be read out of the content instead. How often this fires is how
     /// you know whether the recovery is still needed.
     pub recovered: bool,
+    /// True when Ollama answered a tools request with a parse error for the
+    /// model's call and [`chat_tools`] has no reply to give, so this one carries
+    /// a stand-in [`INVALID_TOOL_CALL`] with Ollama's message. The caller sends
+    /// it back to the model, which can try again. Separate from `recovered`:
+    /// that one means the call was read; this one means it was not.
+    pub fed_back: bool,
+    /// Time Ollama spent reading the prompt, and writing the reply. Zero when it
+    /// did not say, as on a reply that never came from the model.
+    pub prompt_eval_duration: Duration,
+    pub eval_duration: Duration,
 }
 
 impl ChatReply {
@@ -219,6 +229,10 @@ struct RawReply {
     prompt_eval_count: u32,
     #[serde(default)]
     eval_count: u32,
+    #[serde(default)]
+    prompt_eval_duration: u64,
+    #[serde(default)]
+    eval_duration: u64,
 }
 
 /// Send a conversation, optionally offering tools, and wait for the whole reply.
@@ -284,6 +298,9 @@ pub fn chat(
         prompt_eval_count: raw.prompt_eval_count,
         eval_count: raw.eval_count,
         recovered: false,
+        fed_back: false,
+        prompt_eval_duration: Duration::from_nanos(raw.prompt_eval_duration),
+        eval_duration: Duration::from_nanos(raw.eval_duration),
     })
 }
 
@@ -293,6 +310,7 @@ pub fn chat(
 /// alone would send it down the ChatML JSON path — a prompt layout it was not
 /// trained on. Every other Qwen family, `qwen3vl` included, keeps the ChatML
 /// recovery G7 verified, exactly as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Layout {
     Chatml,
     Qwen3Coder,
@@ -329,6 +347,13 @@ fn layout(model: &str) -> Option<Layout> {
 /// A call that still cannot be read comes back as an [`INVALID_TOOL_CALL`], so
 /// the caller tells the model — which can try again — instead of the turn
 /// ending in an HTTP 500 or a call silently lost in the text.
+///
+/// **That holds for every model, not only Qwen.** A parse error that no layout
+/// recovers — the model has none, or the retry failed too — is turned into the
+/// same stand-in call, marked [`ChatReply::fed_back`]; see [`settle`]. Only an
+/// error that looks like the model's own unreadable call is: the runner dying,
+/// running out of memory or timing out still ends the turn
+/// ([`is_tool_parse_error`]).
 pub fn chat_tools(
     model: &str,
     messages: &[Message],
@@ -336,14 +361,9 @@ pub fn chat_tools(
     options: Options,
 ) -> Result<ChatReply, String> {
     match chat(model, messages, tools, options) {
-        Err(e) if is_chatml_error(&e) => match layout(model) {
-            Some(Layout::Chatml) => recover(model, messages, tools, options, Layout::Chatml),
-            _ => Err(e),
-        },
-        Err(e) if is_xml_error(&e) => match layout(model) {
-            Some(Layout::Qwen3Coder) => recover(model, messages, tools, options, Layout::Qwen3Coder),
-            _ => Err(e),
-        },
+        Err(e) if is_chatml_error(&e) || is_xml_error(&e) || (!tools.is_empty() && is_tool_parse_error(&e)) => {
+            after_failure(e, !tools.is_empty(), layout(model), |l| recover(model, messages, tools, options, l))
+        }
         Ok(reply) if reply.tool_calls().is_empty() && !tools.is_empty() && reply.message.content.contains("<function=") => {
             match layout(model) {
                 Some(Layout::Qwen3Coder) => Ok(passed_through(reply, tools)),
@@ -406,6 +426,189 @@ fn is_xml_error(err: &str) -> bool {
             || err.trim_end().ends_with(r#": {"error":"EOF"}"#))
 }
 
+/// What a request that failed for a reason of the machine's, not the model's,
+/// says. Lower case, matched against a lower-cased error:
+///
+/// - **`wsarecv`, `POST predict`**: Ollama's server lost the runner
+///   mid-request, so the error is a socket's, often ending in a bare `EOF`.
+/// - **`runner process has terminated`, `out of memory`, `cuda error`**: the
+///   runner died or could not load.
+/// - **connection and timeout wordings, `not found`**: no server, no answer in
+///   time, or no such model — a 404, not a 500, but listed so the answer is the
+///   same whatever status a newer Ollama puts on them.
+///
+/// Checked first, because a runner that dies halfway through a reply can leave
+/// `unexpected end of JSON input` in the same message.
+const INFRASTRUCTURE_ERRORS: [&str; 11] = [
+    "wsarecv",
+    "post predict",
+    "runner process has terminated",
+    "out of memory",
+    "cuda error",
+    "connection refused",
+    "connection reset",
+    "model not found",
+    "try pulling it first",
+    "timed out",
+    "deadline exceeded",
+];
+
+/// What Ollama says when it could not read the model's tool call, lower case:
+/// the ChatML JSON wordings (`invalid character`, `unexpected end of JSON
+/// input`, `unmarshal`), the Qwen3-Coder XML ones (`XML syntax error`, `expected
+/// element type <function>`), and the generic ones other parsers use (Mistral's
+/// and gpt-oss's `error parsing tool call`, `failed to parse tool call`,
+/// `invalid tool call`).
+const TOOL_CALL_PARSE_ERRORS: [&str; 8] = [
+    "error parsing tool call",
+    "failed to parse tool call",
+    "invalid tool call",
+    "unmarshal",
+    "xml syntax error",
+    "expected element type <function>",
+    "invalid character",
+    "unexpected end of json input",
+];
+
+/// `err` without the model's call that Ollama echoes in `error parsing tool call:
+/// raw='…', err=…`: from `raw='` to the last `', err=`, or to the end if that is not
+/// there. What is left is Ollama's own words.
+fn without_echoed_call(err: &str) -> String {
+    let Some(start) = err.find("raw='") else { return err.to_string() };
+    match err[start..].rfind("', err=") {
+        Some(end) => format!("{}{}", &err[..start], &err[start + end + 2..]),
+        None => err[..start].to_string(),
+    }
+}
+
+/// Whether a failed request is the model's own tool call being unreadable —
+/// so the model can be told and try again — rather than the machine failing.
+///
+/// An HTTP 500 that says so in one of Ollama's wordings
+/// ([`TOOL_CALL_PARSE_ERRORS`]), and says nothing of the machine
+/// ([`INFRASTRUCTURE_ERRORS`]). **A bare `{"error":"EOF"}` is not one**: for a
+/// model whose layout is known to produce it, [`is_xml_error`] recognises it; for
+/// any other it is a runner that went away.
+fn is_tool_parse_error(err: &str) -> bool {
+    if !err.contains("returned 500") {
+        return false;
+    }
+    // Not the call the error echoes: code that says "timed out" is not a timeout.
+    let err = without_echoed_call(err).to_lowercase();
+    !INFRASTRUCTURE_ERRORS.iter().any(|m| err.contains(m)) && TOOL_CALL_PARSE_ERRORS.iter().any(|m| err.contains(m))
+}
+
+/// Which layout's raw retry to try for a failed request, given the layout the model
+/// writes (`None` for a model with none): decided from the **model's** layout first,
+/// since the error's wording alone can mislead — Go's XML decoder says `invalid
+/// character entity` for a `qwen3-coder` call, which is also ChatML's wording.
+///
+/// - `qwen3-coder`: its XML retry, for an XML-shaped error ([`is_xml_error`]);
+/// - the other Qwen families: the ChatML retry, for a JSON-shaped one
+///   ([`is_chatml_error`]);
+/// - anything else, or an error worded for the other layout: none, and the call is
+///   fed back instead.
+fn retry_layout(err: &str, model_layout: Option<Layout>) -> Option<Layout> {
+    match model_layout? {
+        Layout::Qwen3Coder if is_xml_error(err) => Some(Layout::Qwen3Coder),
+        Layout::Chatml if is_chatml_error(err) => Some(Layout::Chatml),
+        _ => None,
+    }
+}
+
+/// What a request that failed in a way that looked like the model's call comes to:
+/// the layout's raw retry if [`retry_layout`] picks one (`retry` runs it), then
+/// [`settle`]. Everything [`chat_tools`] does after its first request fails, apart
+/// from the requests themselves.
+fn after_failure(
+    err: String,
+    offered: bool,
+    model_layout: Option<Layout>,
+    retry: impl FnOnce(Layout) -> Result<ChatReply, String>,
+) -> Result<ChatReply, String> {
+    let tried = retry_layout(&err, model_layout).map(retry);
+    settle(err, offered, tried)
+}
+
+/// What a parse error comes to, given whether the layout's retry was tried and
+/// what it gave. The decision [`chat_tools`] makes after the first request failed
+/// in a way that looked like the model's call:
+///
+/// - the retry read it: that reply;
+/// - the retry failed for a reason of the machine: that error, the turn ends;
+/// - the retry failed with a parse error of its own: the stand-in call
+///   ([`fed_back`]), with the first error's words if they were a parse error, else
+///   the retry's — a bare `EOF` from the first request says nothing the model can use;
+/// - no retry, with tools offered and an error worded as a parse error: the
+///   stand-in call;
+/// - otherwise the error as it came.
+pub(crate) fn settle(
+    err: String,
+    offered: bool,
+    retry: Option<Result<ChatReply, String>>,
+) -> Result<ChatReply, String> {
+    match retry {
+        Some(Ok(reply)) => Ok(reply),
+        Some(Err(retry_err)) if !(offered && is_tool_parse_error(&retry_err)) => Err(retry_err),
+        Some(Err(retry_err)) => Ok(fed_back(if is_tool_parse_error(&err) { &err } else { &retry_err })),
+        None if offered && is_tool_parse_error(&err) => Ok(fed_back(&err)),
+        None => Err(err),
+    }
+}
+
+/// The most of Ollama's message that goes back to the model. A parse error can
+/// echo the whole call, which may be a whole file; the model has it already.
+const MAX_FED_BACK: usize = 1500;
+
+/// `text` cut to [`MAX_FED_BACK`] bytes at a character boundary, saying how much went.
+fn capped(text: String) -> String {
+    if text.len() <= MAX_FED_BACK {
+        return text;
+    }
+    let mut end = MAX_FED_BACK;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… [{} more bytes cut]", &text[..end], text.len() - end)
+}
+
+/// The reply that stands in for a call Ollama could not read: no words, one
+/// [`INVALID_TOOL_CALL`] carrying Ollama's own message (capped), and `fed_back` set.
+fn fed_back(err: &str) -> ChatReply {
+    ChatReply {
+        message: Message {
+            role: "assistant".to_string(),
+            content: String::new(),
+            images: None,
+            tool_calls: Some(vec![invalid_call(capped(ollama_message(err)))]),
+            tool_name: None,
+        },
+        load: Duration::ZERO,
+        total: Duration::ZERO,
+        ttft: None,
+        prompt_eval_count: 0,
+        eval_count: 0,
+        recovered: false,
+        fed_back: true,
+        prompt_eval_duration: Duration::ZERO,
+        eval_duration: Duration::ZERO,
+    }
+}
+
+/// What Ollama said, out of `/api/chat returned 500 Internal Server Error:
+/// {"error":"…"}`: the `error` field if the body is that JSON, else the body.
+fn ollama_message(err: &str) -> String {
+    let body = err
+        .split_once("returned 500")
+        .and_then(|(_, rest)| rest.split_once(": "))
+        .map_or(err, |(_, body)| body)
+        .trim();
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["error"].as_str().map(str::to_string))
+        .unwrap_or_else(|| body.to_string())
+}
+
 #[derive(Deserialize)]
 struct RawGenerate {
     #[serde(default)]
@@ -418,6 +621,10 @@ struct RawGenerate {
     prompt_eval_count: u32,
     #[serde(default)]
     eval_count: u32,
+    #[serde(default)]
+    prompt_eval_duration: u64,
+    #[serde(default)]
+    eval_duration: u64,
 }
 
 pub(crate) fn recover(
@@ -494,6 +701,9 @@ pub(crate) fn recover(
         prompt_eval_count: raw.prompt_eval_count,
         eval_count: raw.eval_count,
         recovered: true,
+        fed_back: false,
+        prompt_eval_duration: Duration::from_nanos(raw.prompt_eval_duration),
+        eval_duration: Duration::from_nanos(raw.eval_duration),
     })
 }
 
@@ -594,6 +804,9 @@ pub fn stream(
         prompt_eval_count: 0,
         eval_count: 0,
         recovered: false,
+        fed_back: false,
+        prompt_eval_duration: Duration::ZERO,
+        eval_duration: Duration::ZERO,
     };
 
     for line in BufReader::new(response).lines() {
@@ -632,6 +845,8 @@ pub fn stream(
             reply.total = Duration::from_nanos(v["total_duration"].as_u64().unwrap_or(0));
             reply.prompt_eval_count = v["prompt_eval_count"].as_u64().unwrap_or(0) as u32;
             reply.eval_count = v["eval_count"].as_u64().unwrap_or(0) as u32;
+            reply.prompt_eval_duration = Duration::from_nanos(v["prompt_eval_duration"].as_u64().unwrap_or(0));
+            reply.eval_duration = Duration::from_nanos(v["eval_duration"].as_u64().unwrap_or(0));
         }
     }
 
@@ -677,6 +892,9 @@ mod tests {
             prompt_eval_count: 0,
             eval_count: 0,
             recovered: false,
+            fed_back: false,
+            prompt_eval_duration: Duration::ZERO,
+            eval_duration: Duration::ZERO,
         };
         assert!(reply.tool_calls().is_empty());
     }
@@ -704,6 +922,208 @@ mod tests {
         assert!(!is_xml_error(
             r#"/api/chat returned 500 Internal Server Error: {"error":"POST predict: Post \"http://127.0.0.1:50000/completion\": EOF"}"#
         ));
+    }
+
+    /// Each wording Ollama has been seen to use, or plausibly will, and which side of
+    /// the line it falls on: the model's call that would not parse (`true`, so it is
+    /// fed back to the model), or the machine failing (`false`, so the turn ends).
+    #[test]
+    fn the_classifier_tells_a_call_that_would_not_parse_from_a_machine_that_failed() {
+        let in500 = |body: &str| format!("/api/chat returned 500 Internal Server Error: {body}");
+        let table: Vec<(String, bool, &str)> = vec![
+            // The model's call: Ollama 0.33.3's measured wordings.
+            (in500("invalid character '{' after object key:value pair"), true, "G7 chatml"),
+            (in500(r#"{"error":"unexpected end of JSON input"}"#), true, "chatml, truncated"),
+            (in500(r#"{"error":"json: cannot unmarshal string into Go struct field .arguments of type map[string]interface {}"}"#), true, "chatml, wrong type"),
+            (in500(r#"{"error":"XML syntax error on line 45: unexpected EOF"}"#), true, "H4 xml"),
+            (in500(r#"{"error":"expected element type <function> but have <tool_call>"}"#), true, "xml, no function"),
+            // Other parsers, and plausible newer wordings.
+            (in500(r#"{"error":"error parsing tool call: raw='{\"name\": \"read_file\", \"arguments\": {'; err=unexpected end of JSON input"}"#), true, "mistral / gpt-oss"),
+            (in500(r#"{"error":"Error parsing tool call: raw='<call>'"}"#), true, "capitalised"),
+            (in500(r#"{"error":"failed to parse tool call arguments"}"#), true, "failed to parse"),
+            (in500(r#"{"error":"invalid tool call"}"#), true, "invalid tool call"),
+            (in500(r#"{"error":"XML SYNTAX ERROR on line 3"}"#), true, "xml, shouted"),
+            // The machine failing.
+            (in500(r#"{"error":"EOF"}"#), false, "bare EOF: a runner that went away, unless the layout says otherwise"),
+            (in500(r#"{"error":"POST predict: Post \"http://127.0.0.1:50000/completion\": EOF"}"#), false, "predict, EOF"),
+            (in500(r#"{"error":"POST predict: Post \"http://127.0.0.1:50000/completion\": read tcp 127.0.0.1:1->127.0.0.1:2: wsarecv: An existing connection was forcibly closed by the remote host."}"#), false, "wsarecv"),
+            (in500(r#"{"error":"llama runner process has terminated: exit status 2"}"#), false, "runner terminated"),
+            (in500(r#"{"error":"llama runner process has terminated: unexpected end of JSON input"}"#), false, "terminated, with a parse wording beside it"),
+            (in500(r#"{"error":"CUDA error: out of memory"}"#), false, "cuda oom"),
+            (in500(r#"{"error":"model requires more system memory (12.0 GiB) than is available (8.0 GiB)"}"#), false, "memory, no marker"),
+            (in500(r#"{"error":"CUDA error: an illegal memory access was encountered"}"#), false, "cuda error"),
+            (in500(r#"{"error":"internal server error"}"#), false, "unlabelled 500"),
+            (r#"/api/chat returned 404 Not Found: {"error":"model \"x\" not found, try pulling it first"}"#.to_string(), false, "404"),
+            ("POST /api/chat: error sending request for url (http://localhost:11434/api/chat): connection refused".to_string(), false, "connection refused"),
+            ("POST /api/chat: error sending request for url (http://localhost:11434/api/chat): connection reset by peer".to_string(), false, "connection reset"),
+            ("POST /api/chat: error sending request for url (http://localhost:11434/api/chat): operation timed out".to_string(), false, "timeout"),
+            // A parse wording off a status that is not 500 is not this.
+            (r#"/api/chat returned 400 Bad Request: {"error":"invalid character"}"#.to_string(), false, "400"),
+        ];
+        for (err, want, what) in &table {
+            assert_eq!(is_tool_parse_error(err), *want, "{what}: {err}");
+        }
+    }
+
+    #[test]
+    fn a_parse_error_becomes_the_stand_in_call_carrying_ollamas_message() {
+        let err = r#"/api/chat returned 500 Internal Server Error: {"error":"error parsing tool call: raw='{', err=unexpected end of JSON input"}"#;
+        let reply = settle(err.to_string(), true, None).expect("fed back");
+        assert!(reply.fed_back && !reply.recovered);
+        let calls = reply.tool_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, INVALID_TOOL_CALL);
+        assert_eq!(
+            calls[0].function.arguments["error"],
+            "error parsing tool call: raw='{', err=unexpected end of JSON input"
+        );
+
+        // A body that is not JSON is the message as it stands.
+        let plain = "/api/chat returned 500 Internal Server Error: invalid tool call";
+        assert_eq!(settle(plain.to_string(), true, None).unwrap().tool_calls()[0].function.arguments["error"], "invalid tool call");
+    }
+
+    #[test]
+    fn what_a_failed_request_comes_to_after_the_layouts_retry() {
+        let parse = r#"/api/chat returned 500 Internal Server Error: {"error":"XML syntax error on line 3: unexpected EOF"}"#;
+        let machine = r#"/api/chat returned 500 Internal Server Error: {"error":"POST predict: Post \"http://x\": EOF"}"#;
+        let retried = ChatReply { fed_back: false, recovered: true, ..fed_back(parse) };
+
+        // Not a Qwen model, no retry: fed back with tools offered, an error without.
+        assert!(settle(parse.to_string(), true, None).unwrap().fed_back);
+        assert_eq!(settle(parse.to_string(), false, None).unwrap_err(), parse);
+        // The machine failing ends the turn either way.
+        assert_eq!(settle(machine.to_string(), true, None).unwrap_err(), machine);
+        // The retry read the call: its reply, not fed back.
+        let ok = settle(parse.to_string(), true, Some(Ok(retried))).unwrap();
+        assert!(ok.recovered && !ok.fed_back);
+        // The retry failed because the machine did: that error ends the turn.
+        let died = "POST /api/generate (tool-call recovery): connection refused".to_string();
+        assert_eq!(settle(parse.to_string(), true, Some(Err(died.clone()))).unwrap_err(), died);
+        // The retry failed on a parse error of its own: fed back with the first message.
+        let again = r#"tool-call recovery: /api/generate returned 500 Internal Server Error: {"error":"invalid tool call"}"#;
+        let fed = settle(parse.to_string(), true, Some(Err(again.to_string()))).unwrap();
+        assert!(fed.fed_back);
+        assert_eq!(fed.tool_calls()[0].function.arguments["error"], "XML syntax error on line 3: unexpected EOF");
+        // A bare EOF whose retry failed stays the retry's error, as before.
+        let bare = r#"/api/chat returned 500 Internal Server Error: {"error":"EOF"}"#;
+        assert_eq!(settle(bare.to_string(), true, Some(Err(died.clone()))).unwrap_err(), died);
+        assert_eq!(settle(bare.to_string(), true, None).unwrap_err(), bare);
+        // A bare EOF whose retry failed with a parse error: the retry's words go back to the model.
+        let fed = settle(bare.to_string(), true, Some(Err(again.to_string()))).unwrap();
+        assert!(fed.fed_back);
+        assert_eq!(fed.tool_calls()[0].function.arguments["error"], "invalid tool call");
+        // With no tools offered it is still an error.
+        assert_eq!(settle(bare.to_string(), false, Some(Err(again.to_string()))).unwrap_err(), again);
+    }
+
+    /// Which retry is tried, from the model's layout and the error's wording: the model's
+    /// layout decides first, so qwen3-coder's XML error that says `invalid character` still
+    /// gets the XML retry.
+    #[test]
+    fn the_retry_follows_the_models_layout_and_then_the_errors_wording() {
+        let in500 = |body: &str| format!("/api/chat returned 500 Internal Server Error: {body}");
+        let xml_entity = in500(r#"{"error":"XML syntax error on line 12: invalid character entity &foo; (no semicolon)"}"#);
+        let xml_eof = in500(r#"{"error":"XML syntax error on line 45: unexpected EOF"}"#);
+        let xml_element = in500(r#"{"error":"expected element type <function> but have <tool_call>"}"#);
+        let bare = in500(r#"{"error":"EOF"}"#);
+        let json = in500("invalid character '{' after object key:value pair");
+        let json_end = in500(r#"{"error":"unexpected end of JSON input"}"#);
+        let unmarshal = in500(r#"{"error":"json: cannot unmarshal string into Go struct field"}"#);
+        let generic = in500(r#"{"error":"error parsing tool call: raw='{', err=unexpected end of JSON input"}"#);
+        use Layout::{Chatml, Qwen3Coder};
+        let table: Vec<(&str, Option<Layout>, Option<Layout>)> = vec![
+            // qwen3-coder: XML errors, including the one worded like ChatML's.
+            (&xml_entity, Some(Qwen3Coder), Some(Qwen3Coder)),
+            (&xml_eof, Some(Qwen3Coder), Some(Qwen3Coder)),
+            (&xml_element, Some(Qwen3Coder), Some(Qwen3Coder)),
+            (&bare, Some(Qwen3Coder), Some(Qwen3Coder)),
+            // qwen3-coder with an error that is not XML's: nothing to retry.
+            (&json, Some(Qwen3Coder), None),
+            (&generic, Some(Qwen3Coder), None),
+            // The other Qwens: JSON errors.
+            (&json, Some(Chatml), Some(Chatml)),
+            (&json_end, Some(Chatml), Some(Chatml)),
+            (&unmarshal, Some(Chatml), Some(Chatml)),
+            (&xml_eof, Some(Chatml), None),
+            (&bare, Some(Chatml), None),
+            // Its tail is ChatML's wording, so a ChatML model gets the retry; an XML one does not.
+            (&generic, Some(Chatml), Some(Chatml)),
+            // Any other model, whatever the wording: fed back, not retried.
+            (&json, None, None),
+            (&xml_entity, None, None),
+            (&bare, None, None),
+            (&generic, None, None),
+        ];
+        for (err, model_layout, want) in table {
+            assert_eq!(retry_layout(err, model_layout), want, "{model_layout:?}: {err}");
+        }
+    }
+
+    /// `chat_tools`' own wiring after a failed request, with the retry scripted: which layout
+    /// it is asked for, and what comes of the answer.
+    #[test]
+    fn what_chat_tools_does_after_a_failed_request_is_the_retry_for_the_models_layout_then_feeding_back() {
+        let entity = r#"/api/chat returned 500 Internal Server Error: {"error":"XML syntax error on line 12: invalid character entity &x;"}"#;
+        let read = || ChatReply { recovered: true, ..fed_back("") };
+        let tried = std::cell::RefCell::new(Vec::new());
+        let retry = |l: Layout| {
+            tried.borrow_mut().push(l);
+            Ok(ChatReply { fed_back: false, ..read() })
+        };
+
+        // qwen3-coder: the XML retry runs, and its reply stands.
+        let reply = after_failure(entity.to_string(), true, Some(Layout::Qwen3Coder), retry).unwrap();
+        assert!(reply.recovered && !reply.fed_back);
+        assert_eq!(*tried.borrow(), [Layout::Qwen3Coder]);
+
+        // Another model: no retry at all, and the call is fed back.
+        tried.borrow_mut().clear();
+        let reply = after_failure(entity.to_string(), true, None, retry).unwrap();
+        assert!(reply.fed_back && tried.borrow().is_empty());
+
+        // qwen3-coder whose retry then fails on the machine: that error ends the turn.
+        let died = "POST /api/generate (tool-call recovery): connection refused".to_string();
+        let ended = after_failure(entity.to_string(), true, Some(Layout::Qwen3Coder), |_| Err(died.clone()));
+        assert_eq!(ended.unwrap_err(), died);
+
+        // No tools offered: the error as it came, with or without a layout to retry.
+        assert_eq!(after_failure(entity.to_string(), false, None, retry).unwrap_err(), entity);
+    }
+
+    /// A parse error echoes the model's own call, and a call may say anything.
+    #[test]
+    fn code_in_the_echoed_call_is_not_taken_for_a_machine_failing() {
+        for said in [
+            "timed out", "connection refused", "connection reset", "out of memory", "CUDA error",
+            "POST predict", "wsarecv", "runner process has terminated", "deadline exceeded",
+        ] {
+            let err = format!(
+                r#"/api/chat returned 500 Internal Server Error: {{"error":"error parsing tool call: raw='{{\"name\":\"edit_file\",\"arguments\":{{\"new_text\":\"// {said}\"}}}}', err=invalid character 'x' looking for beginning of value"}}"#
+            );
+            assert!(is_tool_parse_error(&err), "{said}: {err}");
+        }
+        // Without the terminator the echo runs to the end, and Ollama's prefix still says what it is.
+        let cut = r#"/api/chat returned 500 Internal Server Error: {"error":"error parsing tool call: raw='out of memory"#;
+        assert!(is_tool_parse_error(cut));
+        // A real machine failure after an echo is still one.
+        let real = r#"/api/chat returned 500 Internal Server Error: {"error":"error parsing tool call: raw='x', err=POST predict: EOF"}"#;
+        assert!(!is_tool_parse_error(real));
+    }
+
+    #[test]
+    fn what_goes_back_to_the_model_is_capped_with_the_cut_said() {
+        let whole = "x".repeat(10_000);
+        let err = format!(r#"/api/chat returned 500 Internal Server Error: {{"error":"error parsing tool call: raw='{whole}', err=invalid character"}}"#);
+        let reply = settle(err, true, None).unwrap();
+        let sent = reply.tool_calls()[0].function.arguments["error"].as_str().unwrap().to_string();
+        assert!(sent.starts_with("error parsing tool call: raw='xxx"), "{sent:.60}");
+        assert!(sent.len() < MAX_FED_BACK + 40, "{}", sent.len());
+        assert!(sent.ends_with(" more bytes cut]"), "{sent}");
+        // A short message is untouched, and a cut never splits a character.
+        assert_eq!(capped("short".to_string()), "short");
+        let wide = format!("a{}", "é".repeat(MAX_FED_BACK));
+        assert!(capped(wide).ends_with("… [1502 more bytes cut]"));
     }
 
     /// Proves our raw-prompt render is the exact prompt Ollama would have

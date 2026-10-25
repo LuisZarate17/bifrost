@@ -307,6 +307,7 @@ struct Outcome {
     /// Each call and what came back, for reading a failure rather than guessing at it.
     log: Vec<String>,
     recovered: usize,
+    fed_back: usize,
 }
 
 /// Every file under `dir`, as bytes, keyed by forward-slash relative path.
@@ -448,6 +449,7 @@ fn run(model: &str, task: &Task, format: Format, transport: Transport, opts: &Op
             secs,
             log: r.log,
             recovered: r.recovered,
+            fed_back: r.fed_back,
         };
     }
 
@@ -470,6 +472,7 @@ fn run(model: &str, task: &Task, format: Format, transport: Transport, opts: &Op
         secs,
         log: r.log,
         recovered: r.recovered,
+        fed_back: r.fed_back,
     }
 }
 
@@ -537,6 +540,7 @@ fn main() {
             let mut edit_errors = 0;
             let mut calls_total = 0;
             let mut recovered_total = 0;
+            let mut fed_back_total = 0;
             println!("── {} · {} · {} ──", format.name(), transport.name(), label);
             for task in &tasks {
                 let mut line = String::new();
@@ -549,6 +553,7 @@ fn main() {
                     edit_errors += o.edit_errors;
                     calls_total += o.calls.len();
                     recovered_total += o.recovered;
+                    fed_back_total += o.fed_back;
                     line.push_str(&format!("{:<5} ", o.verdict.label()));
                     if o.verdict != Verdict::Pass {
                         println!("    {} run {}: {} — {}", task.id, i + 1, o.verdict.label(), o.why);
@@ -559,7 +564,7 @@ fn main() {
                     json.push(serde_json::json!({
                         "format": format.name(), "transport": transport.name(), "setting": label, "log": o.log, "task": task.id, "run": i + 1,
                         "verdict": o.verdict.label(), "why": o.why, "calls": o.calls,
-                        "editErrors": o.edit_errors, "recovered": o.recovered, "rounds": o.rounds, "hitBound": o.hit_bound,
+                        "editErrors": o.edit_errors, "recovered": o.recovered, "fedBack": o.fed_back, "rounds": o.rounds, "hitBound": o.hit_bound,
                         "secs": (o.secs * 10.0).round() / 10.0,
                     }));
                 }
@@ -574,6 +579,9 @@ fn main() {
             );
             if recovered_total > 0 {
                 println!("  ({recovered_total} malformed calls recovered)");
+            }
+            if fed_back_total > 0 {
+                println!("  ({fed_back_total} unreadable calls sent back to the model)");
             }
             rows.push(format!(
                 "| {} | {} | {} | {}/{} ({pct:.0}%) | {} | {} | {} | {edit_errors} | {:.1} | {:.1}s |",

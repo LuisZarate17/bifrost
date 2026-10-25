@@ -75,6 +75,7 @@ use crate::bent::{self, Bent};
 use crate::session::HUGIN_IDENTITY;
 use crate::start;
 use crate::stop::Stopper;
+use crate::trace::{self, Trace};
 
 /// How long the whole run may take unless `--time` says: nine minutes, under the ten Claude
 /// Code gives a command.
@@ -121,6 +122,10 @@ pub struct Args {
     pub folder: PathBuf,
     /// `--time`: how long the whole run may take.
     pub time: Duration,
+    /// `--model`: the model for this run only, instead of the config's coding model.
+    pub model: Option<String>,
+    /// `--trace`: a file to append a line to for every request sent to the model.
+    pub trace: Option<PathBuf>,
 }
 
 /// `--check`'s text as the program and arguments it runs. **It is run directly, not by a
@@ -1313,12 +1318,14 @@ pub fn run(args: Args) -> ExitCode {
         let root = Workspace::open(&args.folder).ok()?.root_display();
         cfg.check_for(&root).cloned()
     });
-    let model = cfg.coding_model.clone();
+    // `--model` for this run only: the config is read, never written.
+    let model = args.model.unwrap_or_else(|| cfg.coding_model.clone());
+    let trace = args.trace.as_deref().map(Trace::open);
     // The model loads while the copy is made. A failure is not news here: the first request meets it.
     let _ = start::warm(model.clone(), cfg.num_ctx);
 
     let job = Job { task, folder: args.folder, check, time: args.time, started, work: scratch::work_dir(), cache: cache_dir() };
-    let finished = execute(&job, &Git::new(), &model, |ctx| real(&model, ctx));
+    let finished = execute(&job, &Git::new(), &model, |ctx| trace::wired(trace, &model, real(&model, ctx)));
     let text = if json { format!("{}\n", finished.report.to_json_string()) } else { finished.report.to_text() };
     let mut stdout = std::io::stdout().lock();
     let _ = stdout.write_all(text.as_bytes());

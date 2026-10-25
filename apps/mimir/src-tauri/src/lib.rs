@@ -637,6 +637,9 @@ impl Frontend for Webview {
         if numbers.recovered {
             println!("[mimir] a malformed tool call was recovered through the raw retry");
         }
+        if numbers.fed_back {
+            println!("[mimir] a tool call Ollama could not read was sent back to the model");
+        }
         let _ = self.events.send(TurnEvent::Round {
             prompt_eval_count: numbers.prompt_eval_count,
             prompt_chars: numbers.prompt_chars,

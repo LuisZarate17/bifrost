@@ -92,6 +92,9 @@ pub struct RoundNumbers {
     /// Ollama rejected a malformed call and the round recovered it through the raw
     /// retry. Mimir logs it; the probes count it.
     pub recovered: bool,
+    /// Ollama could not read the model's call and it was sent back to the model as a
+    /// rejection to try again. Counted apart from `recovered`: that call was read.
+    pub fed_back: bool,
 }
 
 /// Where a tool card stands. **pending**: waiting on a person. **running**:
@@ -427,7 +430,7 @@ impl Turn<'_> {
         if self.fe.stopped() {
             return Ok(Flow::End);
         }
-        let Round { reply, prompt_eval_count, sent, recovered } = (self.ask)(&self.convo[..], self.calibration, false)?;
+        let Round { reply, prompt_eval_count, sent, recovered, fed_back, metrics: _ } = (self.ask)(&self.convo[..], self.calibration, false)?;
         // The server is up now (if "Starting Ollama…" was showing, it is done).
         self.fe.status("");
         // `convo` must end up exactly what was sent, or the next round's prefix
@@ -448,6 +451,7 @@ impl Turn<'_> {
             set_aside: sent.set_aside().len(),
             fits: sent.fits(),
             recovered,
+            fed_back,
         });
 
         // An automatic call has already run by the time it comes back, so Stop
@@ -942,7 +946,7 @@ mod tests {
     }
 
     fn round_of(reply: Reply) -> Result<Round, String> {
-        Ok(Round { reply, prompt_eval_count: 0, recovered: false, sent: sent() })
+        Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, metrics: Default::default(), sent: sent() })
     }
 
     fn raw(name: &str, arguments: serde_json::Value) -> chat::ToolCall {
@@ -1020,7 +1024,7 @@ mod tests {
         assert_eq!(asked, vec![(false, 1, None)]);
         assert_eq!(fe.answers, [("hello".to_string(), 0, 7)]);
         let prompt_chars = sent().prompt_chars();
-        let numbers = RoundNumbers { prompt_eval_count: 0, prompt_chars, set_aside: 0, fits: true, recovered: false };
+        let numbers = RoundNumbers { prompt_eval_count: 0, prompt_chars, set_aside: 0, fits: true, recovered: false, fed_back: false };
         assert_eq!(fe.numbers, [numbers]);
         assert!(fe.errors.is_empty() && fe.cards.is_empty());
         assert_eq!(convo, vec![Message::user("hi")]);
@@ -1128,6 +1132,19 @@ mod tests {
         let (_, asked) = play(&mut convo, None, asks, vec![], &mut fe);
         assert_eq!(asked.len(), 31);
         assert_eq!(fe.errors, ["Stopped after 10 tool rounds."]);
+    }
+
+    /// A call Ollama could not read comes back as a rejection the model is told of, the
+    /// turn goes on to the model's next reply, and the round is counted as fed back.
+    #[test]
+    fn a_call_that_was_fed_back_is_counted_apart_from_a_recovered_one() {
+        let mut fe = Fake::new();
+        let mut convo = vec![Message::user("fix it")];
+        let fed = Round { fed_back: true, ..rejected(0).unwrap() };
+        let (result, _) = play(&mut convo, None, vec![Ok(fed), answer("done")], vec![], &mut fe);
+        assert_eq!(result, Ok(()));
+        assert_eq!(fe.numbers.iter().map(|n| (n.recovered, n.fed_back)).collect::<Vec<_>>(), [(false, true), (false, false)]);
+        assert_eq!(fe.answers.len(), 1);
     }
 
     #[test]
@@ -1865,7 +1882,7 @@ mod tests {
         assert_eq!(result, Ok(()));
         let cal = Some(Calibration::new(chars, 4321));
         assert_eq!(asked.iter().map(|a| a.2).collect::<Vec<_>>(), [start, cal, cal]);
-        let numbers = RoundNumbers { prompt_eval_count: 4321, prompt_chars: chars, set_aside: aside, fits: true, recovered: false };
+        let numbers = RoundNumbers { prompt_eval_count: 4321, prompt_chars: chars, set_aside: aside, fits: true, recovered: false, fed_back: false };
         assert_eq!(fe.numbers[0], numbers);
         // `convo` is what was sent: the stubs, not the 6000 characters.
         assert_eq!(convo[..9], copy[..]);

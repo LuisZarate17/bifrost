@@ -10,6 +10,7 @@
 //! - [`print`] — `hugin -p`: one task handed over, a proposal handed back
 //! - [`ask`] — `hugin --ask`: one question about the code, answered by reading it, read-only
 //! - [`bent`] — the existing tests a `-p` patch changes, which it warns about
+//! - [`trace`] — `--trace`: a line for every request a `-p` or `--ask` run sends the model
 
 mod ask;
 #[cfg(test)]
@@ -33,6 +34,9 @@ mod start;
 mod stop;
 #[cfg(test)]
 mod tests;
+mod trace;
+#[cfg(test)]
+mod trace_tests;
 mod transcript;
 mod ui;
 mod view;
@@ -51,7 +55,9 @@ hugin - a terminal agent that works in a folder
 
 usage: hugin [--folder <path>] [--shell <powershell|cmd|bash>] [--line] [--launch]
        hugin -p <task> [--check <command>] [--json] [--folder <path>] [--time <seconds>]
+                       [--model <tag>] [--trace <file.jsonl>]
        hugin --ask <question> [--json] [--folder <path>] [--time <seconds>]
+                       [--model <tag>] [--trace <file.jsonl>]
 
   --folder <path>   the folder to work in (default: the current directory)
   --shell <name>    the shell the model's commands run in (default: hugin_shell in the config,
@@ -76,6 +82,14 @@ usage: hugin [--folder <path>] [--shell <powershell|cmd|bash>] [--line] [--launc
                     wrong: open the files it names
   --json            with -p or --ask: the result as one JSON object
   --time <seconds>  with -p or --ask: how long the whole run may take (default 540; 300 for --ask)
+  --model <tag>     with -p or --ask: the Ollama model to use for this run only, instead of the
+                    coding model in the config (which is never changed)
+  --trace <file>    with -p or --ask: append one JSON line to this file for every request sent to
+                    the model: time, model, prompt_eval_count, eval_count, total_duration,
+                    prompt_eval_duration and eval_duration (Ollama's, in nanoseconds, null where
+                    it did not say), recovered, fed_back (Ollama could not read the call and the
+                    model was told), tool_calls (in the reply), thinking_len and error. A trace
+                    that cannot be written is said once and never stops the run
   --claude-note     print the section for Claude Code's CLAUDE.md that says when to use -p
   --help            show this help
 
@@ -115,6 +129,7 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
     let mut line = false;
     let mut shell = None;
     let (mut task, mut check, mut time, mut question) = (None, None, None, None);
+    let (mut model, mut trace) = (None, None);
     let (mut json, mut note) = (false, false);
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -130,18 +145,26 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
             "--shell" => shell = Some(parse_shell(&args.next().ok_or("--shell needs a name")?)?),
             "--check" => check = Some(args.next().ok_or("--check needs a command")?),
             "--time" => time = Some(args.next().ok_or("--time needs a number of seconds")?),
+            "--model" => model = Some(args.next().ok_or("--model needs a model tag")?),
+            "--trace" => trace = Some(args.next().ok_or("--trace needs a file")?),
             other => match (other.strip_prefix("--folder="), other.strip_prefix("--shell=")) {
                 (Some(path), _) => folder = Some(path.to_string()),
                 (_, Some(name)) => shell = Some(parse_shell(name)?),
                 _ => match (other.strip_prefix("--check="), other.strip_prefix("--time=")) {
                     (Some(command), _) => check = Some(command.to_string()),
                     (_, Some(secs)) => time = Some(secs.to_string()),
-                    _ => return Err(format!("unknown argument: {other}")),
+                    _ => match (other.strip_prefix("--model="), other.strip_prefix("--trace=")) {
+                        (Some(tag), _) => model = Some(tag.to_string()),
+                        (_, Some(file)) => trace = Some(file.to_string()),
+                        _ => return Err(format!("unknown argument: {other}")),
+                    },
                 },
             },
         }
     }
     let folder = folder.map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let model = model.map(|tag| parse_model(&tag)).transpose()?;
+    let trace = trace.map(|file| parse_trace(&file)).transpose()?;
     if note {
         return Ok(Cmd::ClaudeNote);
     }
@@ -157,11 +180,11 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
         }
         let question = if question == "-" { ask::Question::Stdin } else { ask::Question::Text(question) };
         let time = ask::parse_time(time.as_deref())?;
-        return Ok(Cmd::Ask(ask::Args { question, json, folder, time }));
+        return Ok(Cmd::Ask(ask::Args { question, json, folder, time, model, trace }));
     }
     let Some(task) = task else {
-        if check.is_some() || json || time.is_some() {
-            return Err("--check goes with -p; --json and --time go with -p or --ask".to_string());
+        if check.is_some() || json || time.is_some() || model.is_some() || trace.is_some() {
+            return Err("--check goes with -p; --json, --time, --model and --trace go with -p or --ask".to_string());
         }
         return Ok(Cmd::Run { folder, line, shell });
     };
@@ -171,7 +194,18 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
     let task = if task == "-" { print::Task::Stdin } else { print::Task::Text(task) };
     let check = check.map(|command| print::parse_check(&command)).transpose()?;
     let time = print::parse_time(time.as_deref())?;
-    Ok(Cmd::Print(print::Args { task, check, json, folder, time }))
+    Ok(Cmd::Print(print::Args { task, check, json, folder, time, model, trace }))
+}
+
+/// `--model`'s tag: anything Ollama could name, but not nothing.
+fn parse_model(tag: &str) -> Result<String, String> {
+    let tag = tag.trim();
+    if tag.is_empty() { Err("--model needs a model tag".to_string()) } else { Ok(tag.to_string()) }
+}
+
+/// `--trace`'s file.
+fn parse_trace(file: &str) -> Result<PathBuf, String> {
+    if file.trim().is_empty() { Err("--trace needs a file".to_string()) } else { Ok(PathBuf::from(file)) }
 }
 
 fn parse_shell(name: &str) -> Result<Shell, String> {
@@ -378,6 +412,43 @@ mod tests_main {
         }
         // And -p is still -p: five minutes is --ask's own.
         assert_eq!(printed(&["-p", "x"]).time, Duration::from_secs(540));
+    }
+
+    #[test]
+    fn model_and_trace_go_with_p_and_with_ask_and_with_nothing_else() {
+        // Neither is given: the config's model, and no trace.
+        let a = printed(&["-p", "x"]);
+        assert_eq!((a.model, a.trace), (None, None));
+        let a = asked(&["--ask", "q"]);
+        assert_eq!((a.model, a.trace), (None, None));
+
+        let a = printed(&["-p", "x", "--model", "devstral:24b", "--trace", "C:\\runs\\a.jsonl"]);
+        assert_eq!((a.model.as_deref(), a.trace), (Some("devstral:24b"), Some(PathBuf::from("C:\\runs\\a.jsonl"))));
+        let a = asked(&["--ask", "q", "--model=gpt-oss:20b", "--trace=a.jsonl"]);
+        assert_eq!((a.model.as_deref(), a.trace), (Some("gpt-oss:20b"), Some(PathBuf::from("a.jsonl"))));
+
+        assert!(args(&["-p", "x", "--model"]).unwrap_err().contains("--model needs a model tag"));
+        assert!(args(&["--ask", "q", "--trace"]).unwrap_err().contains("--trace needs a file"));
+        assert!(args(&["--ask", "q", "--model", " "]).is_err());
+        assert!(args(&["-p", "x", "--trace="]).is_err());
+        // Without a task or a question there is nothing for them to go with.
+        for alone in [&["--model", "x"][..], &["--trace", "t.jsonl"]] {
+            assert!(args(alone).unwrap_err().contains("go with -p or --ask"), "{alone:?}");
+        }
+    }
+
+    #[test]
+    fn the_help_names_model_and_trace() {
+        let text: String = HELP.split_whitespace().collect::<Vec<_>>().join(" ");
+        for must in [
+            "[--model <tag>] [--trace <file.jsonl>]",
+            "--model <tag> with -p or --ask: the Ollama model to use for this run only, instead of the coding model in the config (which is never changed)",
+            "--trace <file> with -p or --ask: append one JSON line to this file for every request sent to the model",
+            "fed_back (Ollama could not read the call and the model was told)",
+            "A trace that cannot be written is said once and never stops the run",
+        ] {
+            assert!(text.contains(must), "{must}");
+        }
     }
 
     #[test]

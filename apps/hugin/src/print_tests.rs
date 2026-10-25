@@ -159,7 +159,7 @@ enum Step {
 type Log = Arc<Mutex<Vec<String>>>;
 
 fn round(reply: Reply) -> Result<Round, String> {
-    Ok(Round { reply, prompt_eval_count: 0, recovered: false, sent: compact_for_send(&mut [], &[], 8192, None, 0) })
+    Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, metrics: Default::default(), sent: compact_for_send(&mut [], &[], 8192, None, 0) })
 }
 
 fn asks(name: &str, path: &str, token: &str, arguments: serde_json::Value) -> Result<Round, String> {

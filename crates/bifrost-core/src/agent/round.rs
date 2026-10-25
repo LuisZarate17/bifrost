@@ -23,6 +23,8 @@
 //! [`round_in`], which is [`round`] in a setting of their own ([`Env`]) — Mimir's
 //! `round` is that with the app's, and does exactly what it did.
 
+use std::time::Duration;
+
 use super::env::Env;
 use super::run::run_auto;
 use super::send::{compact_for_send, send_whole, Calibration, Sent};
@@ -62,8 +64,54 @@ pub struct Round {
     /// because nothing in this crate prints. How often it fires is how you know
     /// whether the recovery is still needed.
     pub recovered: bool,
+    /// Ollama could not read the model's call and [`chat::chat_tools`] handed back a
+    /// stand-in for it, which `reply` turns into a rejection the model is told of.
+    /// Counted apart from `recovered`: that call was read, this one was not.
+    pub fed_back: bool,
+    /// What Ollama counted for the request, for a trace.
+    pub metrics: Metrics,
     /// What was set aside to make the prompt fit, and how much was sent.
     pub sent: Sent,
+}
+
+/// What a request cost, as Ollama counted it, and what came back. Kept beside the
+/// sorted [`Reply`] because a trace wants the numbers and the whole reply's call count,
+/// not only the first call [`classify`] acts on.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Metrics {
+    pub eval_count: u32,
+    /// Zero for each Ollama did not say, as on a reply fed back from an error.
+    pub total: Duration,
+    pub prompt_eval: Duration,
+    pub eval: Duration,
+    /// Calls in the reply, not only the first.
+    pub tool_calls: usize,
+    /// Length of what the model thought before answering, in characters. Always 0 until
+    /// thinking is read from the reply.
+    pub thinking_len: usize,
+    /// What Ollama said about a call it could not read, when the reply was fed back (already
+    /// capped); otherwise none. A request that failed outright has no round, and its error is
+    /// the caller's.
+    pub error: Option<String>,
+}
+
+impl Metrics {
+    fn of(reply: &chat::ChatReply) -> Self {
+        let error = reply
+            .fed_back
+            .then(|| reply.tool_calls().first())
+            .flatten()
+            .and_then(|call| call.function.arguments["error"].as_str().map(str::to_string));
+        Self {
+            error,
+            eval_count: reply.eval_count,
+            total: reply.total,
+            prompt_eval: reply.prompt_eval_duration,
+            eval: reply.eval_duration,
+            tool_calls: reply.tool_calls().len(),
+            thinking_len: 0,
+        }
+    }
 }
 
 /// What the model said, sorted by what happens next.
@@ -241,10 +289,13 @@ pub fn round_in(
         // `chat`, not `chat_tools`: with no tools there is nothing for the recovery
         // to turn text into, and a call the model writes anyway stays words.
         let reply = chat::chat(model, &messages, &[], options)?;
+        let metrics = Metrics::of(&reply);
         return Ok(Round {
             reply: Reply::Answer { content: reply.message.content, eval_count: reply.eval_count },
             prompt_eval_count: reply.prompt_eval_count,
             recovered: reply.recovered,
+            fed_back: reply.fed_back,
+            metrics,
             sent,
         });
     }
@@ -267,6 +318,8 @@ pub fn round_in(
         reply: classify(&reply, &cx, &mut arm),
         prompt_eval_count: reply.prompt_eval_count,
         recovered: reply.recovered,
+        fed_back: reply.fed_back,
+        metrics: Metrics::of(&reply),
         sent,
     })
 }
@@ -361,7 +414,7 @@ fn classify(
 
     if call.function.name == chat::INVALID_TOOL_CALL {
         let why = call.function.arguments["error"].as_str().unwrap_or("unreadable").to_string();
-        return reject("tool call", "", format!("{why}. Send the call again as valid JSON."));
+        return reject("tool call", "", format!("{why}. Send one valid tool call."));
     }
     let request = match tools::interpret(&call) {
         Ok(r) => r,
@@ -657,6 +710,9 @@ mod tests {
             prompt_eval_count: 0,
             eval_count: 5,
             recovered: false,
+            fed_back: false,
+            prompt_eval_duration: Duration::ZERO,
+            eval_duration: Duration::ZERO,
         }
     }
 
@@ -892,12 +948,70 @@ mod tests {
             (
                 "tool call".to_string(),
                 String::new(),
-                "error: unterminated string. Send the call again as valid JSON.".to_string()
+                "error: unterminated string. Send one valid tool call.".to_string()
             )
         );
         let no_reason = call(chat::INVALID_TOOL_CALL, json!({}));
         let (_, _, error) = rejection(judge_call(no_reason, None, None, false));
-        assert_eq!(error, "error: unreadable. Send the call again as valid JSON.");
+        assert_eq!(error, "error: unreadable. Send one valid tool call.");
+    }
+
+    /// **A model that is not Qwen gets the same safety net.** Ollama answered its tools
+    /// request with a parse error; `settle` turns that into the stand-in call, `classify`
+    /// sends it back as a rejection, and the model's next, valid call runs.
+    #[test]
+    fn a_parse_error_from_any_model_is_fed_back_and_its_next_call_runs() {
+        let s = Sandbox::new("fedback");
+        s.write("project/a.txt", "one\n");
+        let ws = s.ws();
+        let err = r#"/api/chat returned 500 Internal Server Error: {"error":"error parsing tool call: raw='{\"name\":', err=unexpected end of JSON input"}"#;
+        let fed = chat::settle(err.to_string(), true, None).expect("fed back, not an error");
+        assert!(fed.fed_back && !fed.recovered);
+        // The trace is told why, and an ordinary reply has nothing to say.
+        let metrics = Metrics::of(&fed);
+        assert_eq!(metrics.tool_calls, 1);
+        assert_eq!(
+            metrics.error.as_deref(),
+            Some("error parsing tool call: raw='{\"name\":', err=unexpected end of JSON input")
+        );
+        assert_eq!(Metrics::of(&said("hi", vec![])).error, None);
+        let (reply, armed) = judge(&fed, &[], Some(&ws), None, false);
+        let (name, path, error) = rejection((reply, armed));
+        assert_eq!((name.as_str(), path.as_str()), ("tool call", ""));
+        assert_eq!(
+            error,
+            "error: error parsing tool call: raw='{\"name\":', err=unexpected end of JSON input. Send one valid tool call."
+        );
+
+        // The conversation now holds the stand-in call and the reason; the model's next call is read.
+        let mut history = vec![Message::user("read a.txt")];
+        history.extend(exchange(chat::INVALID_TOOL_CALL, fed.tool_calls()[0].function.arguments.clone(), &error));
+        let (reply, armed) = judge(&said("", vec![call("read_file", json!({ "path": "a.txt" }))]), &history, Some(&ws), None, false);
+        assert!(armed.is_empty());
+        let Reply::Auto { name, ok, result, .. } = reply else { panic!("not run: {}", kind(&reply)) };
+        assert_eq!((name.as_str(), ok), ("read_file", true));
+        assert!(result.contains("one"), "{result}");
+    }
+
+    /// The loop-breaking rule covers a call that cannot be read: the same failure a third
+    /// time ends the turn, with the model told only until then.
+    #[test]
+    fn the_same_unreadable_call_a_third_time_ends_the_turn() {
+        let args = json!({ "error": "invalid tool call" });
+        let again = || said("", vec![call(chat::INVALID_TOOL_CALL, args.clone())]);
+        let mut history = vec![Message::user("go")];
+
+        let (_, _, first) = rejection(judge(&again(), &history, None, None, false));
+        assert_eq!(first, "error: invalid tool call. Send one valid tool call.");
+        history.extend(exchange(chat::INVALID_TOOL_CALL, args.clone(), &first));
+
+        let (_, _, second) = rejection(judge(&again(), &history, None, None, false));
+        assert!(second.starts_with(&first), "{second}");
+        history.extend(exchange(chat::INVALID_TOOL_CALL, args.clone(), &second));
+
+        let (reply, armed) = judge(&again(), &history, None, None, false);
+        assert!(armed.is_empty());
+        assert!(matches!(reply, Reply::Stuck { .. }), "not stuck: {}", kind(&reply));
     }
 
     #[test]

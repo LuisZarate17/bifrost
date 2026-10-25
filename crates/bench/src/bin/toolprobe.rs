@@ -133,8 +133,8 @@ fn main() {
     );
 
     let tools = tools();
-    let (mut correct, mut wrong_tool, mut bad_args, mut missed, mut spurious, mut errors, mut recovered) =
-        (0, 0, 0, 0, 0, 0, 0);
+    let (mut correct, mut wrong_tool, mut bad_args, mut missed, mut spurious, mut errors, mut recovered, mut fed_back) =
+        (0, 0, 0, 0, 0, 0, 0, 0);
 
     for (i, case) in cases.iter().enumerate() {
         let messages = [Message::user(case.prompt)];
@@ -153,6 +153,9 @@ fn main() {
         };
         if reply.recovered {
             recovered += 1;
+        }
+        if reply.fed_back {
+            fed_back += 1;
         }
 
         let calls = reply.tool_calls();
@@ -202,6 +205,9 @@ fn main() {
     }
     if recovered > 0 {
         println!("  recovered      {recovered}     <- needed the raw retry or a passed-through call read back out");
+    }
+    if fed_back > 0 {
+        println!("  fed back       {fed_back}     <- Ollama could not read the call; judged above as a wrong or spurious call");
     }
     println!("\n  pass rate: {:.0}%", 100.0 * correct as f64 / total as f64);
 }

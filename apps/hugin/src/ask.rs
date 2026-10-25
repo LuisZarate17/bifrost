@@ -55,6 +55,7 @@ use serde::Serialize;
 use crate::print::{self, Wired};
 use crate::start;
 use crate::stop::Stopper;
+use crate::trace::{self, Trace};
 
 /// How long the whole run may take unless `--time` says: five minutes. A question is a smaller
 /// thing than a task.
@@ -80,6 +81,10 @@ pub struct Args {
     pub folder: PathBuf,
     /// `--time`: how long the whole run may take.
     pub time: Duration,
+    /// `--model`: the model for this run only, instead of the config's coding model.
+    pub model: Option<String>,
+    /// `--trace`: a file to append a line to for every request sent to the model.
+    pub trace: Option<PathBuf>,
 }
 
 /// `--time`'s seconds, or [`DEFAULT_TIME`] when it is not given.
@@ -516,12 +521,14 @@ pub fn run(args: Args) -> ExitCode {
     }
 
     let cfg = config::load();
-    let model = cfg.coding_model.clone();
+    // `--model` for this run only: the config is read, never written.
+    let model = args.model.unwrap_or_else(|| cfg.coding_model.clone());
+    let trace = args.trace.as_deref().map(Trace::open);
     // The model loads while the folder is opened. A failure is not news here: the first request meets it.
     let _ = start::warm(model.clone(), cfg.num_ctx);
 
     let job = Job { question, folder: args.folder, time: args.time, started, work: scratch::work_dir() };
-    let report = execute(&job, &model, |ctx| real(&model, ctx));
+    let report = execute(&job, &model, |ctx| trace::wired(trace, &model, real(&model, ctx)));
     let text = if json { format!("{}\n", report.to_json_string()) } else { report.to_text() };
     let mut stdout = std::io::stdout().lock();
     let _ = stdout.write_all(text.as_bytes());

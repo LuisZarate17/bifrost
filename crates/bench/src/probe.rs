@@ -267,6 +267,9 @@ pub struct Run {
     /// Each call and what came back, for reading a failure rather than guessing.
     pub log: Vec<String>,
     pub recovered: usize,
+    /// Calls Ollama could not read that were sent back to the model to try again.
+    /// Apart from `recovered`: those calls were read.
+    pub fed_back: usize,
     /// Each `run_check`, passed or not, in order.
     pub checks: Vec<bool>,
     /// How many of those never finished by themselves with an exit code — they
@@ -375,6 +378,10 @@ impl Book {
         if round.recovered {
             self.run.recovered += 1;
             self.run.log.push("(ollama rejected a malformed call; recovered through the raw retry)".into());
+        }
+        if round.fed_back {
+            self.run.fed_back += 1;
+            self.run.log.push("(ollama could not read the model's call; sent back to the model)".into());
         }
         match &round.reply {
             // Its words arrive through the frontend.
@@ -794,7 +801,7 @@ mod tests {
     }
 
     fn round_of(reply: Reply) -> Result<Round, String> {
-        Ok(Round { reply, prompt_eval_count: 0, recovered: false, sent: sent() })
+        Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, metrics: Default::default(), sent: sent() })
     }
 
     fn call(name: &str, arguments: serde_json::Value) -> ToolCall {
@@ -1400,6 +1407,16 @@ mod tests {
     }
 
     #[test]
+    fn a_call_fed_back_is_counted_apart_from_a_recovered_one() {
+        let dir = Sandbox::new("fedback");
+        let fed = Round { fed_back: true, ..auto("read_file", json!({ "path": "a.txt" }), "one\n", true).unwrap() };
+        let played = play(&dir.setup(false), 10, vec![Ok(fed), answer("Done.")], vec![]);
+        let r = played.run;
+        assert_eq!((r.recovered, r.fed_back), (0, 1));
+        assert_eq!(r.log[0], "(ollama could not read the model's call; sent back to the model)");
+    }
+
+    #[test]
     fn the_prompt_sizes_are_kept_and_a_drop_with_nothing_set_aside_is_a_truncation() {
         let round = |prompt_eval_count, set_aside| RoundNumbers {
             prompt_eval_count,
@@ -1407,6 +1424,7 @@ mod tests {
             set_aside,
             fits: true,
             recovered: false,
+            fed_back: false,
         };
         let mut book = Book::default();
         book.counted(round(1000, 0));
