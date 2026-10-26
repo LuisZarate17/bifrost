@@ -360,7 +360,7 @@ pub fn chat_tools(
     tools: &[Tool],
     options: Options,
 ) -> Result<ChatReply, String> {
-    match chat(model, messages, tools, options) {
+    let reply = match chat(model, messages, tools, options) {
         Err(e) if is_chatml_error(&e) || is_xml_error(&e) || (!tools.is_empty() && is_tool_parse_error(&e)) => {
             after_failure(e, !tools.is_empty(), layout(model), |l| recover(model, messages, tools, options, l))
         }
@@ -371,6 +371,35 @@ pub fn chat_tools(
             }
         }
         other => other,
+    };
+    reply.map(|mut r| {
+        r.message.content = without_dangling_markup(&r.message.content).to_string();
+        r
+    })
+}
+
+/// The reply's text without a tool-call tag left dangling at its end: an opener the
+/// model wrote and then stopped, or a closer whose call is already gone (J0c, a
+/// `hugin --ask` answer ending in `<tool_call>`). A tag is taken only from a line of
+/// its own at the very end, and only with no partner, so an answer that talks about
+/// the tags or shows a whole example keeps them (R-17).
+fn without_dangling_markup(original: &str) -> &str {
+    let mut text = original.trim_end();
+    let mut cut = false;
+    loop {
+        let last_line = text.rsplit('\n').next().unwrap_or(text);
+        let unmatched = match last_line.trim() {
+            "<tool_call>" => true,
+            "</tool_call>" => text.matches("<tool_call>").count() < text.matches("</tool_call>").count(),
+            "</function>" => text.matches("<function=").count() < text.matches("</function>").count(),
+            _ => false,
+        };
+        if !unmatched {
+            // Untouched when there was nothing to cut, trailing whitespace and all.
+            return if cut { text } else { original };
+        }
+        text = text[..text.len() - last_line.len()].trim_end();
+        cut = true;
     }
 }
 
@@ -1126,6 +1155,27 @@ mod tests {
         assert!(capped(wide).ends_with("… [1502 more bytes cut]"));
     }
 
+    #[test]
+    fn a_tag_left_dangling_at_the_end_of_a_reply_is_cut_and_one_that_is_talked_about_is_kept() {
+        let cases = [
+            ("The file is a.rs.\n<tool_call>", "The file is a.rs.", "an opener with nothing after"),
+            ("The file is a.rs.\n\n<tool_call>\n", "The file is a.rs.", "and a blank line before it"),
+            ("Done.\n</function>\n</tool_call>", "Done.", "closers whose call is gone"),
+            ("<tool_call>", "", "nothing but the opener"),
+            ("Each call is wrapped in <tool_call> and </tool_call>", "Each call is wrapped in <tool_call> and </tool_call>", "R-17: talked about"),
+            ("The opening tag is\n`<tool_call>`", "The opening tag is\n`<tool_call>`", "quoted as code"),
+            (
+                "Like this:\n<tool_call>\n<function=read_file>\n</function>\n</tool_call>",
+                "Like this:\n<tool_call>\n<function=read_file>\n</function>\n</tool_call>",
+                "a whole example",
+            ),
+            ("Plain answer.\n", "Plain answer.\n", "no markup, left as it was"),
+        ];
+        for (text, want, why) in cases {
+            assert_eq!(without_dangling_markup(text), want, "{why}");
+        }
+    }
+
     /// Proves our raw-prompt render is the exact prompt Ollama would have
     /// built natively — by sending the same conversation both ways and checking
     /// that the model was given the same number of prompt tokens and called the
@@ -1135,7 +1185,8 @@ mod tests {
     /// sent three times answered with prose that diverged after ~30 tokens
     /// between a cold and a warm prompt cache, while `prompt_eval_count` stayed
     /// 490 every time. So the token count is the fidelity check, and the tools
-    /// called are the part that has to come out the same.
+    /// called are the part that has to come out the same — from the same cache
+    /// state, which the warm-up below sets.
     ///
     /// `--ignored`: needs Ollama running locally with qwen3-coder:30b.
     #[test]
@@ -1198,6 +1249,13 @@ mod tests {
 
         for (i, messages) in conversations.into_iter().enumerate() {
             let tools = bifrost_tools_for_live_test();
+            // Both sides are asked with this exact prompt already cached. Ollama 0.40's
+            // llama-server reuses its prompt cache, and the tool chosen at temperature 0
+            // follows the cache: 2026-10-26, conversation 0 called `list_files` both ways
+            // after another conversation, and `read_file` both ways on an exact hit. Asked
+            // native-then-raw with no warm-up, native got the prefix hit and raw the exact
+            // one, and they disagreed on every run after the first.
+            chat(model, &messages, &tools, options).expect("warm-up chat");
             let native = chat(model, &messages, &tools, options).expect("native chat");
             // Read the native reply the way `chat_tools` does. Qwen3-Coder sometimes
             // writes its call without the `<tool_call>` opener, Ollama passes it

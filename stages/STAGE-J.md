@@ -98,6 +98,9 @@ it brings the server's tool-parser fixes.
 - **No stray markup in answers.** A Hugin `--ask` answer ended with a leftover `<tool_call>` fragment.
   Strip unmatched tool-call markup from the final answer text, with a test.
 - Done when both fidelity tests pass repeatedly, and toolprobe and taskprobe propose ×1 are unchanged.
+- **Outcome (2026-10-26):** the sampling step was dropped. Both paths already sample the same way, and
+  the mismatch came from `llama-server`'s prompt cache, so the test now warms up first. See
+  [J0c+-results.md](../docs/results/J0c+-results.md).
 
 **J0d · Thinking models.** A `model_settings` map in the config, per model tag; for now just
 `think` (off/low/medium/high).
