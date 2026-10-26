@@ -1,16 +1,17 @@
 # Stage J — where it stands
 
 Every chunk and gate of [STAGE-J.md](../stages/STAGE-J.md), done or not. **Updated at the end of
-every chunk.** Last updated 2026-10-25, during J0a.
+every chunk.** Last updated 2026-10-25, after J0c.
 
 **Started 2026-10-25.** One chunk at a time; in the runs, one model per session, with a
 report after each.
 
 | Phase | Chunk | What it is | Status | Result |
 |---|---|---|---|---|
-| **0. Fair** | J0a | A clean start: commit and push the pending Hugin work, the folder move | 📌 Pinned — committed `fd3fa57` and pushed; the folder move is set aside for later (2026-10-25). The Desktop launcher "Move Bifrost folder" does it | |
+| **0. Fair** | J0a | A clean start: commit and push the pending Hugin work, the folder move | ✅ Done | Committed `fd3fa57` and pushed. The folder move ran 2026-10-25: repo, Claude Code memory and config all moved, everything rebuilt; 1,066 tests pass in the new place (2 ignored, need Ollama). The Startup `Bifrost.lnk` still points to `…\odin` until Vidar's next start repairs it |
 | | J0b | Tool-call repair for every model, not only Qwen | ✅ Built · local | Every model's unreadable call is fed back; Qwen keeps its own repair; real failures still end the turn; `--model` and `--trace` for the runs — [J0b](results/J0b-results.md) |
-| | J0c | Upgrade Ollama (0.33.3 → current) | Not started | |
+| | J0c | Upgrade Ollama (0.33.3 → current) | ✅ Done, one open item | 0.40.11; the current model passes toolprobe 10/10 and taskprobe 9/16; the apps run; one render-fidelity test fails (same token counts, different tool chosen) — [J0c](results/J0c-results.md) |
+| | J0c+ | The upgrade's leftovers: the raw retry must sample like `/api/chat`; no stray `<tool_call>` in answers | Not started — added to the plan 2026-10-25 | |
 | | J0d | Thinking models: `think` and per-model settings | Not started | |
 | | Gate J0 | Review, all tests green | Not started | |
 | **1. Tests** | J1a | realprobe: 10 real tasks with hidden tests | Not started | |

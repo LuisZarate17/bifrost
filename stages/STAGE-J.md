@@ -87,6 +87,18 @@ it brings the server's tool-parser fixes.
   - Vidar, Mimir and Hugin still start and answer;
   - Ollama's autostart is unchanged.
 
+**J0c+ · Two leftovers from the upgrade** (added 2026-10-25, before J0d).
+- **The raw retry must ask exactly what `/api/chat` asks.** On 0.40.11
+  `the_raw_render_matches_what_ollama_builds_natively` fails. The prompt token counts are identical, but
+  the two paths choose a different tool at temperature 0. To fix:
+  - dump the raw prompt and compare it with the native one;
+  - send the model's own sampling settings (`repeat_penalty`, `top_k`, `top_p`, from `/api/show`)
+    explicitly on the raw `/api/generate` path, so both paths sample the same way;
+  - the test must pass on 0.40.11, run several times.
+- **No stray markup in answers.** A Hugin `--ask` answer ended with a leftover `<tool_call>` fragment.
+  Strip unmatched tool-call markup from the final answer text, with a test.
+- Done when both fidelity tests pass repeatedly, and toolprobe and taskprobe propose ×1 are unchanged.
+
 **J0d · Thinking models.** A `model_settings` map in the config, per model tag; for now just
 `think` (off/low/medium/high).
 - Send `think` when it's set and the model reports the `thinking` capability.
