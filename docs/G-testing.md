@@ -9,7 +9,7 @@ is the short version, in the order that is quickest to work through.
 
 > **Names.** Renamed 2026-10-12 at Stage I's I0: Heimdall is now **Vidar**, Mímir is **Mimir**, and
 > the command is `bifrost`. The open checks use the new names; a check already done keeps the
-> names it was done under. The repo folder is still `…\repos\odin` until it is renamed too.
+> names it was done under. The repo folder was renamed to `…\repos\bifrost` on 2026-10-25.
 
 **Before you start**
 
@@ -50,7 +50,7 @@ is on.
 - [ ] **Pick the folder.**
   1. Click **Choose folder**. The Windows folder picker opens, titled *Choose the folder Mimir
      may edit*.
-  2. Go to `C:\Users\you\source\repos\odin`, then double-click **into** `practice`.
+  2. Go to `C:\Users\you\source\repos\bifrost`, then double-click **into** `practice`.
   3. Click **Select Folder**.
 
   ⚠ **Not while you are still in `odin`** — selecting `odin` itself lets Mimir edit the real
@@ -79,7 +79,7 @@ is on.
       in the folder. Click **Undo**: the file is removed.
 - [ ] **Turn editing off.** Click the **×** next to `practice`. **Expect:** the button
       goes back to **Choose folder**. Now type:
-      `In C:\Users\you\source\repos\odin\practice\greet.rs, change "world" to "Luis".`
+      `In C:\Users\you\source\repos\bifrost\practice\greet.rs, change "world" to "Luis".`
       **Expect:** no **Edit file** card, because without a folder the model is not given the edit
       tool at all. It may offer to read the file instead (fine; **Deny** it) and say it cannot
       change files. If it tries anyway you get *Couldn't edit … — no project folder is chosen. The
@@ -97,7 +97,7 @@ applied and the other failed, never a half-written line. Run `node tools/practic
 Tools on. The folder does not matter; reads are allowed anywhere, one approval at a time.
 
 - [ ] **Nothing is read until you allow it.** Type:
-      `What is the practice code in C:\Users\you\source\repos\odin\practice\facts.txt?`
+      `What is the practice code in C:\Users\you\source\repos\bifrost\practice\facts.txt?`
       **Expect:** a **Read file** card showing that exact path, marked **Needs approval**. Wait a
       few seconds; nothing happens on its own. Click **Allow once**. **Expect:** the answer says
       **4417-AMBER**.
@@ -107,7 +107,7 @@ Tools on. The folder does not matter; reads are allowed anywhere, one approval a
       **Denied**, *You declined. The model was told.*, and an answer that does **not** contain
       4417-AMBER.
 - [ ] **A file that isn't there.** Type:
-      `Read C:\Users\you\source\repos\odin\practice\missing.txt and summarise it.`
+      `Read C:\Users\you\source\repos\bifrost\practice\missing.txt and summarise it.`
       Allow it. **Expect:** the card says **Failed**, and the model says the file doesn't exist and
       carries on, rather than the chat breaking.
 - [ ] **Tools off.** Turn **Tools** off, new chat, ask the practice-code question again.

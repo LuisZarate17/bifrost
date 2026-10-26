@@ -11,7 +11,7 @@ Stage G's worksheet is [G-testing.md](G-testing.md).
 
 > **Names.** Renamed 2026-10-12 at Stage I's I0: Heimdall is now **Vidar**, Mímir is **Mimir**, the
 > shared crate is `bifrost-core`, and the data folder is `%APPDATA%\bifrost`. The checks use the new
-> names. The repo folder is still `…\repos\odin` until it is renamed too.
+> names. The repo folder was renamed to `…\repos\bifrost` on 2026-10-25.
 
 **Before you start**
 
@@ -19,7 +19,7 @@ Stage G's worksheet is [G-testing.md](G-testing.md).
 - `node tools/practice.mjs` — builds `practice\` in the repo (gitignored). **Run it again to reset
   the folder** whenever a check leaves it changed
 - Model: `qwen3-vl:8b-instruct-q4_K_M` unless a check says otherwise
-- In Mimir: turn on **Tools**, then **Choose folder** → `C:\Users\you\source\repos\odin\practice`
+- In Mimir: turn on **Tools**, then **Choose folder** → `C:\Users\you\source\repos\bifrost\practice`
   (double-click *into* `practice` before **Select Folder** — selecting `odin` itself would let
   Mimir work on the real project)
 - When a folder is chosen, Mimir may offer the coding model (H4b). Press **Not now** unless the
@@ -211,7 +211,7 @@ Unit tests in `bifrost_core::tools` cover the range, the header and the errors, 
 the ticket, and `node tools/e2e/mimir-bigfile.mjs` an edit past line 2000 of a ~120 KB file. What
 they cannot judge is how the real card reads, and whether the answer uses what the read gave. These
 need a file past 64 KB, which `practice` does not have, so choose **odin itself**
-(`C:\Users\you\source\repos\odin`) as the folder — they only read, so decline any edit it offers.
+(`C:\Users\you\source\repos\bifrost`) as the folder — they only read, so decline any edit it offers.
 
 - [ ] **A question about the end of a big file.** Ask `What does the last function in
       crates/bifrost-core/src/edit.rs before its tests do?` (or anything near the end of that file).

@@ -67,8 +67,8 @@ fn the_fade_in_rises_and_the_fade_out_falls_from_where_it_was() {
 #[test]
 fn the_label_is_the_last_folder_unless_the_path_is_short() {
     assert_eq!(folder_label(r"C:\src\odin"), r"C:\src\odin");
-    assert_eq!(folder_label(r"C:\Users\you\source\repos\odin"), "odin");
-    assert_eq!(folder_label(r"C:\Users\you\source\repos\odin\"), "odin");
+    assert_eq!(folder_label(r"C:\Users\you\source\repos\bifrost"), "bifrost");
+    assert_eq!(folder_label(r"C:\Users\you\source\repos\bifrost\"), "bifrost");
     assert_eq!(folder_label("."), ".");
 }
 

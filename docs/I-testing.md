@@ -127,7 +127,7 @@ use. Rebuild Mimir first if it is older than the I1 commits (`npm run app:mimir`
 ## I2 — Hugin in the terminal
 
 Hugin is built (`cargo build -p hugin`) and runs from any folder as
-`C:\Users\you\source\repos\odin\target\debug\hugin.exe` — a shortcut and `hugin` on your PATH
+`C:\Users\you\source\repos\bifrost\target\debug\hugin.exe` — a shortcut and `hugin` on your PATH
 come in I4. Windows Terminal was checked by script; **the finish line is yours**: a real task, start
 to finish, in both terminals ([I2-results.md](results/I2-results.md)).
 

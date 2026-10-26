@@ -78,7 +78,7 @@ const CARD: CardState = {
 
 const RECENT = [
   { path: "C:\\Users\\you\\source\\repos\\demo", name: "demo" },
-  { path: "C:\\Users\\you\\source\\repos\\odin", name: "odin" },
+  { path: "C:\\Users\\you\\source\\repos\\bifrost", name: "bifrost" },
   { path: "C:\\Users\\you\\practice", name: "practice" },
 ];
 
@@ -537,7 +537,7 @@ export function previewThread(mode: string): Preview {
     {
       kind: "tool",
       name: "read_file",
-      path: "C:\\Users\\you\\source\\repos\\odin\\Cargo.toml",
+      path: "C:\\Users\\you\\source\\repos\\bifrost\\Cargo.toml",
       state: "ran",
       result: FILE,
     },
@@ -565,7 +565,7 @@ export function previewThread(mode: string): Preview {
       {
         kind: "tool",
         name: "read_file",
-        path: "C:\\Users\\you\\source\\repos\\odin\\docs\\PLAN.md",
+        path: "C:\\Users\\you\\source\\repos\\bifrost\\docs\\PLAN.md",
         state: "pending",
       },
     ],
