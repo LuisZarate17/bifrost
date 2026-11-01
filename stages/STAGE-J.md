@@ -1,8 +1,7 @@
 # Stage J — the model bake-off: find a local model that makes Hugin and Mimir good
 
-> **Status: started 2026-10-25; in Phase 0.** J0a–J0c are done and pushed. J0c+ is built, waiting on
-> one clean taskprobe run. The rest of Phase 0 was set 2026-11-01 (below): J0c+'s close-out, J0d and
-> Gate J0, each. Live status: [J-status.md](../docs/J-status.md).
+> **Status: started 2026-10-25; in Phase 0.** J0a–J0c are done and pushed. J0c+ is done (local):
+> its clean taskprobe run passed 2026-11-01. Next are J0d and Gate J0, each. Live status: [J-status.md](../docs/J-status.md).
 
 ## TL;DR
 

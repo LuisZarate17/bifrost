@@ -67,3 +67,26 @@ Of the 9 temperature-0 tasks that finished, 4 passed (a01, a04, b03, b04) and 5 
 b01, b02, b05). In J0c the full t=0 run scored 8/16. These are the same kinds of failure as before:
 wrong code, not tool-call errors. The remaining 7 tasks were not run. **To finish:** one t=0 pass,
 with memory to spare. The leftover worktree from the stopped run was removed.
+
+## Close-out (2026-11-01)
+
+**The low memory was never the machine.** Task 10 in order is b06. A second attempt on 2026-11-01
+crashed the PC there: the model's `extract_calls`, run by the scoring tests, committed 81 GB while
+`llama-server` held 31 GB, on 31 GB of RAM. Windows ran out of commit and had to be powered off.
+`ba3fa74` caps every run: 8 GB per process and 16 GB for the whole run, and it is killed below 10 GB
+free disk.
+
+**The clean run**, at `ba3fa74` on Ollama 0.40.11, qwen3-coder:30b, `CARGO_BUILD_JOBS=2`, with VS
+Code and the browser open but idle (about 9 GB of RAM free). It took 21 minutes.
+
+| Setting | Pass | Later | Fail | Error | Time/run |
+|---|---|---|---|---|---|
+| app propose | ✅ **10/16** (bar 8–11) | 0 | 6 | 0 | 35.1 s |
+| t=0 propose | **9/16**, complete | 1 (a04) | 6 | 0 | 45.4 s |
+
+- **The same six fail at both settings:** a02, b01, b02, b05, b06 and b07. All are wrong code, not
+  tool-call errors. b06 now fails as an ordinary FAIL; its code didn't run away this time.
+- 0 NOAPPLY, 0 touched task folders, no timeouts. The raw retry recovered the malformed calls.
+- J0c's full t=0 run scored 8/16; this one scored 9/16.
+
+**J0c+ is done.**
