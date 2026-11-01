@@ -23,7 +23,11 @@
 //! model can ask again. What is never touched: the system prompt, any user
 //! message, the last message, the newest tool result, and anything already set
 //! aside — which is what makes it one-way, and keeps the prefix of the next
-//! request identical for Ollama's prompt cache. **The newest read of each file
+//! request identical for Ollama's prompt cache. **What the model thought goes
+//! before all of that (J0d):** a thinking model's reasoning is sent back with its
+//! calls and counted, so a pass ahead of the others drops it from every assistant
+//! message but the newest, oldest first — the cheapest thing to lose, since the
+//! call it led to and its result are still there. **The newest read of each file
 //! (and range: lines 1–100 and lines 300–400 of one file are two reads, since H8)
 //! goes last**: a first pass leaves them alone, and only if the turn still does
 //! not fit does a second pass take them too, oldest first. Protecting them
@@ -200,6 +204,11 @@ fn paired_call(messages: &[Message], i: usize) -> Option<&ToolCall> {
     before.tool_calls.as_deref()?.first()
 }
 
+/// Whether the model's reasoning rides on this message and is worth dropping.
+fn has_thinking(m: &Message) -> bool {
+    m.thinking.as_deref().is_some_and(|t| !t.is_empty())
+}
+
 fn has_long_argument(m: &Message) -> bool {
     m.tool_calls.as_deref().unwrap_or(&[]).iter().any(|c| {
         c.function
@@ -216,6 +225,24 @@ pub fn compact(messages: &[Message], tools: &[Tool], budget: &Budget) -> Compact
     let mut set = Vec::new();
 
     if budget.tokens(total) > allowed {
+        // Reasoning first, oldest first: it is sent back only so the model can carry on from
+        // it, and the newest assistant message's is what the model is carrying on from. A
+        // message set aside here is set aside whole ([`set_aside`]), so one that also carries
+        // a long argument has that stubbed with it.
+        let newest_assistant = messages.iter().rposition(|m| m.role == "assistant");
+        for (i, m) in messages.iter().enumerate() {
+            if budget.tokens(total) <= allowed {
+                break;
+            }
+            if m.role != "assistant" || !has_thinking(m) || Some(i) == newest_assistant {
+                continue;
+            }
+            let mut stubbed = m.clone();
+            set_aside(&mut stubbed, None);
+            total = total - message_chars(m) + message_chars(&stubbed);
+            set.push(i);
+        }
+
         let newest_tool = messages.iter().rposition(|m| m.role == "tool");
         let mut newest_read: HashMap<String, usize> = HashMap::new();
         for (i, m) in messages.iter().enumerate() {
@@ -326,7 +353,8 @@ const FAILED_PREFIX: &str = "error:";
 /// aside along with its `old_text`, after which the repeat rule would otherwise stop
 /// seeing the failure and let the model resend the same impossible edit for longer. An assistant call keeps its name
 /// and every argument, but a long string argument becomes
-/// `"[N characters, already sent, #fingerprint]"`.
+/// `"[N characters, already sent, #fingerprint]"`, **and what the model thought before
+/// it is dropped** (J0d).
 pub fn set_aside(message: &mut Message, call: Option<&ToolCall>) {
     if message.role == "tool" {
         let lines = message.content.lines().count();
@@ -352,6 +380,7 @@ pub fn set_aside(message: &mut Message, call: Option<&ToolCall>) {
         );
         return;
     }
+    message.thinking = None;
     for c in message.tool_calls.as_deref_mut().unwrap_or(&mut []) {
         if let Some(args) = c.function.arguments.as_object_mut() {
             for v in args.values_mut() {
@@ -424,6 +453,55 @@ mod tests {
         assert_eq!(prompt_chars(&thought, &[]), prompt_chars(&plain, &[]) + 4000);
         let budget = Budget::new(32768, None);
         assert!(compact(&thought, &[], &budget).estimated_tokens > compact(&plain, &[], &budget).estimated_tokens);
+    }
+
+    /// A read, with what the model thought before it asked, and its result.
+    fn reasoned(path: &str, thinking: usize, result: usize) -> [Message; 2] {
+        let [mut ask, result] = read(path, result);
+        ask.thinking = Some("t".repeat(thinking));
+        [ask, result]
+    }
+
+    /// J0d: old reasoning that pushes a turn over the budget is dropped to make it fit, **and
+    /// the newest assistant message keeps its own**. Nothing else in the turn could be set
+    /// aside (the results are short), so without this it would not fit at all.
+    #[test]
+    fn old_thinking_is_dropped_to_make_a_turn_fit_and_the_newest_is_kept() {
+        let mut m = vec![Message::system("sys"), Message::user("go")];
+        m.extend(reasoned("a.rs", 6000, 500));
+        m.extend(reasoned("b.rs", 1000, 500));
+        let budget = tight(2000);
+        assert!(budget.tokens(prompt_chars(&m, &[])) > budget.hard_tokens(), "the turn has to start over the limit");
+
+        let c = compact(&m, &[], &budget);
+        // Index 2 is the first assistant message; index 4, the newest, is not touched.
+        assert_eq!(c.set_aside, vec![2]);
+        assert!(c.fits, "{}", c.estimated_tokens);
+
+        // Applied as the sender does, it is what was estimated, and the newest thinking stays.
+        for &i in &c.set_aside {
+            set_aside(&mut m[i], None);
+        }
+        assert_eq!(m[2].thinking, None);
+        assert_eq!(m[4].thinking.as_deref().map(str::len), Some(1000));
+        assert_eq!(budget.tokens(prompt_chars(&m, &[])), c.estimated_tokens);
+        assert!(compact(&m, &[], &budget).set_aside.is_empty(), "compacting again sets nothing more aside");
+    }
+
+    /// The oldest reasoning goes first, only as much as is needed, and **before any tool
+    /// result**: here the turn fits once two of three have gone, and no result is touched.
+    #[test]
+    fn thinking_goes_oldest_first_and_before_any_result() {
+        let mut m = vec![Message::system("sys"), Message::user("go")];
+        for path in ["a.rs", "b.rs", "c.rs"] {
+            m.extend(reasoned(path, 2000, 5000));
+        }
+        let c = compact(&m, &[], &tight(7000));
+        assert_eq!(c.set_aside, vec![2, 4]);
+        assert!(c.fits);
+        // Short of room, the newest assistant message is still left alone.
+        let c = compact(&m, &[], &tight(100));
+        assert!(!c.set_aside.contains(&6), "{:?}", c.set_aside);
     }
 
     #[test]

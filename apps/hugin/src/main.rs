@@ -88,8 +88,9 @@ usage: hugin [--folder <path>] [--shell <powershell|cmd|bash>] [--line] [--launc
                     the model: time, model, prompt_eval_count, eval_count, total_duration,
                     prompt_eval_duration and eval_duration (Ollama's, in nanoseconds, null where
                     it did not say), recovered, fed_back (Ollama could not read the call and the
-                    model was told), tool_calls (in the reply), thinking_len and error. A trace
-                    that cannot be written is said once and never stops the run
+                    model was told), tool_calls (in the reply), thinking_len and error, and note
+                    when a setting was left out. A trace that cannot be written is said once and
+                    never stops the run
   --claude-note     print the section for Claude Code's CLAUDE.md that says when to use -p
   --help            show this help
 

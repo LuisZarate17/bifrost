@@ -48,6 +48,11 @@ pub struct Line {
     pub thinking_len: usize,
     /// Why the request failed, if it did; for a call fed back, what Ollama said of it.
     pub error: Option<String>,
+    /// Something the round did not do as configured (a `think` setting left out because the
+    /// model does not report `thinking`). **Left out of the line when there is none**, so a line
+    /// that has nothing to say reads as it always did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 impl Line {
@@ -67,6 +72,7 @@ impl Line {
             tool_calls: 0,
             thinking_len: 0,
             error: None,
+            note: None,
         };
         match result {
             Ok(round) => Line {
@@ -80,6 +86,7 @@ impl Line {
                 tool_calls: round.metrics.tool_calls,
                 thinking_len: round.metrics.thinking_len,
                 error: round.metrics.error.clone(),
+                note: round.metrics.note.clone(),
                 ..base
             },
             Err(e) => Line { error: Some(e.clone()), ..base },

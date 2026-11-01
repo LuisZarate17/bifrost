@@ -1,7 +1,7 @@
 # Stage J — the model bake-off: find a local model that makes Hugin and Mimir good
 
-> **Status: started 2026-10-25; in Phase 0.** J0a–J0c are done and pushed. J0c+ and J0d are done (local),
-> 2026-11-01. Next is Gate J0. Live status: [J-status.md](../docs/J-status.md).
+> **Status: started 2026-10-25; Phase 0 closed.** J0a–J0c are done and pushed. J0c+, J0d and Gate J0 are done and
+> pushed, 2026-11-01: Phase 0 is closed. Next is Phase 1. Live status: [J-status.md](../docs/J-status.md).
 
 ## TL;DR
 
@@ -106,7 +106,8 @@ it brings the server's tool-parser fixes.
 second scored 2/16 for code that scored 10/16.
 - *2026-11-01, after the crash:* the low memory was never the machine. Task 10 in order is b06, and
   a model's `extract_calls` committed 81 GB there and took the PC down. Every run is now capped (check.rs):
-  8 GB per process, 16 GB for the whole run, and it is killed if its drive falls below 10 GB free. A
+  8 GB per process, 24 GB for the whole run (Gate J0 raised it from 16), and it is killed if its
+  drive falls below 10 GB free (or half what it started with, on a drive that starts low). A
   run Windows can't put under the caps doesn't start. `/verify` is dropped; the steps below are run
   by name.
 - **You** close the browser and VS Code and leave Mimir and Vidar idle. Then `cargo test

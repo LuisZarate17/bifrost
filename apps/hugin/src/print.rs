@@ -952,8 +952,13 @@ pub(crate) fn seconds(d: Duration) -> f64 {
     (d.as_secs_f64() * 10.0).round() / 10.0
 }
 
-/// A finished check as the report has it.
-fn report_of(argv: &[String], o: &check::Outcome, reused: bool) -> CheckReport {
+/// A finished check as the report has it. **One killed because its drive was nearly full is
+/// not a failed check**: it gave no verdict on the code, so it is reported as not run, with the
+/// reason, like a timeout or a block.
+pub(crate) fn report_of(argv: &[String], o: &check::Outcome, reused: bool) -> CheckReport {
+    if o.ended == Ended::DiskFull {
+        return not_run(argv, "stopped because the disk was nearly full");
+    }
     CheckReport {
         command: check::label(argv),
         passed: Some(o.passed()),
@@ -968,7 +973,7 @@ fn report_of(argv: &[String], o: &check::Outcome, reused: bool) -> CheckReport {
         cut_short: false,
         // What a build had printed when it was cut off says nothing, and a block is not the code's.
         // A test run that exited 0 and still failed says why first: its output alone would not.
-        output_tail: if o.passed() || o.blocked.is_some() || matches!(o.ended, Ended::TimedOut | Ended::Stopped | Ended::DiskFull) {
+        output_tail: if o.passed() || o.blocked.is_some() || matches!(o.ended, Ended::TimedOut | Ended::Stopped) {
             String::new()
         } else if o.unfinished_tests > 0 {
             format!("{}\n{}", check::UNFINISHED_NOTE, tail_of(&o.output, OUTPUT_TAIL))

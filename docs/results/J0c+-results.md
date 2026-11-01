@@ -73,8 +73,8 @@ with memory to spare. The leftover worktree from the stopped run was removed.
 **The low memory was never the machine.** Task 10 in order is b06. A second attempt on 2026-11-01
 crashed the PC there: the model's `extract_calls`, run by the scoring tests, committed 81 GB while
 `llama-server` held 31 GB, on 31 GB of RAM. Windows ran out of commit and had to be powered off.
-`ba3fa74` caps every run: 8 GB per process and 16 GB for the whole run, and it is killed below 10 GB
-free disk.
+`ba3fa74` caps every run: 8 GB per process and 16 GB for the whole run (24 GB since Gate J0), and it
+is killed below 10 GB free disk.
 
 **The clean run**, at `ba3fa74` on Ollama 0.40.11, qwen3-coder:30b, `CARGO_BUILD_JOBS=2`, with VS
 Code and the browser open but idle (about 9 GB of RAM free). It took 21 minutes.

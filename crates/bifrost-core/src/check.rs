@@ -53,12 +53,26 @@ pub const PROCESS_MEMORY_LIMIT: usize = 8 * 1024 * 1024 * 1024;
 
 /// The most memory a whole run may commit, every process it starts together, so
 /// code that starts many processes cannot add up past [`PROCESS_MEMORY_LIMIT`].
-pub const RUN_MEMORY_LIMIT: usize = 16 * 1024 * 1024 * 1024;
+/// **Measured 2026-11-01:** a rebuild of this workspace's own crates at cargo's
+/// default 16 parallel jobs peaked at 11.8 GB of commit across 17 build
+/// processes, so 16 GB left too little room.
+pub const RUN_MEMORY_LIMIT: usize = 24 * 1024 * 1024 * 1024;
 
-/// A run is killed when the free space on its drive falls below this. A loop
-/// writing files fills a disk in minutes, well inside a timeout, and a full
-/// system drive takes Windows down as surely as running out of memory.
+/// A run is killed when the free space on its drive falls below this, **or below
+/// half of what the drive had free when the run started, if that is less**
+/// (`disk_floor_for`): a drive that begins under the floor would otherwise have
+/// every run killed at its first look. A loop writing files fills a disk in
+/// minutes, well inside a timeout, and a full system drive takes Windows down as
+/// surely as running out of memory.
 pub const DISK_FLOOR: u64 = 10 * 1024 * 1024 * 1024;
+
+/// The free space below which a run that started with `start_free` bytes free is
+/// killed: [`DISK_FLOOR`], or half of `start_free` when the drive began under twice
+/// that. A run can then use up to half of what a nearly full drive has left, and
+/// no more.
+fn disk_floor_for(start_free: u64) -> u64 {
+    DISK_FLOOR.min(start_free / 2)
+}
 
 /// How often the free space is looked at, in polls.
 const DISK_EVERY: u32 = 10;
@@ -304,7 +318,7 @@ pub enum Ended {
     TimedOut,
     /// The user pressed Stop and it was killed.
     Stopped,
-    /// Its drive fell below [`DISK_FLOOR`] free and it was killed.
+    /// Its drive fell below the run's floor ([`DISK_FLOOR`] at most) and it was killed.
     DiskFull,
 }
 
@@ -474,10 +488,18 @@ fn run_prepared(
 
     // Everything the command starts goes in one job, so it can all be ended
     // together — when the command is stopped, when it ends but leaves something
-    // running, and when Mimir itself exits mid-check.
+    // running, and when Mimir itself exits mid-check. Made before anything starts:
+    // without the job there are no memory limits, and model-written code runs
+    // here, so it does not run at all rather than run unbounded.
     let job = Job::new();
+    #[cfg(windows)]
+    if job.is_none() {
+        return Err(format!("could not put `{shown}` under its memory limits, so it was not run"));
+    }
 
     let started = Instant::now();
+    // Read once, as the run starts: the floor is a share of what this drive had then.
+    let disk_floor = free_space(&dir).map(disk_floor_for);
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         // Windows refuses to even start a program Smart App Control has blocked, so
@@ -504,14 +526,10 @@ fn run_prepared(
     // in the microseconds before this would leave that one outside the job —
     // `cargo` and `npm` take milliseconds just to start, and `taskkill /T` still
     // backs the job up on Stop.
-    let job = job.filter(|j| j.assign(&child));
-    // Without the job there are no memory limits, and model-written code runs
-    // here: it does not run at all rather than run unbounded.
-    #[cfg(windows)]
-    if job.is_none() {
-        kill_tree(&mut child, None);
-        return Err(format!("could not put `{shown}` under its memory limits, so it was not run"));
-    }
+    let job = match job {
+        Some(job) => confine(job, &mut child, shown)?,
+        None => None,
+    };
 
     if let (Some(input), Some(mut stdin)) = (io.input, child.stdin.take()) {
         let input = input.to_vec();
@@ -555,7 +573,10 @@ fn run_prepared(
             break Ended::TimedOut;
         }
         polls += 1;
-        if polls.is_multiple_of(DISK_EVERY) && free_space(&dir).is_some_and(|free| free < DISK_FLOOR) {
+        // No reading at the start, no guard for this run.
+        if polls.is_multiple_of(DISK_EVERY)
+            && disk_floor.is_some_and(|floor| free_space(&dir).is_some_and(|free| free < floor))
+        {
             kill_tree(&mut child, job.as_ref());
             break Ended::DiskFull;
         }
@@ -711,6 +732,23 @@ pub(crate) fn no_window(cmd: &mut Command) {
 
 #[cfg(not(windows))]
 pub(crate) fn no_window(_: &mut Command) {}
+
+/// Put `child`, just started, in `job`: `Some(job)` when it is there.
+///
+/// **A child that cannot be put there is killed and the run refused**, since it would
+/// run with no memory limits. The exception is a child that has already exited, which
+/// Windows will not assign: nothing is left to limit, so the run goes on without the job
+/// and reads what it wrote.
+fn confine(job: Job, child: &mut std::process::Child, shown: &str) -> Result<Option<Job>, String> {
+    if job.assign(child) {
+        return Ok(Some(job));
+    }
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return Ok(None);
+    }
+    kill_tree(child, None);
+    Err(format!("could not put `{shown}` under its memory limits, so it was not run"))
+}
 
 /// Kill the command **and everything it started.** `Child::kill` ends only the
 /// process itself; `cargo` would die and leave `rustc` compiling. The job does
@@ -1960,20 +1998,60 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
         assert!(!out.output.contains("got all 9"), "{}", out.output);
     }
 
-    /// **A whole run cannot commit past [`RUN_MEMORY_LIMIT`]:** three processes that
-    /// each hold 6 GB, each under the per-process limit, cannot all get it.
+    /// **A whole run cannot commit past [`RUN_MEMORY_LIMIT`]:** four processes that
+    /// each hold 7 GB, each under the per-process limit, cannot all get it (28 GB
+    /// against 24).
     #[cfg(windows)]
     #[test]
-    #[ignore = "commits 16 GB of memory"]
+    #[ignore = "commits 24 GB of memory"]
     fn a_run_cannot_commit_past_its_memory_limit_across_processes() {
         let f = Folder::new("run-memory-cap");
-        let grab = "$ErrorActionPreference = 'Stop'; $jobs = 1..3 | ForEach-Object { Start-Job { \
+        let grab = "$ErrorActionPreference = 'Stop'; $jobs = 1..4 | ForEach-Object { Start-Job { \
                     $held = [System.Collections.Generic.List[byte[]]]::new(); \
-                    1..6 | ForEach-Object { $held.Add([byte[]]::new(1GB)) }; Start-Sleep 10; 'got 6' } }; \
+                    1..7 | ForEach-Object { $held.Add([byte[]]::new(1GB)) }; Start-Sleep 10; 'got 7' } }; \
                     $jobs | Wait-Job | Receive-Job";
         let out = run_shell(&f.0, Shell::PowerShell, grab, CHECK_TIMEOUT, &[], never).unwrap();
-        // Whole lines: an error quotes the script, and the script says `got 6` too.
-        assert!(out.output.lines().filter(|l| l.trim() == "got 6").count() < 3, "{}", out.output);
+        // Whole lines: an error quotes the script, and the script says `got 7` too.
+        assert!(out.output.lines().filter(|l| l.trim() == "got 7").count() < 4, "{}", out.output);
+    }
+
+    /// **A run's disk floor is [`DISK_FLOOR`], or half of what its drive started with when
+    /// that is less:** a drive that begins low is not one every run is killed on.
+    #[test]
+    fn a_run_on_a_drive_that_starts_low_gets_a_floor_it_can_work_above() {
+        const GB: u64 = 1024 * 1024 * 1024;
+        assert_eq!(disk_floor_for(500 * GB), DISK_FLOOR);
+        assert_eq!(disk_floor_for(2 * DISK_FLOOR), DISK_FLOOR);
+        assert_eq!(disk_floor_for(6 * GB), 3 * GB);
+        // Nothing free to begin with: nothing to guard.
+        assert_eq!(disk_floor_for(0), 0);
+    }
+
+    /// A child that was started is put in the job and stays under its limits.
+    #[cfg(windows)]
+    #[test]
+    fn a_running_child_is_put_in_the_job() {
+        let mut cmd = Command::new("ping");
+        cmd.args(["-n", "30", "127.0.0.1"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        no_window(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        let job = confine(Job::new().unwrap(), &mut child, "ping").unwrap();
+        assert!(job.is_some());
+        kill_tree(&mut child, job.as_ref());
+    }
+
+    /// **A child that has already exited cannot be put in a job, and that is not a
+    /// refusal:** there is nothing left to limit, so the run carries on without one.
+    #[cfg(windows)]
+    #[test]
+    fn a_child_that_exited_before_the_job_took_it_does_not_fail_the_run() {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/c", "exit", "0"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        no_window(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        child.wait().unwrap();
+        let job = confine(Job::new().unwrap(), &mut child, "cmd").unwrap();
+        assert!(job.is_none());
     }
 
     /// The disk guard can read the free space where runs happen.

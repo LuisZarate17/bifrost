@@ -55,6 +55,23 @@ fn a_reply_is_a_line_with_ollamas_numbers_and_how_it_was_handled() {
     );
 }
 
+/// A `think` setting left out for a model that does not report `thinking` is said in the line,
+/// and a line with no note has no `note` at all.
+#[test]
+fn a_note_the_round_made_is_in_the_line_and_without_one_the_key_is_absent() {
+    let note = "think high is set for devstral:24b, but it does not report the thinking capability, so it was not sent";
+    let metrics = Metrics { note: Some(note.into()), ..Metrics::default() };
+    let line = Line::of("devstral:24b", at(0, 0), &Ok(round(900, false, false, metrics)));
+    assert_eq!(line.note.as_deref(), Some(note));
+    let json = serde_json::to_value(&line).unwrap();
+    assert_eq!(json["note"], note);
+
+    let plain = Line::of("devstral:24b", at(0, 0), &Ok(round(900, false, false, Metrics::default())));
+    assert_eq!(plain.note, None);
+    assert!(serde_json::to_value(&plain).unwrap().get("note").is_none());
+    assert!(Line::of("m", at(0, 0), &Err("x".to_string())).note.is_none());
+}
+
 #[test]
 fn a_call_that_was_fed_back_says_so_and_a_missing_duration_is_null() {
     let metrics = Metrics { tool_calls: 1, error: Some("error parsing tool call: raw='{'".into()), ..Metrics::default() };

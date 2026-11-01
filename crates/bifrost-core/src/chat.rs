@@ -510,10 +510,15 @@ fn is_xml_error(err: &str) -> bool {
 /// - **connection and timeout wordings, `not found`**: no server, no answer in
 ///   time, or no such model — a 404, not a 500, but listed so the answer is the
 ///   same whatever status a newer Ollama puts on them.
+/// - **`llm prediction response`, `error reading llm response`**: the server could
+///   not read what its own runner sent back, as when the runner dies mid-reply
+///   (`error unmarshalling llm prediction response: unexpected end of JSON
+///   input`). `unmarshal` alone is a wording of the model's call that would not
+///   parse, so these have to be named here to win over it.
 ///
 /// Checked first, because a runner that dies halfway through a reply can leave
 /// `unexpected end of JSON input` in the same message.
-const INFRASTRUCTURE_ERRORS: [&str; 11] = [
+const INFRASTRUCTURE_ERRORS: [&str; 13] = [
     "wsarecv",
     "post predict",
     "runner process has terminated",
@@ -525,6 +530,8 @@ const INFRASTRUCTURE_ERRORS: [&str; 11] = [
     "try pulling it first",
     "timed out",
     "deadline exceeded",
+    "llm prediction response",
+    "error reading llm response",
 ];
 
 /// What Ollama says when it could not read the model's tool call, lower case:
@@ -1103,6 +1110,8 @@ mod tests {
             (in500(r#"{"error":"CUDA error: out of memory"}"#), false, "cuda oom"),
             (in500(r#"{"error":"model requires more system memory (12.0 GiB) than is available (8.0 GiB)"}"#), false, "memory, no marker"),
             (in500(r#"{"error":"CUDA error: an illegal memory access was encountered"}"#), false, "cuda error"),
+            (in500(r#"{"error":"error unmarshalling llm prediction response: unexpected end of JSON input"}"#), false, "a dying runner's reply, which says unmarshal"),
+            (in500(r#"{"error":"error reading llm response: unexpected end of JSON input"}"#), false, "a runner's reply that could not be read"),
             (in500(r#"{"error":"internal server error"}"#), false, "unlabelled 500"),
             (r#"/api/chat returned 404 Not Found: {"error":"model \"x\" not found, try pulling it first"}"#.to_string(), false, "404"),
             ("POST /api/chat: error sending request for url (http://localhost:11434/api/chat): connection refused".to_string(), false, "connection refused"),

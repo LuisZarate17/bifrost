@@ -1357,6 +1357,42 @@ fn a_partial_run_says_why_on_its_first_line_and_still_offers_the_patch() {
     assert_eq!(timed_out.to_json()["partial"], true);
 }
 
+/// **A check killed because its drive was nearly full gave no verdict**, like a timeout or a block:
+/// it is not a bare FAILED with no reason, but a check that was not run, which says why, and the
+/// run is partial.
+#[test]
+fn a_check_stopped_for_a_full_disk_is_unverified_and_says_why_not_failed() {
+    let outcome = |ended| check::Outcome {
+        ended,
+        elapsed: Duration::from_secs(30),
+        output: "error: no space left on device".into(),
+        bytes: 31,
+        complete: true,
+        blocked: None,
+        unfinished_tests: 0,
+    };
+    let cmd = argv(&["cargo", "test"]);
+    let full = report_of(&cmd, &outcome(check::Ended::DiskFull), false);
+    assert_eq!(full.not_run.as_deref(), Some("stopped because the disk was nearly full"));
+    assert!(full.passed.is_none() && !full.timed_out && full.output_tail.is_empty(), "{full:?}");
+
+    let report = Report { check: Some(full), ..complete() };
+    assert_eq!((report.status(), report.exit_code()), (Status::Partial, 3));
+    assert!(report.to_json()["check"]["passed"].is_null());
+    let text = report.to_text();
+    assert!(text.contains("check: `cargo test` was not run: stopped because the disk was nearly full"), "{text}");
+    assert!(
+        text.starts_with("hugin: PARTIAL proposal. The check was not run: stopped because the disk was nearly full"),
+        "{text}"
+    );
+
+    // A timeout is still its own, and so is a check that ran and failed.
+    let slow = report_of(&cmd, &outcome(check::Ended::TimedOut), false);
+    assert!(slow.timed_out && slow.not_run.is_none());
+    let failed = report_of(&cmd, &outcome(check::Ended::Exited(Some(101))), false);
+    assert!(failed.passed == Some(false) && failed.not_run.is_none() && failed.output_tail.contains("no space left"), "{failed:?}");
+}
+
 #[test]
 fn what_the_check_did_with_its_time_is_in_the_json() {
     let cut = CheckReport { passed: Some(false), exit_code: None, timed_out: true, cut_short: true, seconds: 4.2, ..complete().check.unwrap() };
