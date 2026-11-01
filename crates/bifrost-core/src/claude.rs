@@ -343,6 +343,7 @@ pub fn run(configured: Option<&str>, prompt: &str, cancelled: impl Fn() -> bool)
             "Claude did not answer within {} seconds, so the check was stopped.",
             RUN_TIMEOUT.as_secs()
         )),
+        Ended::DiskFull => failed("The disk was nearly full, so the check was stopped.".to_string()),
         Ended::Exited(code) => answer(&outcome.output, code),
     }
 }

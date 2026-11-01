@@ -312,10 +312,14 @@ pub struct Run {
     pub denied_commands: usize,
 }
 
-/// Did a command end without an exit code of its own: timed out, stopped, or
-/// exited with none? Its output then says nothing about the code it checked.
+/// Did a command end without an exit code of its own: timed out, stopped, killed
+/// for a nearly full disk, or exited with none? Its output then says nothing about
+/// the code it checked.
 pub fn never_finished(ended: &check::Ended) -> bool {
-    matches!(ended, check::Ended::TimedOut | check::Ended::Stopped | check::Ended::Exited(None))
+    matches!(
+        ended,
+        check::Ended::TimedOut | check::Ended::Stopped | check::Ended::DiskFull | check::Ended::Exited(None)
+    )
 }
 
 /// A request that failed this close to `chat`'s five-minute limit was cut off

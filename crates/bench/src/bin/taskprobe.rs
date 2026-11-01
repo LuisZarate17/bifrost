@@ -791,6 +791,7 @@ fn unfinished(o: &check::Outcome) -> Option<String> {
     match &o.ended {
         check::Ended::TimedOut => Some(format!("the scoring test run timed out after {:.0}s — environment", o.elapsed.as_secs_f64())),
         check::Ended::Stopped => Some("the scoring test run was stopped — environment".to_string()),
+        check::Ended::DiskFull => Some("the scoring test run was stopped for a nearly full disk — environment".to_string()),
         check::Ended::Exited(None) => Some("the scoring test run ended with no exit code — environment".to_string()),
         check::Ended::Exited(Some(_)) => None,
     }

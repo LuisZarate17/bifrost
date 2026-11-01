@@ -44,6 +44,25 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_secs(180);
 /// How long a test run may run. A cold `cargo test` builds every test binary.
 pub const TEST_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// The most memory any one process in a run may commit. Model-written code runs
+/// here, and on 2026-11-01 a runaway loop in one test committed 81 GB and took the
+/// whole machine down. Past this, an allocation fails and the process ends with
+/// an error, which reads as a failed run. A debug link of this workspace needs
+/// well under it.
+pub const PROCESS_MEMORY_LIMIT: usize = 8 * 1024 * 1024 * 1024;
+
+/// The most memory a whole run may commit, every process it starts together, so
+/// code that starts many processes cannot add up past [`PROCESS_MEMORY_LIMIT`].
+pub const RUN_MEMORY_LIMIT: usize = 16 * 1024 * 1024 * 1024;
+
+/// A run is killed when the free space on its drive falls below this. A loop
+/// writing files fills a disk in minutes, well inside a timeout, and a full
+/// system drive takes Windows down as surely as running out of memory.
+pub const DISK_FLOOR: u64 = 10 * 1024 * 1024 * 1024;
+
+/// How often the free space is looked at, in polls.
+const DISK_EVERY: u32 = 10;
+
 /// How often the wait looks at the child, the clock and the Stop button.
 const POLL: Duration = Duration::from_millis(100);
 
@@ -285,6 +304,8 @@ pub enum Ended {
     TimedOut,
     /// The user pressed Stop and it was killed.
     Stopped,
+    /// Its drive fell below [`DISK_FLOOR`] free and it was killed.
+    DiskFull,
 }
 
 /// What a run produced.
@@ -484,6 +505,13 @@ fn run_prepared(
     // `cargo` and `npm` take milliseconds just to start, and `taskkill /T` still
     // backs the job up on Stop.
     let job = job.filter(|j| j.assign(&child));
+    // Without the job there are no memory limits, and model-written code runs
+    // here: it does not run at all rather than run unbounded.
+    #[cfg(windows)]
+    if job.is_none() {
+        kill_tree(&mut child, None);
+        return Err(format!("could not put `{shown}` under its memory limits, so it was not run"));
+    }
 
     if let (Some(input), Some(mut stdin)) = (io.input, child.stdin.take()) {
         let input = input.to_vec();
@@ -511,6 +539,7 @@ fn run_prepared(
         });
     }
 
+    let mut polls = 0u32;
     let ended = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Ended::Exited(status.code()),
@@ -524,6 +553,11 @@ fn run_prepared(
         if started.elapsed() >= timeout {
             kill_tree(&mut child, job.as_ref());
             break Ended::TimedOut;
+        }
+        polls += 1;
+        if polls.is_multiple_of(DISK_EVERY) && free_space(&dir).is_some_and(|free| free < DISK_FLOOR) {
+            kill_tree(&mut child, job.as_ref());
+            break Ended::DiskFull;
         }
         std::thread::sleep(POLL);
     };
@@ -562,6 +596,8 @@ fn plain(p: &Path) -> PathBuf {
 
 /// A Windows job object that ends everything in it when it is killed or
 /// dropped — and, because the handle closes with the process, when Mimir exits.
+/// No process in it may commit more than [`PROCESS_MEMORY_LIMIT`], nor all of
+/// them together more than [`RUN_MEMORY_LIMIT`].
 #[cfg(windows)]
 struct Job(windows::Win32::Foundation::HANDLE);
 
@@ -571,6 +607,7 @@ impl Job {
         use windows::Win32::System::JobObjects::{
             CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
         };
         // SAFETY: a new, unnamed job with default security; the handle is owned
         // by the returned value and closed in Drop. The information passed is a
@@ -579,7 +616,10 @@ impl Job {
         unsafe {
             let job = Job(CreateJobObjectW(None, windows::core::PCWSTR::null()).ok()?);
             let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
-            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            info.BasicLimitInformation.LimitFlags =
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_JOB_MEMORY;
+            info.ProcessMemoryLimit = PROCESS_MEMORY_LIMIT;
+            info.JobMemoryLimit = RUN_MEMORY_LIMIT;
             SetInformationJobObject(
                 job.0,
                 JobObjectExtendedLimitInformation,
@@ -618,6 +658,30 @@ impl Drop for Job {
             let _ = windows::Win32::Foundation::CloseHandle(self.0);
         }
     }
+}
+
+/// The free space on the drive `dir` is on, or `None` when it can't be read.
+#[cfg(windows)]
+fn free_space(dir: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut free = 0u64;
+    // SAFETY: `wide` is NUL-terminated and outlives the call; `free` is a live u64.
+    unsafe {
+        windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            windows::core::PCWSTR(wide.as_ptr()),
+            Some(&mut free),
+            None,
+            None,
+        )
+        .ok()?;
+    }
+    Some(free)
+}
+
+#[cfg(not(windows))]
+fn free_space(_dir: &Path) -> Option<u64> {
+    None
 }
 
 /// Elsewhere there is no job; Stop falls back to killing the child alone.
@@ -859,6 +923,7 @@ pub fn for_model(argv: &[String], outcome: &Outcome) -> String {
         Ended::Exited(None) => format!("`{name}` ended without an exit code after {secs:.1} s."),
         Ended::TimedOut => format!("`{name}` ran for {secs:.0} s, past its time limit, and was stopped."),
         Ended::Stopped => format!("`{name}` was stopped by the user after {secs:.1} s."),
+        Ended::DiskFull => format!("`{name}` was stopped after {secs:.1} s because the disk was nearly full."),
     };
     let head = if outcome.complete {
         head
@@ -893,6 +958,7 @@ pub fn for_command(shell: Shell, command: &str, outcome: &Outcome) -> String {
         Ended::Exited(None) => format!("`{command}` ended without an exit code after {secs:.1} s."),
         Ended::TimedOut => format!("`{command}` ran for {secs:.0} s, past its time limit, and was stopped."),
         Ended::Stopped => format!("`{command}` was stopped by the user after {secs:.1} s."),
+        Ended::DiskFull => format!("`{command}` was stopped after {secs:.1} s because the disk was nearly full."),
     };
     let head = if outcome.complete {
         head
@@ -1877,5 +1943,59 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
             assert!(out.complete, "{shell:?}: a child outlived the stop");
             assert!(started.elapsed() < Duration::from_secs(10), "{shell:?}: {:?}", started.elapsed());
         }
+    }
+
+    /// **No process in a run commits past [`PROCESS_MEMORY_LIMIT`]:** a command that
+    /// asks for 9 GB, a gigabyte at a time, is refused the last of it and fails.
+    /// Ignored because proving it commits 8 GB, too much beside a loaded model.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "commits 8 GB of memory"]
+    fn a_process_cannot_commit_past_the_memory_limit() {
+        let f = Folder::new("memory-cap");
+        let grab = "$ErrorActionPreference = 'Stop'; $held = [System.Collections.Generic.List[byte[]]]::new(); \
+                    1..9 | ForEach-Object { $held.Add([byte[]]::new(1GB)) }; Write-Output 'got all 9'";
+        let out = run_shell(&f.0, Shell::PowerShell, grab, CHECK_TIMEOUT, &[], never).unwrap();
+        assert!(!out.passed(), "{:?}", out);
+        assert!(!out.output.contains("got all 9"), "{}", out.output);
+    }
+
+    /// **A whole run cannot commit past [`RUN_MEMORY_LIMIT`]:** three processes that
+    /// each hold 6 GB, each under the per-process limit, cannot all get it.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "commits 16 GB of memory"]
+    fn a_run_cannot_commit_past_its_memory_limit_across_processes() {
+        let f = Folder::new("run-memory-cap");
+        let grab = "$ErrorActionPreference = 'Stop'; $jobs = 1..3 | ForEach-Object { Start-Job { \
+                    $held = [System.Collections.Generic.List[byte[]]]::new(); \
+                    1..6 | ForEach-Object { $held.Add([byte[]]::new(1GB)) }; Start-Sleep 10; 'got 6' } }; \
+                    $jobs | Wait-Job | Receive-Job";
+        let out = run_shell(&f.0, Shell::PowerShell, grab, CHECK_TIMEOUT, &[], never).unwrap();
+        // Whole lines: an error quotes the script, and the script says `got 6` too.
+        assert!(out.output.lines().filter(|l| l.trim() == "got 6").count() < 3, "{}", out.output);
+    }
+
+    /// The disk guard can read the free space where runs happen.
+    #[cfg(windows)]
+    #[test]
+    fn the_free_space_of_a_runs_drive_can_be_read() {
+        let f = Folder::new("free-space");
+        assert!(free_space(&f.0).is_some_and(|free| free > 0));
+    }
+
+    #[test]
+    fn a_run_stopped_for_a_full_disk_says_so() {
+        let out = Outcome {
+            ended: Ended::DiskFull,
+            elapsed: Duration::from_secs(3),
+            output: String::new(),
+            bytes: 0,
+            complete: true,
+            blocked: None,
+            unfinished_tests: 0,
+        };
+        assert!(for_command(Shell::PowerShell, "x", &out).contains("disk was nearly full"));
+        assert!(!out.passed());
     }
 }

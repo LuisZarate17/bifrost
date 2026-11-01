@@ -105,8 +105,13 @@ it brings the server's tool-parser fixes.
 
 **J0c+ close-out** (set 2026-11-01). Both taskprobe attempts were stopped for low memory; the
 second scored 2/16 for code that scored 10/16.
-- Raise `/verify`'s memory floor (`.claude/verify.md`) from 8 GB to 12 GB free.
-- **You** close the browser and VS Code and leave Mimir and Vidar idle. Then `/verify full`, with
+- *2026-11-01, after the crash:* the low memory was never the machine. Task 10 in order is b06, and
+  a model's `extract_calls` committed 81 GB there and took the PC down. Every run is now capped (check.rs):
+  8 GB per process, 16 GB for the whole run, and it is killed if its drive falls below 10 GB free. A
+  run Windows can't put under the caps doesn't start. `/verify` is dropped; the steps below are run
+  by name.
+- **You** close the browser and VS Code and leave Mimir and Vidar idle. Then `cargo test
+  --workspace`, and taskprobe `--runs 1 --mode propose --model <coding model>`, with
   `CARGO_BUILD_JOBS=4` for the scoring builds.
 - Done when taskprobe is 8–11/16 at the app's settings, with a complete t=0 pass. If memory is
   still short, stop and report; no retry loop.
@@ -146,7 +151,7 @@ own settings apply. It lives in `round_in`, so Mimir, Hugin and the probes all s
 1. An independent review of J0b, J0c+ and J0d, by the checker agent or `/code-review`. Fixes go in
    their own commit.
 2. `cargo clippy --workspace --all-targets` clean. It hasn't run since J0b.
-3. `/verify full` says **PASS**. On INCOMPLETE, stop and ask.
+3. `cargo test --workspace` passes.
 4. Your OK.
 5. **Push `stage-i`** (your choice, 2026-11-01); `main` stays at Stage H.
 
