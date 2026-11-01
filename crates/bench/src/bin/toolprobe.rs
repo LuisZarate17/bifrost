@@ -3,6 +3,7 @@
 //!   cargo run -p bench --bin toolprobe
 //!   cargo run -p bench --bin toolprobe -- --model llama3.1:8b
 //!   cargo run -p bench --bin toolprobe -- --recover
+//!   cargo run -p bench --bin toolprobe -- --model gpt-oss:20b --think high
 //!
 //! **This gates G6.** If no local model can be trusted to call a tool when one is
 //! needed and to leave it alone when one is not, the tool-calling chunk does not
@@ -18,7 +19,7 @@
 //! Four of the ten cases below must produce no call at all.
 
 use bifrost_core::chat::{self, Message, Options, Tool};
-use bifrost_core::config;
+use bifrost_core::config::{self, Think};
 
 /// What the model is offered. Small, unambiguous, and covering the three shapes
 /// that matter: no arguments, one string argument, two numeric arguments.
@@ -77,6 +78,19 @@ fn main() {
     // Default stays native so G0/H4 numbers stay comparable; --recover goes
     // through the app's own path (native first, then the raw retry).
     let recover = args.iter().any(|a| a == "--recover");
+    // Unset: the model's own. `--think high` is the model's setting for the whole run (J0d),
+    // sent as the request's `think`; this probe asks the model directly, with no capability check.
+    let think = match args.iter().position(|a| a == "--think") {
+        None => None,
+        Some(i) => match args.get(i + 1).and_then(|word| Think::parse(word)) {
+            Some(think) => Some(think),
+            None => {
+                eprintln!("--think takes off, low, medium or high");
+                std::process::exit(2);
+            }
+        },
+    };
+    let options = Options::measured(cfg.num_ctx).thinking(think);
 
     let cases: Vec<Case> = vec![
         // ---- should call a tool -------------------------------------------
@@ -123,6 +137,7 @@ fn main() {
 
     println!("G0 — tool-call probe");
     println!("model:  {model}");
+    println!("think:  {}", think.map_or("unset (the model's own)", Think::name));
     println!("path:   {}", if recover { "recover (the app's: native, then the raw retry)" } else { "native" });
     println!("ctx:    {}", cfg.num_ctx);
     println!("temp:   0 - a verdict that moves between runs is not a measurement");
@@ -139,9 +154,9 @@ fn main() {
     for (i, case) in cases.iter().enumerate() {
         let messages = [Message::user(case.prompt)];
         let outcome = if recover {
-            chat::chat_tools(&model, &messages, &tools, Options::measured(cfg.num_ctx))
+            chat::chat_tools(&model, &messages, &tools, options)
         } else {
-            chat::chat(&model, &messages, &tools, Options::measured(cfg.num_ctx))
+            chat::chat(&model, &messages, &tools, options)
         };
         let reply = match outcome {
             Ok(r) => r,

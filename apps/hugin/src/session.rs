@@ -138,6 +138,7 @@ impl Session {
                 images: None,
                 tool_calls: None,
                 tool_name: None,
+                thinking: None,
             });
         }
 

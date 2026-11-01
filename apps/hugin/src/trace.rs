@@ -27,8 +27,8 @@ use crate::print::Wired;
 /// One request, as a line of the trace. The fields come in this order.
 ///
 /// Durations are Ollama's own, in nanoseconds, and `null` where it did not say (or the request
-/// failed). `thinking_len` is the length of what the model thought, 0 until that is read from
-/// the reply.
+/// failed). `thinking_len` is the length of what the model thought, in characters; 0 for a model
+/// that does not think or was not asked to (`model_settings` in the config).
 #[derive(Debug, Serialize, PartialEq)]
 pub struct Line {
     /// When the reply came back (or the request failed): UTC, to the millisecond.

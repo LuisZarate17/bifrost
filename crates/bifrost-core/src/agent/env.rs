@@ -27,6 +27,10 @@ pub struct Env {
     /// `num_ctx` ([`chat::Options::new`]). A probe passes its own — for a result that
     /// gets written down, [`chat::Options::measured`], temperature 0 — because a
     /// verdict that moves between runs is not a measurement.
+    ///
+    /// **Its `think`, when set, is the model's setting for the run** and wins over the
+    /// config's `model_settings` (a probe's `--think`). The round sends it only to a
+    /// model that reports `thinking`, whichever of the two it came from.
     pub options: Option<chat::Options>,
     /// How a call travels. `true` is the app's, [`chat::chat_tools`]: native first, and
     /// a call Ollama rejects or the model writes as plain text is recovered. `false` is

@@ -805,7 +805,7 @@ mod tests {
     }
 
     fn round_of(reply: Reply) -> Result<Round, String> {
-        Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, metrics: Default::default(), sent: sent() })
+        Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, thinking: None, metrics: Default::default(), sent: sent() })
     }
 
     fn call(name: &str, arguments: serde_json::Value) -> ToolCall {

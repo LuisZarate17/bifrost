@@ -114,7 +114,7 @@ pub(crate) fn sent() -> Sent {
 }
 
 pub(crate) fn round_with(reply: Reply, prompt_eval_count: u32) -> Result<Round, String> {
-    Ok(Round { reply, prompt_eval_count, recovered: false, fed_back: false, metrics: Default::default(), sent: sent() })
+    Ok(Round { reply, prompt_eval_count, recovered: false, fed_back: false, thinking: None, metrics: Default::default(), sent: sent() })
 }
 
 pub(crate) fn round_of(reply: Reply) -> Result<Round, String> {
@@ -334,7 +334,7 @@ fn play(script: Script) -> Played {
 }
 
 pub(crate) fn assistant(call: chat::ToolCall) -> Message {
-    Message { role: "assistant".into(), content: String::new(), images: None, tool_calls: Some(vec![call]), tool_name: None }
+    Message { role: "assistant".into(), content: String::new(), images: None, tool_calls: Some(vec![call]), tool_name: None, thinking: None }
 }
 
 // ── the tests ───────────────────────────────────────────────────────────────

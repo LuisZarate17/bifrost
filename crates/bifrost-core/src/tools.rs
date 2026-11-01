@@ -2013,6 +2013,7 @@ mod tests {
             images: None,
             tool_calls: Some(vec![call.clone()]),
             tool_name: None,
+            thinking: None,
         }
     }
 
@@ -2191,7 +2192,7 @@ mod tests {
             Message::tool_result("edit_file", "error: old_text was not found"),
             asked(&plan_call("[ ] a")),
             Message::tool_result("update_plan", "Plan updated: 0 of 1 done."),
-            Message { role: "assistant".into(), content: "Done.".into(), images: None, tool_calls: None, tool_name: None },
+            Message { role: "assistant".into(), content: "Done.".into(), images: None, tool_calls: None, tool_name: None, thinking: None },
             Message::user(CHECK_FAILED_NOTE),
         ];
         assert_eq!(turn_start(&history), 1);

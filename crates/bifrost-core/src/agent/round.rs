@@ -32,6 +32,7 @@ use super::stop::next_stop;
 use super::ticket::{arm, plan_name, DiffView, Find, Payload, PendingCall};
 use super::workspace;
 use crate::chat::{self, Message, Options};
+use crate::config::Think;
 use crate::{check, config, edit, instructions, ollama, search, tools};
 
 /// The app's own system prompt for a folder: the identity if the setting has one, then
@@ -68,6 +69,10 @@ pub struct Round {
     /// stand-in for it, which `reply` turns into a rejection the model is told of.
     /// Counted apart from `recovered`: that call was read, this one was not.
     pub fed_back: bool,
+    /// What the model reasoned before it answered, when it did (J0d). The turn puts it on
+    /// the assistant message that carries the call, so the model keeps its reasoning for
+    /// the rest of the turn, and clears it from the conversation when the turn ends.
+    pub thinking: Option<String>,
     /// What Ollama counted for the request, for a trace.
     pub metrics: Metrics,
     /// What was set aside to make the prompt fit, and how much was sent.
@@ -86,13 +91,17 @@ pub struct Metrics {
     pub eval: Duration,
     /// Calls in the reply, not only the first.
     pub tool_calls: usize,
-    /// Length of what the model thought before answering, in characters. Always 0 until
-    /// thinking is read from the reply.
+    /// Length of what the model thought before answering, in characters; 0 for a model that
+    /// does not think, or was not asked to.
     pub thinking_len: usize,
     /// What Ollama said about a call it could not read, when the reply was fed back (already
     /// capped); otherwise none. A request that failed outright has no round, and its error is
     /// the caller's.
     pub error: Option<String>,
+    /// Something the round did not do as configured, in words: a `think` setting it left
+    /// out because the model does not report `thinking`. None when it did as asked. Said
+    /// here, not printed, like `recovered`.
+    pub note: Option<String>,
 }
 
 impl Metrics {
@@ -109,7 +118,8 @@ impl Metrics {
             prompt_eval: reply.prompt_eval_duration,
             eval: reply.eval_duration,
             tool_calls: reply.tool_calls().len(),
-            thinking_len: 0,
+            thinking_len: reply.message.thinking.as_deref().map_or(0, |t| t.chars().count()),
+            note: None,
         }
     }
 }
@@ -229,7 +239,8 @@ pub fn round_in(
 
     // Offering tools to a model that cannot carry them wastes a round trip and
     // produces a confusing prose answer instead of a call. Better to say so.
-    if let Ok(detail) = ollama::show_cached(model)
+    let detail = ollama::show_cached(model).ok();
+    if let Some(detail) = &detail
         && !detail.has("tools")
     {
         return Err(format!("{model} cannot call tools — pick one with the tools badge"));
@@ -267,6 +278,8 @@ pub fn round_in(
     let history = messages.clone();
     let num_ctx = cfg.num_ctx;
     let options = env.options.unwrap_or_else(|| Options::new(num_ctx));
+    let (think, note) = think_for(model, options.think, cfg, detail.as_ref());
+    let options = options.thinking(think);
     // Nothing is offered to a closing request, and compaction counts what is sent.
     let offered = if closing {
         Vec::new()
@@ -289,12 +302,13 @@ pub fn round_in(
         // `chat`, not `chat_tools`: with no tools there is nothing for the recovery
         // to turn text into, and a call the model writes anyway stays words.
         let reply = chat::chat(model, &messages, &[], options)?;
-        let metrics = Metrics::of(&reply);
+        let metrics = Metrics { note, ..Metrics::of(&reply) };
         return Ok(Round {
             reply: Reply::Answer { content: reply.message.content, eval_count: reply.eval_count },
             prompt_eval_count: reply.prompt_eval_count,
             recovered: reply.recovered,
             fed_back: reply.fed_back,
+            thinking: reply.message.thinking,
             metrics,
             sent,
         });
@@ -319,9 +333,35 @@ pub fn round_in(
         prompt_eval_count: reply.prompt_eval_count,
         recovered: reply.recovered,
         fed_back: reply.fed_back,
-        metrics: Metrics::of(&reply),
+        thinking: reply.message.thinking.clone(),
+        metrics: Metrics { note, ..Metrics::of(&reply) },
         sent,
     })
+}
+
+/// The `think` a request goes out with, and a note when one is asked for and left out.
+///
+/// What is asked for is `asked` (the caller's own, a probe's `--think`) or else the
+/// config's setting for the model. **Sent only to a model that reports `thinking`**
+/// (`detail`, from `/api/show`): Ollama answers a request that asks a model without it to
+/// think with an error, which would fail the round for a setting. So a `think` for any
+/// other model, or one whose capabilities could not be read, is left out of the request
+/// and said in the note — and the round goes on as if it were never set.
+fn think_for(
+    model: &str,
+    asked: Option<Think>,
+    cfg: &config::Config,
+    detail: Option<&ollama::ModelDetail>,
+) -> (Option<Think>, Option<String>) {
+    let Some(wanted) = asked.or_else(|| cfg.settings_for(model).and_then(|s| s.think)) else {
+        return (None, None);
+    };
+    let unsent = |why: &str| (None, Some(format!("think {} is set for {model}, but {why}, so it was not sent", wanted.name())));
+    match detail {
+        Some(detail) if detail.has("thinking") => (Some(wanted), None),
+        Some(_) => unsent("it does not report the thinking capability"),
+        None => unsent("what it can do could not be read"),
+    }
 }
 
 /// The tools a round offers when the caller names none: the folder's, and Hugin's
@@ -703,6 +743,7 @@ mod tests {
                 images: None,
                 tool_calls: (!calls.is_empty()).then_some(calls),
                 tool_name: None,
+                thinking: None,
             },
             load: Duration::ZERO,
             total: Duration::ZERO,
@@ -892,6 +933,7 @@ mod tests {
             images: None,
             tool_calls: Some(vec![call(name, args)]),
             tool_name: None,
+            thinking: None,
         };
         [asked, Message::tool_result(name, result)]
     }
@@ -991,6 +1033,74 @@ mod tests {
         let Reply::Auto { name, ok, result, .. } = reply else { panic!("not run: {}", kind(&reply)) };
         assert_eq!((name.as_str(), ok), ("read_file", true));
         assert!(result.contains("one"), "{result}");
+    }
+
+    // ── thinking (J0d) ──────────────────────────────────────────────────────
+
+    fn detail(capabilities: &[&str]) -> ollama::ModelDetail {
+        ollama::ModelDetail { capabilities: capabilities.iter().map(|c| c.to_string()).collect(), ..Default::default() }
+    }
+
+    /// A config with a `think` set for one model.
+    fn thinking_config(tag: &str, think: Option<Think>) -> config::Config {
+        let model_settings = std::collections::BTreeMap::from([(tag.to_string(), config::ModelSettings { think })]);
+        config::Config { model_settings, ..config::Config::default() }
+    }
+
+    /// **`think` goes only to a model that reports `thinking`**: Ollama refuses it for one that
+    /// does not, so there it is left out and the round says so.
+    #[test]
+    fn think_is_sent_only_to_a_model_that_reports_thinking() {
+        let cfg = thinking_config("gpt-oss:20b", Some(Think::High));
+        let thinks = detail(&["completion", "tools", "thinking"]);
+        let plain = detail(&["completion", "tools"]);
+
+        assert_eq!(think_for("gpt-oss:20b", None, &cfg, Some(&thinks)), (Some(Think::High), None));
+
+        let (sent, note) = think_for("gpt-oss:20b", None, &cfg, Some(&plain));
+        assert_eq!(sent, None);
+        let note = note.expect("a setting that was left out is said");
+        assert!(note.contains("gpt-oss:20b") && note.contains("high") && note.contains("thinking"), "{note}");
+
+        // Nothing known of the model: not sent either, and said.
+        let (sent, note) = think_for("gpt-oss:20b", None, &cfg, None);
+        assert_eq!(sent, None);
+        assert!(note.is_some_and(|n| n.contains("could not be read")));
+    }
+
+    #[test]
+    fn a_model_with_no_think_setting_is_asked_nothing_and_nothing_is_said() {
+        let thinks = detail(&["completion", "tools", "thinking"]);
+        let plain = detail(&["completion", "tools"]);
+        let none = (None, None);
+        // No entry for it, an entry that sets nothing, and the default config.
+        for cfg in [thinking_config("other:1b", Some(Think::High)), thinking_config("m", None), config::Config::default()] {
+            for d in [Some(&thinks), Some(&plain), None] {
+                assert_eq!(think_for("m", None, &cfg, d), none);
+            }
+        }
+    }
+
+    /// A probe's `--think` is the model's setting for the run, over the config's, and held to the
+    /// same rule. `off` is a setting too: it is sent as `false` to a model that thinks.
+    #[test]
+    fn a_think_the_caller_asks_for_wins_over_the_configs_and_is_held_to_the_same_rule() {
+        let cfg = thinking_config("m", Some(Think::High));
+        let thinks = detail(&["thinking"]);
+        assert_eq!(think_for("m", Some(Think::Off), &cfg, Some(&thinks)), (Some(Think::Off), None));
+        assert_eq!(think_for("m", Some(Think::Low), &config::Config::default(), Some(&thinks)), (Some(Think::Low), None));
+        let (sent, note) = think_for("m", Some(Think::Low), &cfg, Some(&detail(&["tools"])));
+        assert_eq!(sent, None);
+        assert!(note.is_some_and(|n| n.contains("low")), "the setting that was left out is the caller's");
+    }
+
+    #[test]
+    fn what_the_model_thought_is_measured_in_characters_for_the_trace() {
+        let mut reply = said("ok", vec![]);
+        assert_eq!(Metrics::of(&reply).thinking_len, 0);
+        reply.message.thinking = Some("héllo, wörld".into());
+        let metrics = Metrics::of(&reply);
+        assert_eq!((metrics.thinking_len, metrics.note), (12, None));
     }
 
     /// The loop-breaking rule covers a call that cannot be read: the same failure a third

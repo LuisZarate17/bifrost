@@ -371,6 +371,12 @@ pub fn run_turn_with(
     if result.is_ok() && turn.check_failing && turn.fe.insist_on_checks() && !turn.fe.stopped() {
         turn.fe.ended_failing();
     }
+    // What a model thought is kept for the rounds of the turn that made it, and for nothing
+    // after: cleared from the whole conversation, whichever way the turn ended, so that a
+    // later turn, a follow-up or a saved conversation never carries it.
+    for message in turn.convo.iter_mut() {
+        message.thinking = None;
+    }
     result
 }
 
@@ -430,7 +436,8 @@ impl Turn<'_> {
         if self.fe.stopped() {
             return Ok(Flow::End);
         }
-        let Round { reply, prompt_eval_count, sent, recovered, fed_back, metrics: _ } = (self.ask)(&self.convo[..], self.calibration, false)?;
+        let Round { reply, prompt_eval_count, sent, recovered, fed_back, thinking, metrics: _ } =
+            (self.ask)(&self.convo[..], self.calibration, false)?;
         // The server is up now (if "Starting Ollama…" was showing, it is done).
         self.fe.status("");
         // `convo` must end up exactly what was sent, or the next round's prefix
@@ -476,6 +483,7 @@ impl Turn<'_> {
                             images: None,
                             tool_calls: None,
                             tool_name: None,
+                            thinking: None,
                         });
                     }
                     self.convo.push(Message::user(tools::CHECK_FAILED_NOTE));
@@ -497,7 +505,7 @@ impl Turn<'_> {
                 let mut card = Card::new(name.clone(), path, CardState::Rejected);
                 card.error = Some(error.clone());
                 self.fe.card(card);
-                self.pair(raw_call, &name, error);
+                self.pair(thinking, raw_call, &name, error);
                 self.last_ran = false;
                 Ok(Flow::Again { free: false })
             }
@@ -522,18 +530,18 @@ impl Turn<'_> {
                     self.fe.save();
                     return Ok(Flow::End);
                 }
-                self.pair(raw_call, &name, result);
+                self.pair(thinking, raw_call, &name, result);
                 // Free when it worked (a search with no matches worked). `ok` is
                 // Rust's own word for it, and the probes' free rounds are this one.
                 self.last_ran = ok;
                 Ok(Flow::Again { free: ok })
             }
-            Reply::Call { call, raw_call } => self.call(call, raw_call),
+            Reply::Call { call, raw_call } => self.call(call, raw_call, thinking),
         }
     }
 
     /// A call that needs a decision: show the card, wait, and run it if allowed.
-    fn call(&mut self, call: PendingCall, raw_call: chat::ToolCall) -> Result<Flow, String> {
+    fn call(&mut self, call: PendingCall, raw_call: chat::ToolCall, thinking: Option<String>) -> Result<Flow, String> {
         // Show exactly what would happen — the path for a read, the diff for an
         // edit, the command for a check — and stop. Nothing is read, written or run
         // until it is approved, and what is approved is what runs: the ticket
@@ -562,7 +570,7 @@ impl Turn<'_> {
                 // The model is told, rather than left waiting on a call that silently
                 // never happened. The assistant turn that asked has to go back too,
                 // or the refusal answers a question it cannot see itself having asked.
-                self.pair(raw_call, &call.name, refusal_for(&call.name, &call.path));
+                self.pair(thinking, raw_call, &call.name, refusal_for(&call.name, &call.path));
                 self.last_ran = false;
                 Ok(Flow::Again { free: false })
             }
@@ -617,7 +625,7 @@ impl Turn<'_> {
                     return Ok(Flow::End);
                 }
                 self.fe.update(at, patch);
-                self.pair(raw_call, &call.name, ran.result);
+                self.pair(thinking, raw_call, &call.name, ran.result);
                 self.last_ran = !failed;
                 Ok(Flow::Again { free: false })
             }
@@ -682,13 +690,18 @@ impl Turn<'_> {
     /// not see itself having asked, so it asked again until the round bound
     /// tripped. The G6 probe did this correctly; the app did not, which is exactly
     /// the gap a probe can hide.
-    fn pair(&mut self, raw_call: chat::ToolCall, name: &str, result: String) {
+    ///
+    /// `thinking` is what the model reasoned before it made the call (J0d): it goes on
+    /// the assistant message, so the model has it when the result comes back, and is
+    /// cleared with the rest when the turn ends.
+    fn pair(&mut self, thinking: Option<String>, raw_call: chat::ToolCall, name: &str, result: String) {
         self.convo.push(Message {
             role: "assistant".to_string(),
             content: String::new(),
             images: None,
             tool_calls: Some(vec![raw_call]),
             tool_name: None,
+            thinking,
         });
         self.convo.push(Message::tool_result(name, result));
     }
@@ -946,7 +959,7 @@ mod tests {
     }
 
     fn round_of(reply: Reply) -> Result<Round, String> {
-        Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, metrics: Default::default(), sent: sent() })
+        Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, thinking: None, metrics: Default::default(), sent: sent() })
     }
 
     fn raw(name: &str, arguments: serde_json::Value) -> chat::ToolCall {
@@ -1010,6 +1023,7 @@ mod tests {
             images: None,
             tool_calls: Some(vec![call]),
             tool_name: None,
+            thinking: None,
         }
     }
 
@@ -1031,6 +1045,75 @@ mod tests {
         // The status is cleared as soon as the model has answered, then the numbers,
         // then the answer.
         assert_eq!(fe.events(), ["ask:open", "status:", "round", "answer:hello"]);
+    }
+
+    /// J0d: what the model thought before a call goes back with it for the rest of the turn,
+    /// on the assistant message that made the call — however the call came to be answered —
+    /// and the turn leaves none of it in the conversation, whichever way it ends.
+    #[test]
+    fn thinking_rides_the_paired_message_within_a_turn_and_is_gone_when_it_ends() {
+        let thought = |round: Result<Round, String>, text: &str| round.map(|r| Round { thinking: Some(text.into()), ..r });
+        let stale = Message {
+            role: "assistant".into(),
+            content: "an earlier answer".into(),
+            thinking: Some("stale".into()),
+            ..Message::default()
+        };
+        let start = || vec![Message::user("earlier"), stale.clone(), Message::user("go")];
+        let none = || None::<String>;
+        let some = |text: &str| Some(text.to_string());
+
+        // A rejected call, an automatic one that ran, a denied card and an approved one: the four
+        // ways a call is paired with its result.
+        let mut fe = Fake::deciding(&[Decision::Deny, Decision::Allow]);
+        let mut asks = VecDeque::from(vec![
+            thought(rejected(0), "t0"),
+            thought(auto_search(1, true), "t1"),
+            thought(asks_about("edit_file", "a.rs"), "t2"),
+            thought(asks_about("edit_file", "b.rs"), "t3"),
+            answer("done"),
+        ]);
+        let mut runs = VecDeque::from(vec![ran("Edited b.rs")]);
+        let mut seen: Vec<Vec<Option<String>>> = Vec::new();
+        let mut convo = start();
+        let result = run_turn_with(
+            &mut convo,
+            None,
+            tools::MAX_ROUNDS,
+            &mut |messages: &[Message], _: Option<Calibration>, _: bool| {
+                seen.push(messages.iter().map(|m| m.thinking.clone()).collect());
+                asks.pop_front().expect("one request too many")
+            },
+            &mut |_: &str, _: &str, _: &str| runs.pop_front().expect("one run too many"),
+            &mut fe,
+        );
+        assert_eq!(result, Ok(()));
+        // Each round is sent the reasoning behind the calls before it, and the turn before it
+        // is sent what it was given.
+        assert_eq!(seen.len(), 5);
+        assert_eq!(seen[0], [none(), some("stale"), none()]);
+        let last = [none(), some("stale"), none(), some("t0"), none(), some("t1"), none(), some("t2"), none(), some("t3"), none()];
+        assert_eq!(seen[4], last);
+        // And none of it is left.
+        assert_eq!(convo.len(), 3 + 2 * 4);
+        assert!(convo.iter().all(|m| m.thinking.is_none()), "{convo:?}");
+        assert_eq!(convo[3], assistant(raw("edit_file", json!({ "path": "f0.rs" }))), "the call itself is kept");
+
+        // A turn that ends on a failed request clears it as well.
+        let mut fe = Fake::new();
+        let mut asks = VecDeque::from(vec![thought(rejected(0), "t0"), Err("POST /api/chat: connection refused".to_string())]);
+        let mut convo = start();
+        let result = run_turn_with(
+            &mut convo,
+            None,
+            tools::MAX_ROUNDS,
+            &mut |_: &[Message], _: Option<Calibration>, _: bool| asks.pop_front().expect("one request too many"),
+            &mut |_: &str, _: &str, _: &str| panic!("nothing runs"),
+            &mut fe,
+        );
+        assert!(result.is_err());
+        assert_eq!(convo.len(), 5);
+        assert!(convo.iter().all(|m| m.thinking.is_none()), "{convo:?}");
     }
 
     #[test]
@@ -1565,7 +1648,7 @@ mod tests {
 
     /// The assistant's words, as the loop puts them in the conversation.
     fn said(text: &str) -> Message {
-        Message { role: "assistant".into(), content: text.into(), images: None, tool_calls: None, tool_name: None }
+        Message { role: "assistant".into(), content: text.into(), images: None, tool_calls: None, tool_name: None, thinking: None }
     }
 
     /// The model runs the check once for each of `checks`, then answers "answer 1",

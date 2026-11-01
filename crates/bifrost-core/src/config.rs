@@ -106,6 +106,46 @@ pub const DEFAULT_HUGIN_SHELL: &str = "bash";
 /// See `docs/results/H4-results.md`.
 pub const DEFAULT_CODING_MODEL: &str = "qwen3-coder:30b";
 
+/// Ollama's `think` setting for a model (J0d): `off`, or how hard it reasons before it
+/// answers. A model with no levels takes any level other than `off` as on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Think {
+    Off,
+    Low,
+    Medium,
+    High,
+}
+
+impl Think {
+    /// The word for a level, in any case; anything else is none.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim().to_ascii_lowercase().as_str() {
+            "off" => Some(Self::Off),
+            "low" => Some(Self::Low),
+            "medium" => Some(Self::Medium),
+            "high" => Some(Self::High),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
+/// What the config says about one model. Every field is optional: unset is the model's own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ModelSettings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub think: Option<Think>,
+}
+
 /// What the apps agree on. Extended rather than replaced as Stage G lands —
 /// G2 writes `model` here when you pick one, and Vidar reads it on every summon.
 ///
@@ -213,6 +253,15 @@ pub struct Config {
     /// string reads as none.
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub claude_command: Option<String>,
+    /// Settings for one model, keyed by its tag: for now only `think` (J0d). Look an entry
+    /// up with [`Config::settings_for`], which ignores case. There is no per-model sampling:
+    /// the app sends none, so each model's own settings apply.
+    ///
+    /// **Read leniently**, like `checks`: an entry that is not an object is dropped, and a
+    /// `think` that is not `off`, `low`, `medium` or `high` is unset — never a reset of the
+    /// whole file.
+    #[serde(deserialize_with = "lenient_model_settings", skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_settings: BTreeMap<String, ModelSettings>,
     /// Fields this build does not know — a newer build's, or a person's own notes —
     /// kept as they were so the next save does not drop them.
     #[serde(flatten)]
@@ -316,6 +365,25 @@ where
         .collect())
 }
 
+/// `model_settings`, keeping only the entries that are a tag mapped to an object, each with
+/// the `think` it names if that is one of the four words, else none.
+fn lenient_model_settings<'de, D>(d: D) -> Result<BTreeMap<String, ModelSettings>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(d)?;
+    let Some(map) = value.as_object() else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(map
+        .iter()
+        .filter_map(|(tag, entry)| {
+            let think = entry.as_object()?.get("think").and_then(|v| v.as_str()).and_then(Think::parse);
+            Some((tag.clone(), ModelSettings { think }))
+        })
+        .collect())
+}
+
 /// `instructions`, keeping only the strings.
 fn lenient_instructions<'de, D>(d: D) -> Result<BTreeSet<String>, D::Error>
 where
@@ -344,6 +412,12 @@ impl Config {
         if let Some(argv) = argv {
             self.checks.insert(root.to_string(), argv);
         }
+    }
+
+    /// What the config says about this model, if it has an entry. Ollama's tags are
+    /// lower case, but a tag typed by hand may not be.
+    pub fn settings_for(&self, model: &str) -> Option<&ModelSettings> {
+        self.model_settings.iter().find(|(k, _)| k.eq_ignore_ascii_case(model)).map(|(_, v)| v)
     }
 
     /// Whether the project's notes are sent for this folder.
@@ -380,6 +454,7 @@ impl Default for Config {
             bifrost_login_chosen: false,
             claude_checks: false,
             claude_command: None,
+            model_settings: BTreeMap::new(),
             extra: serde_json::Map::new(),
             unsaved: false,
         }
@@ -650,6 +725,7 @@ mod tests {
             bifrost_login_chosen: true,
             claude_checks: true,
             claude_command: Some(r"C:\tools\claude.exe".into()),
+            model_settings: BTreeMap::from([("gpt-oss:20b".into(), ModelSettings { think: Some(Think::High) })]),
             extra: serde_json::Map::new(),
             unsaved: false,
         };
@@ -783,6 +859,68 @@ mod tests {
                 serde_json::from_str(&format!(r#"{{"model":"x","instructions":{bad}}}"#)).unwrap();
             assert_eq!((c.model.as_str(), c.instructions.len()), ("x", 0), "{bad}");
         }
+    }
+
+    #[test]
+    fn model_settings_parse_and_a_model_without_an_entry_has_none() {
+        let c: Config = serde_json::from_str(
+            r#"{"model":"m","model_settings":{"gpt-oss:20b":{"think":"high"},"qwen3:8b":{"think":"off"},"x":{"think":"Low"},"y":{}}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.model, "m");
+        assert_eq!(c.model_settings.len(), 4);
+        let think = |tag: &str| c.settings_for(tag).map(|s| s.think);
+        assert_eq!(think("gpt-oss:20b"), Some(Some(Think::High)));
+        assert_eq!(think("qwen3:8b"), Some(Some(Think::Off)));
+        assert_eq!(think("x"), Some(Some(Think::Low)), "a level is read in any case");
+        assert_eq!(think("y"), Some(None), "an entry with nothing in it sets nothing");
+        assert_eq!(think("qwen3-coder:30b"), None);
+        // Nothing set is nothing written, so a config that never used it is unchanged on disk.
+        assert!(Config::default().model_settings.is_empty());
+        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("model_settings"));
+        let saved = serde_json::to_string(&c).unwrap();
+        assert!(saved.contains(r#""gpt-oss:20b":{"think":"high"}"#), "{saved}");
+    }
+
+    /// A typo in a hand-typed entry costs that entry, or that value, and not the file.
+    #[test]
+    fn a_bad_model_settings_entry_is_dropped_and_a_bad_think_is_unset() {
+        let c: Config = serde_json::from_str(
+            r#"{"model":"mine","workspace":"C:\\w","model_settings":{
+                "a":"high",
+                "b":["think","high"],
+                "c":null,
+                "d":{"think":"extreme"},
+                "e":{"think":3},
+                "f":{"think":true},
+                "g":{"think":"medium"}}}"#,
+        )
+        .unwrap();
+        assert_eq!((c.model.as_str(), c.workspace.as_deref()), ("mine", Some(r"C:\w")));
+        let tags: Vec<&str> = c.model_settings.keys().map(String::as_str).collect();
+        assert_eq!(tags, ["d", "e", "f", "g"], "the entries that are not objects are dropped");
+        for unset in ["d", "e", "f"] {
+            assert_eq!(c.settings_for(unset).and_then(|s| s.think), None, "{unset}");
+        }
+        assert_eq!(c.settings_for("g").and_then(|s| s.think), Some(Think::Medium));
+        // Not even a map: no settings, and still no reset.
+        for bad in [r#""oops""#, "null", "[]", "7", "true"] {
+            let c: Config = serde_json::from_str(&format!(r#"{{"model":"x","model_settings":{bad}}}"#)).unwrap();
+            assert_eq!((c.model.as_str(), c.model_settings.len()), ("x", 0), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_models_settings_are_found_whatever_the_case_of_its_tag() {
+        let c: Config =
+            serde_json::from_str(r#"{"model_settings":{"GPT-OSS:20b":{"think":"low"}}}"#).unwrap();
+        assert_eq!(c.settings_for("gpt-oss:20b").and_then(|s| s.think), Some(Think::Low));
+        assert_eq!(c.settings_for("GPT-OSS:20B").and_then(|s| s.think), Some(Think::Low));
+        assert!(c.settings_for("gpt-oss:120b").is_none());
+        // The words themselves, in any case; a number or a stray word is none.
+        assert_eq!(Think::parse(" High "), Some(Think::High));
+        assert_eq!(Think::parse("OFF").map(Think::name), Some("off"));
+        assert_eq!((Think::parse("true"), Think::parse(""), Think::parse("max")), (None, None, None));
     }
 
     /// A `config.json` path in a folder of its own, **removed when the test ends** —

@@ -14,6 +14,7 @@ fn round(prompt_eval_count: u32, recovered: bool, fed_back: bool, metrics: Metri
         prompt_eval_count,
         recovered,
         fed_back,
+        thinking: None,
         metrics,
         sent: compact_for_send(&mut [], &[], 8192, None, 0),
     }
@@ -45,6 +46,7 @@ fn a_reply_is_a_line_with_ollamas_numbers_and_how_it_was_handled() {
         tool_calls: 2,
         thinking_len: 0,
         error: None,
+        note: None,
     };
     let line = Line::of("devstral:24b", at(0, 0), &Ok(round(900, true, false, metrics)));
     assert_eq!(

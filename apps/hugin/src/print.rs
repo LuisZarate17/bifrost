@@ -1150,7 +1150,7 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
             // The loop leaves the model's last words out of the conversation, and the follow-up answers them.
             let said = held(&turn_progress).answer.clone();
             if let Some(content) = said {
-                convo.push(Message { role: "assistant".to_string(), content, images: None, tool_calls: None, tool_name: None });
+                convo.push(Message { role: "assistant".to_string(), content, images: None, tool_calls: None, tool_name: None, thinking: None });
             }
             convo.push(Message::user(text));
             let calibration = fe.calibration;

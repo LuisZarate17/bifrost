@@ -143,6 +143,7 @@ mod tests {
                     },
                 }]),
                 tool_name: None,
+                thinking: None,
             });
             m.push(Message::tool_result("search", "x".repeat(6000)));
         }

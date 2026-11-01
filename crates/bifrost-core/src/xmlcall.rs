@@ -762,6 +762,7 @@ mod tests {
                 },
             }]),
             tool_name: None,
+            thinking: None,
         }
     }
 
@@ -867,6 +868,7 @@ mod tests {
             images: None,
             tool_calls: None,
             tool_name: None,
+            thinking: None,
         };
         let prompt = render(&[Message::user("hi"), partial], &[]);
         assert!(prompt.ends_with("<|im_start|>assistant\npartial"));

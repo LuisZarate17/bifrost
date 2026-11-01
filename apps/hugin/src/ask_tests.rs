@@ -145,7 +145,7 @@ type Seen = Arc<Mutex<Option<Ctx>>>;
 fn round(reply: Reply) -> Result<Round, String> {
     // A reply that is not words is one call.
     let metrics = Metrics { tool_calls: usize::from(!matches!(reply, Reply::Answer { .. })), ..Metrics::default() };
-    Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, metrics, sent: compact_for_send(&mut [], &[], 8192, None, 0) })
+    Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, thinking: None, metrics, sent: compact_for_send(&mut [], &[], 8192, None, 0) })
 }
 
 /// What a model that is not Qwen leaves when Ollama cannot parse its call: the stand-in call the

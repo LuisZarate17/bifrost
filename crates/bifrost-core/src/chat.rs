@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::Think;
 use crate::ollama;
 
 /// Long enough for a cold model load plus a real answer. `ollama::WARM_TIMEOUT`
@@ -33,7 +34,7 @@ const CHAT_TIMEOUT: Duration = Duration::from_secs(300);
 /// — because STAGE-G decision #2 is that adding them later means migrating a
 /// database already holding real conversations. They serialize away when empty,
 /// so a plain text turn is still `{"role":..., "content":...}` on the wire.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     pub role: String,
     pub content: String,
@@ -49,6 +50,13 @@ pub struct Message {
     /// Set on a `role: "tool"` turn, naming which tool produced `content`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
+
+    /// What a thinking model reasoned before it answered (J0d), from the reply's
+    /// `thinking`. Sent back in history so the model keeps its reasoning across the
+    /// rounds of one turn; [`crate::agent::turn::run_turn_with`] clears it when the
+    /// turn ends, so no later turn or saved conversation carries it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
 }
 
 impl Message {
@@ -68,6 +76,7 @@ impl Message {
             images: None,
             tool_calls: None,
             tool_name: Some(name.into()),
+            thinking: None,
         }
     }
 
@@ -78,6 +87,7 @@ impl Message {
             images: None,
             tool_calls: None,
             tool_name: None,
+            thinking: None,
         }
     }
 
@@ -155,10 +165,16 @@ impl Tool {
 /// **a verdict that moves between runs is not a measurement.** Use
 /// [`Options::measured`] for anything whose result gets written down, and
 /// [`Options::new`] in the apps, where Ollama's own sampling is what you want.
+///
+/// `think` is the request's `think` field (J0d), sent **only when set** so a request
+/// that never asked for it is byte-for-byte what it was. [`chat`] and [`stream`] send
+/// it as given; the tool round ([`crate::agent::round::round_in`]) sets it from the
+/// model's config and only for a model that reports `thinking`.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {
     pub num_ctx: u32,
     pub temperature: Option<f32>,
+    pub think: Option<Think>,
 }
 
 impl Options {
@@ -167,6 +183,7 @@ impl Options {
         Self {
             num_ctx,
             temperature: None,
+            think: None,
         }
     }
 
@@ -175,7 +192,13 @@ impl Options {
         Self {
             num_ctx,
             temperature: Some(0.0),
+            think: None,
         }
+    }
+
+    /// These options asking for `think`; none leaves the model's own.
+    pub fn thinking(self, think: Option<Think>) -> Self {
+        Self { think, ..self }
     }
 }
 
@@ -235,6 +258,40 @@ struct RawReply {
     eval_duration: u64,
 }
 
+/// The `/api/chat` request [`chat`] and [`stream`] send, which differ only in `stream`.
+///
+/// `tools` and `think` are **omitted entirely rather than sent empty**: a model with no
+/// `tools` capability should see a request identical to one that never wanted them, and
+/// one that was never asked to think gets a body that is byte-for-byte what it was before
+/// the setting existed. `think` is `false` for off and the level's word otherwise.
+fn request_body(
+    model: &str,
+    messages: &[Message],
+    tools: &[Tool],
+    options: Options,
+    stream: bool,
+) -> Result<serde_json::Value, String> {
+    let mut opts = serde_json::json!({ "num_ctx": options.num_ctx });
+    if let Some(t) = options.temperature {
+        opts["temperature"] = serde_json::json!(t);
+    }
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": stream,
+        "options": opts,
+    });
+    if !tools.is_empty() {
+        body["tools"] = serde_json::to_value(tools).map_err(|e| format!("encoding tools: {e}"))?;
+    }
+    match options.think {
+        None => {}
+        Some(Think::Off) => body["think"] = serde_json::json!(false),
+        Some(level) => body["think"] = serde_json::json!(level.name()),
+    }
+    Ok(body)
+}
+
 /// Send a conversation, optionally offering tools, and wait for the whole reply.
 ///
 /// `num_ctx` is always set explicitly — Ollama derives its default from VRAM and
@@ -248,21 +305,7 @@ pub fn chat(
     tools: &[Tool],
     options: Options,
 ) -> Result<ChatReply, String> {
-    let mut opts = serde_json::json!({ "num_ctx": options.num_ctx });
-    if let Some(t) = options.temperature {
-        opts["temperature"] = serde_json::json!(t);
-    }
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": messages,
-        "stream": false,
-        "options": opts,
-    });
-    // Omitted entirely rather than sent empty: a model with no `tools`
-    // capability should see a request identical to one that never wanted them.
-    if !tools.is_empty() {
-        body["tools"] = serde_json::to_value(tools).map_err(|e| format!("encoding tools: {e}"))?;
-    }
+    let body = request_body(model, messages, tools, options, false)?;
 
     let client = reqwest::blocking::Client::builder()
         .timeout(CHAT_TIMEOUT)
@@ -423,6 +466,8 @@ fn passed_through(reply: ChatReply, tools: &[Tool]) -> ChatReply {
             images: None,
             tool_calls: Some(calls),
             tool_name: None,
+            // The reasoning behind the call it wrote as text.
+            thinking: reply.message.thinking,
         },
         recovered: true,
         ..reply
@@ -611,6 +656,7 @@ fn fed_back(err: &str) -> ChatReply {
             images: None,
             tool_calls: Some(vec![invalid_call(capped(ollama_message(err)))]),
             tool_name: None,
+            thinking: None,
         },
         load: Duration::ZERO,
         total: Duration::ZERO,
@@ -723,6 +769,8 @@ pub(crate) fn recover(
             images: None,
             tool_calls: if calls.is_empty() { None } else { Some(calls) },
             tool_name: None,
+            // The raw endpoint has no `thinking`: the text comes back untouched.
+            thinking: None,
         },
         load: Duration::from_nanos(raw.load_duration),
         total: Duration::from_nanos(raw.total_duration),
@@ -785,19 +833,7 @@ pub fn stream(
 ) -> Result<ChatReply, String> {
     use std::io::{BufRead, BufReader};
 
-    let mut opts = serde_json::json!({ "num_ctx": options.num_ctx });
-    if let Some(t) = options.temperature {
-        opts["temperature"] = serde_json::json!(t);
-    }
-    let mut body = serde_json::json!({
-        "model": model,
-        "messages": messages,
-        "stream": true,
-        "options": opts,
-    });
-    if !tools.is_empty() {
-        body["tools"] = serde_json::to_value(tools).map_err(|e| format!("encoding tools: {e}"))?;
-    }
+    let body = request_body(model, messages, tools, options, true)?;
 
     let client = reqwest::blocking::Client::builder()
         .timeout(CHAT_TIMEOUT)
@@ -823,6 +859,7 @@ pub fn stream(
     }
 
     let mut text = String::new();
+    let mut thinking = String::new();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     let mut ttft: Option<Duration> = None;
     let mut reply = ChatReply {
@@ -859,6 +896,12 @@ pub fn stream(
                 on(StreamChunk::Token(fragment))?;
             }
 
+        // A thinking model's reasoning arrives under `message.thinking`, ahead of its
+        // answer. Kept for the reply, not handed to `on`: it is not the answer.
+        if let Some(fragment) = v["message"]["thinking"].as_str() {
+            thinking.push_str(fragment);
+        }
+
         // Tool calls arrive whole rather than a fragment at a time, but they can
         // land on any object in the stream, not only the last one.
         if let Some(calls) = v["message"]["tool_calls"].as_array() {
@@ -881,6 +924,7 @@ pub fn stream(
 
     reply.ttft = ttft;
     reply.message.content = text;
+    reply.message.thinking = (!thinking.is_empty()).then_some(thinking);
     reply.message.tool_calls = (!tool_calls.is_empty()).then_some(tool_calls);
     on(StreamChunk::Done(&reply))?;
     Ok(reply)
@@ -926,6 +970,84 @@ mod tests {
             eval_duration: Duration::ZERO,
         };
         assert!(reply.tool_calls().is_empty());
+    }
+
+    /// J0d: a request that never asked to think is exactly what it was before the setting
+    /// existed, for `chat` and `stream` alike (which share the body, apart from `stream`).
+    #[test]
+    fn think_is_left_out_of_the_request_when_it_is_not_set() {
+        let messages = [Message::user("hi")];
+        let tools = [Tool::function("add", "adds", serde_json::json!({ "type": "object" }))];
+        for (options, stream) in [(Options::new(8192), false), (Options::measured(8192), true)] {
+            let body = request_body("m", &messages, &tools, options, stream).unwrap();
+            assert!(body.get("think").is_none(), "{body}");
+            let mut before = serde_json::json!({
+                "model": "m",
+                "messages": [{ "role": "user", "content": "hi" }],
+                "stream": stream,
+                "options": { "num_ctx": 8192 },
+                "tools": serde_json::to_value(tools.as_slice()).unwrap(),
+            });
+            if options.temperature.is_some() {
+                before["options"]["temperature"] = serde_json::json!(0.0);
+            }
+            assert_eq!(body, before);
+        }
+    }
+
+    #[test]
+    fn think_is_false_for_off_and_the_levels_word_otherwise() {
+        let messages = [Message::user("hi")];
+        for (think, want) in [
+            (Think::Off, serde_json::json!(false)),
+            (Think::Low, serde_json::json!("low")),
+            (Think::Medium, serde_json::json!("medium")),
+            (Think::High, serde_json::json!("high")),
+        ] {
+            for stream in [false, true] {
+                let body = request_body("m", &messages, &[], Options::new(8192).thinking(Some(think)), stream).unwrap();
+                assert_eq!(body["think"], want, "{think:?}, stream {stream}");
+                assert_eq!((body["stream"].as_bool(), body["options"]["num_ctx"].as_u64()), (Some(stream), Some(8192)));
+            }
+        }
+    }
+
+    #[test]
+    fn a_reply_keeps_what_the_model_thought_and_a_plain_message_sends_none() {
+        let raw: RawReply = serde_json::from_str(
+            r#"{"message":{"role":"assistant","content":"4","thinking":"2 and 2 make 4."},"eval_count":3}"#,
+        )
+        .unwrap();
+        assert_eq!(raw.message.thinking.as_deref(), Some("2 and 2 make 4."));
+        // A model that does not think sends none, and none is not written back.
+        let none: Message = serde_json::from_str(r#"{"role":"assistant","content":"4"}"#).unwrap();
+        assert_eq!(none.thinking, None);
+        assert_eq!(serde_json::to_string(&none).unwrap(), r#"{"role":"assistant","content":"4"}"#);
+        // In history it goes back as it came.
+        let sent = serde_json::to_value(&raw.message).unwrap();
+        assert_eq!(sent["thinking"], "2 and 2 make 4.");
+    }
+
+    #[test]
+    fn thinking_survives_a_call_read_out_of_plain_text() {
+        let tools = crate::tools::available(false, None);
+        let content = "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>";
+        let said = |content: &str, thinking: &str| ChatReply {
+            message: Message {
+                role: "assistant".into(),
+                content: content.into(),
+                thinking: Some(thinking.into()),
+                ..Message::default()
+            },
+            ..fed_back("")
+        };
+        let read = passed_through(said(content, "The user wants a.rs."), &tools);
+        assert!(read.recovered);
+        assert_eq!(read.tool_calls()[0].function.name, "read_file");
+        assert_eq!(read.message.thinking.as_deref(), Some("The user wants a.rs."));
+        // A reply with nothing to read comes back as it was, thinking and all.
+        let plain = passed_through(said("No call here.", "hm"), &tools);
+        assert_eq!((plain.message.content.as_str(), plain.message.thinking.as_deref()), ("No call here.", Some("hm")));
     }
 
     #[test]
@@ -1193,7 +1315,7 @@ mod tests {
     #[ignore = "needs Ollama running with qwen3-coder:30b"]
     fn the_raw_render_matches_what_ollama_builds_natively() {
         let model = "qwen3-coder:30b";
-        let options = Options { num_ctx: 32768, temperature: Some(0.0) };
+        let options = Options { num_ctx: 32768, temperature: Some(0.0), think: None };
 
         let call = |path: &str| ToolCall {
             id: None,
@@ -1212,6 +1334,7 @@ mod tests {
             images: None,
             tool_calls: Some(calls),
             tool_name: None,
+            thinking: None,
         };
 
         let conversations: Vec<Vec<Message>> = vec![
@@ -1311,7 +1434,7 @@ mod tests {
     #[ignore = "needs Ollama running with qwen3-coder:30b"]
     fn the_raw_render_matches_what_ollama_builds_natively_for_stage_h_tools_and_awkward_values() {
         let model = "qwen3-coder:30b";
-        let options = Options { num_ctx: 32768, temperature: Some(0.0) };
+        let options = Options { num_ctx: 32768, temperature: Some(0.0), think: None };
         let tools = crate::tools::available(true, Some("cargo check"));
         assert_eq!(tools.last().unwrap().function.name, "run_check", "the set under test includes run_check");
 
@@ -1325,6 +1448,7 @@ mod tests {
             images: None,
             tool_calls: (!calls.is_empty()).then_some(calls),
             tool_name: None,
+            thinking: None,
         };
 
         let notes_system = "You can read and change files in the user's project folder: C:\\work\\proj\n\

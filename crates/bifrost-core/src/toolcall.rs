@@ -580,6 +580,7 @@ mod tests {
                 function: FunctionCall { name: "read_file".into(), arguments: json!({ "path": path }) },
             }]),
             tool_name: None,
+            thinking: None,
         }
     }
 

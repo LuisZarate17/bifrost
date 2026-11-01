@@ -3,6 +3,7 @@
 //!   cargo run -p bench --bin taskprobe -- --selfcheck
 //!   cargo run -p bench --bin taskprobe
 //!   cargo run -p bench --bin taskprobe -- --runs 1 --only b02 --model qwen3-vl:8b-instruct-q4_K_M
+//!   cargo run -p bench --bin taskprobe -- --model gpt-oss:20b --think high
 //!
 //! H1 and H2 measured tools in isolation, on fixtures built to exercise them.
 //! This measures the thing those tools exist for: implementing a function or a
@@ -70,6 +71,7 @@ use std::time::Instant;
 
 use bifrost_core::agent::unattended;
 use bifrost_core::chat::{Message, Options, Tool};
+use bifrost_core::config::Think;
 use bifrost_core::edit::Workspace;
 use bifrost_core::scratch::{self, Git, Scratch};
 use bifrost_core::{check, config, ollama, tools};
@@ -1617,6 +1619,19 @@ fn main() {
         }
     };
 
+    // Unset, like the app with no `model_settings` entry: the model's own. `--think high` is
+    // the model's setting for the whole run (J0d); a probe reads no config entry for it.
+    let think = match arg(&args, "--think") {
+        None => None,
+        Some(word) => match Think::parse(&word) {
+            Some(think) => Some(think),
+            None => {
+                eprintln!("--think takes off, low, medium or high, not {word}");
+                std::process::exit(2);
+            }
+        },
+    };
+
     // Parts, like the app: the read offers `start_line` and `end_line`. `--read
     // whole` offers the read as it was, to measure H8 on and off in one build.
     let parts = match arg(&args, "--read").as_deref() {
@@ -1684,6 +1699,7 @@ fn main() {
 
     println!("H3 — task probe");
     println!("model:  {model}");
+    println!("think:  {}", think.map_or("unset (the model's own)", Think::name));
     println!("mode:   {}", modes.iter().map(|m| m.name()).collect::<Vec<_>>().join(" and "));
     println!("ctx:    {}", cfg.num_ctx);
     println!("compact: {}", if compact { "on" } else { "off" });
@@ -1721,8 +1737,10 @@ fn main() {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default();
-    let settings: Vec<(&str, Options, usize)> =
-        vec![("app", Options::new(cfg.num_ctx), runs), ("t=0", Options::measured(cfg.num_ctx), 1)];
+    let settings: Vec<(&str, Options, usize)> = vec![
+        ("app", Options::new(cfg.num_ctx).thinking(think), runs),
+        ("t=0", Options::measured(cfg.num_ctx).thinking(think), 1),
+    ];
 
     let mut rows = Vec::new();
     let mut json = Vec::new();

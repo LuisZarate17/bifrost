@@ -134,8 +134,11 @@ pub struct Compaction {
     pub estimated_tokens: u32,
 }
 
+/// A message's characters: its content, what the model thought before it (J0d, sent back
+/// within a turn like the rest), and the name and arguments of each call.
 fn message_chars(m: &Message) -> u64 {
     let mut n = m.content.chars().count() as u64;
+    n += m.thinking.as_deref().map_or(0, |t| t.chars().count() as u64);
     for c in m.tool_calls.as_deref().unwrap_or(&[]) {
         n += c.function.name.chars().count() as u64;
         n += c.function.arguments.to_string().chars().count() as u64;
@@ -143,7 +146,7 @@ fn message_chars(m: &Message) -> u64 {
     n
 }
 
-/// Characters the request carries: every message's content, the name and
+/// Characters the request carries: every message's content and thinking, the name and
 /// arguments of every call, and the tool schemas — sent every round, about 3 KB.
 /// Images are not counted; a picture costs tokens by its size, not its base64.
 pub fn prompt_chars(messages: &[Message], tools: &[Tool]) -> u64 {
@@ -379,6 +382,7 @@ mod tests {
             images: None,
             tool_calls: Some(vec![call(name, args)]),
             tool_name: None,
+            thinking: None,
         }
     }
 
@@ -406,6 +410,20 @@ mod tests {
             m.extend(if *p == "?" { found(*n) } else { read(p, *n) });
         }
         m
+    }
+
+    /// J0d: what a thinking model reasoned goes back with its call, so the estimate has to
+    /// count it or a long reasoning would push a request past the context unseen.
+    #[test]
+    fn what_the_model_thought_is_counted_in_the_prompt() {
+        let plain = turn(&[("a.rs", 100)]);
+        let mut thought = plain.clone();
+        // Index 2 is the assistant message that asked for the read.
+        thought[2].thinking = Some("é".repeat(4000));
+        assert_eq!(message_chars(&thought[2]), message_chars(&plain[2]) + 4000, "characters, not bytes");
+        assert_eq!(prompt_chars(&thought, &[]), prompt_chars(&plain, &[]) + 4000);
+        let budget = Budget::new(32768, None);
+        assert!(compact(&thought, &[], &budget).estimated_tokens > compact(&plain, &[], &budget).estimated_tokens);
     }
 
     #[test]
