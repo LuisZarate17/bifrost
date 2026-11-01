@@ -1,7 +1,7 @@
 # Stage J — where it stands
 
 Every chunk and gate of [STAGE-J.md](../stages/STAGE-J.md), done or not. **Updated at the end of
-every chunk.** Last updated 2026-10-26, after J0c+.
+every chunk.** Last updated 2026-11-01, when the rest of Phase 0 was set.
 
 **Started 2026-10-25.** One chunk at a time; in the runs, one model per session, with a
 report after each.
@@ -12,8 +12,9 @@ report after each.
 | | J0b | Tool-call repair for every model, not only Qwen | ✅ Built · local | Every model's unreadable call is fed back; Qwen keeps its own repair; real failures still end the turn; `--model` and `--trace` for the runs — [J0b](results/J0b-results.md) |
 | | J0c | Upgrade Ollama (0.33.3 → current) | ✅ Done, one open item | 0.40.11; the current model passes toolprobe 10/10 and taskprobe 9/16; the apps run; one render-fidelity test fails (same token counts, different tool chosen) — [J0c](results/J0c-results.md) |
 | | J0c+ | The upgrade's leftovers: the raw retry must sample like `/api/chat`; no stray `<tool_call>` in answers | ✅ Built · local, one check short | Not sampling: the prompt cache. Both paths build the same prompt and sample the same way; the tool chosen at t=0 follows what `llama-server` has cached. The test now warms up first and passes 5/5. Dangling `<tool_call>` tags are cut from answers. toolprobe 10/10; taskprobe propose 10/16 at app settings; the t=0 pass was stopped for low memory after 9 tasks — [J0c+](results/J0c+-results.md) |
-| | J0d | Thinking models: `think` and per-model settings | Not started | |
-| | Gate J0 | Review, all tests green | Not started | |
+| | J0c+ close-out | One clean taskprobe run: memory floor raised to 12 GB, apps closed, `/verify full` | Set 2026-11-01 · needs you to close apps first | |
+| | J0d | Thinking models: `think` and per-model settings | Set in detail 2026-11-01 · not started | |
+| | Gate J0 | Review, clippy, `/verify full` PASS, then push `stage-i` | Not started | |
 | **1. Tests** | J1a | realprobe: 10 real tasks with hidden tests | Not started | |
 | | J1b | askprobe: 12 code questions | Not started | |
 | | J1c | Speed and memory, measured the same way for every model | Not started | |

@@ -1,7 +1,8 @@
 # Stage J — the model bake-off: find a local model that makes Hugin and Mimir good
 
-> **Status: set 2026-10-25, not started.** Nothing is committed, moved, upgraded, downloaded, built
-> or run until Luis says **"start Stage J"**. Then J0a comes first, one chunk at a time.
+> **Status: started 2026-10-25; in Phase 0.** J0a–J0c are done and pushed. J0c+ is built, waiting on
+> one clean taskprobe run. The rest of Phase 0 was set 2026-11-01 (below): J0c+'s close-out, J0d and
+> Gate J0, each. Live status: [J-status.md](../docs/J-status.md).
 
 ## TL;DR
 
@@ -102,17 +103,52 @@ it brings the server's tool-parser fixes.
   the mismatch came from `llama-server`'s prompt cache, so the test now warms up first. See
   [J0c+-results.md](../docs/results/J0c+-results.md).
 
-**J0d · Thinking models.** A `model_settings` map in the config, per model tag; for now just
-`think` (off/low/medium/high).
-- Send `think` when it's set and the model reports the `thinking` capability.
-- Parse `Message.thinking` and keep it on tool-call messages within the turn (turn.rs `pair()`
-  drops it today). Drop it at the end of the turn, and count it when compacting.
-- Hugin shows `thinking…`.
-- No per-model sampling: the app already sends none, so each model's own settings apply.
-- This lives in `round_in`, so Mimir, Hugin and the probes all share it. Smoke-test with gpt-oss at
-  think `high`.
+**J0c+ close-out** (set 2026-11-01). Both taskprobe attempts were stopped for low memory; the
+second scored 2/16 for code that scored 10/16.
+- Raise `/verify`'s memory floor (`.claude/verify.md`) from 8 GB to 12 GB free.
+- **You** close the browser and VS Code and leave Mimir and Vidar idle. Then `/verify full`, with
+  `CARGO_BUILD_JOBS=4` for the scoring builds.
+- Done when taskprobe is 8–11/16 at the app's settings, with a complete t=0 pass. If memory is
+  still short, stop and report; no retry loop.
 
-**Gate J0:** an independent review of J0b–d, all tests green, and your OK.
+**J0d · Thinking models** (detailed 2026-11-01). A `model_settings` map in the config, per model tag;
+for now just `think` (off/low/medium/high). No per-model sampling: the app sends none, so each model's
+own settings apply. It lives in `round_in`, so Mimir, Hugin and the probes all share it.
+- **Already there:** `ModelDetail.capabilities`, cached by `show_cached` (ollama.rs); a
+  `thinking_len` field in the round metrics and Hugin's `--trace`, always 0 so far; Hugin's
+  `thinking · 12s` status for any wait on the model. The request doesn't stream, so a reasoning
+  phase can't be told apart from writing: **no Hugin UI change**.
+- **Config** (config.rs): `model_settings: {tag: {think}}`, lenient like `checks`. A bad entry is
+  dropped, a bad `think` value is unset. `settings_for(model)` ignores case.
+- **The request** (chat.rs): `Options.think`. `chat()` and `stream()` send `"think"` only when it's
+  set: `false` for off, `"low"`/`"medium"`/`"high"` otherwise. Whether a model without levels takes
+  a string or needs `true` is **confirmed in the live check, not assumed**.
+- **The reply:** `Message.thinking`, sent back in history. `Message` derives `Default`, and the ~23
+  struct literals get `thinking: None`. `passed_through` keeps the thinking; the raw retry has none.
+- **`round_in`:** sends `think` when it's set and the model reports `thinking`; otherwise it's
+  ignored, with a note. `thinking_len` gets filled.
+- **The turn:** `Round.thinking` goes onto the paired assistant tool-call message (turn.rs `pair()`,
+  all four callers). It's cleared from the whole `convo` at the end of `run_turn_with`, so later
+  turns and saved conversations never carry it.
+- **Compaction:** `message_chars` counts the thinking.
+- **Probes:** taskprobe and toolprobe get `--think <level>`, for J2's gpt-oss at `high`.
+- **Tests:** config parsing and lookup; `think` in the body only when set; thinking deserialized and
+  kept through `passed_through`; sent only with the capability; kept within a turn and gone after
+  it; counted by compaction.
+- **Live check:** pull gpt-oss:20b (about 13 GB, on your OK, given 2026-11-01). With
+  `{"gpt-oss:20b": {"think": "high"}}`:
+  - `hugin --ask` and a small `hugin -p`, both with `--trace`. Each must show `thinking_len > 0`,
+    no tool-call errors, and an answer.
+  - toolprobe at think `high`, with its score recorded. There's no bar yet; J2 sets it.
+  - The same Hugin runs on qwen3-coder:30b, which must be unchanged, with `thinking_len` 0.
+
+**Gate J0:**
+1. An independent review of J0b, J0c+ and J0d, by the checker agent or `/code-review`. Fixes go in
+   their own commit.
+2. `cargo clippy --workspace --all-targets` clean. It hasn't run since J0b.
+3. `/verify full` says **PASS**. On INCOMPLETE, stop and ask.
+4. Your OK.
+5. **Push `stage-i`** (your choice, 2026-11-01); `main` stays at Stage H.
 
 ## Phase 1 — tests built from real work
 
