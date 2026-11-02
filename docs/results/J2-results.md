@@ -10,6 +10,7 @@ Run overnight 2026-11-01→02 on autopilot.
 | **B: qwen3-coder:30b** | **4/10** | 0 | 4 / 6 / 2 | 10/10 | 10/16 / 9/16 | 73.8 / 67.5 | 33.9% |
 | gpt-oss:20b, think high | — (gate: taskprobe 4 < 7) | — | 2 / 8 / 2 | 9/10 | 4/16 / 4/16 | 167.6 / 155.8 | 0% |
 | **qwen3.6:35b-a3b** (thinks by default) | **7/10** | **3** | 6 / 6 / 0 | 10/10 | 12/16 / 11/16 | 107.9 / 111.5 | 43.1% |
+| **ornith-1.5:9b** | **6/10** | 0 | **9 / 3 / 0** | 10/10 | 10/16 / 9/16 | 129.9 / 120.8 | 0% |
 
 ## B: qwen3-coder:30b (20:02–21:03)
 
@@ -45,3 +46,14 @@ Run overnight 2026-11-01→02 on autopilot.
   the harness, but switching rule 4 allows at most 1 in J3, so watch it there.
 - **Speed:** decode 108–112 tok/s, about 1.5× B's, even with 43% on the CPU. Prefill about 1,950
   tok/s.
+
+## ornith-1.5:9b (23:18–00:56)
+
+- **Download:** 5.6 GB in about 2 minutes. It reports tools, thinking, completion and vision.
+- **realprobe 6/10, 0 false done:** PASS on 02, 03, 04, 06, 08 and 09. 05 was correct but Hugin
+  said `partial`. On 01, 07 and 10 it changed nothing and ended `partial`. When it wasn't sure, it
+  stopped rather than claim done.
+- **askprobe:** 9 right, 3 partly, 0 wrong, the best of any model.
+- **taskprobe:** 10/16 at app settings, the same as B, and 9/16 at t=0. But slow per run: 103 s
+  against B's 51, with about 7 rounds per run.
+- **Speed:** it fits on the card, with decode 121–130 tok/s and prefill about 6,200 tok/s.
