@@ -1,0 +1,586 @@
+{
+  "pin": "0940923",
+  "questions": [
+    {
+      "id": "01-check-lookup",
+      "question": "Where is the folder's check looked up for a turn, and how is it keyed?",
+      "required": [
+        {
+          "name": "names check_for",
+          "any": [
+            "check_for"
+          ]
+        },
+        {
+          "name": "keyed by the folder's path",
+          "any": [
+            "keyed\\s+(by|on)\\s+(the\\s+)?(folder|workspace|project|root|directory|path)",
+            "(folder|workspace|project|root|directory)(['’]s)?\\s+(path|root|display)",
+            "root_display",
+            "\\bchecks\\b\\s+(map|table|field)",
+            "map\\w*\\s+(a\\s+)?(folder|path)"
+          ]
+        },
+        {
+          "name": "matched ignoring case",
+          "any": [
+            "(ignor\\w*|insensitiv\\w*|regardless\\s+of)\\s+(of\\s+)?(the\\s+)?case",
+            "case[- ]insensitiv",
+            "eq_ignore_ascii_case"
+          ]
+        }
+      ],
+      "files": [
+        "crates/bifrost-core/src/config.rs",
+        "crates/bifrost-core/src/agent/round.rs"
+      ],
+      "note": "Config::check_for in config.rs finds the entry of the `checks` map (folder path -> argv) whose key equals the folder, ignoring case; round_in in agent/round.rs calls it with the workspace's root_display(). An entry with an empty argv does not count.",
+      "selfcheck": {
+        "right": "The lookup is Config::check_for in crates/bifrost-core/src/config.rs. The config's `checks` map is keyed by the folder's path, and the key is compared ignoring case (eq_ignore_ascii_case), as Windows paths are. round_in in agent/round.rs calls it with the workspace's root_display().",
+        "right_looked_at": [
+          "crates/bifrost-core/src/config.rs",
+          "crates/bifrost-core/src/agent/round.rs"
+        ],
+        "wrong": "The check is hard-coded in the tool list in tools.rs: it is always `cargo test`, whatever the folder is. Nothing is looked up.",
+        "wrong_looked_at": [
+          "crates/bifrost-core/src/tools.rs",
+          "README.md"
+        ]
+      }
+    },
+    {
+      "id": "02-check-output-cap",
+      "question": "What happens to a check's output when it is longer than the limit?",
+      "required": [
+        {
+          "name": "keeps the first 6 KB (HEAD)",
+          "any": [
+            "(first|head|start|beginning|leading)[^.\\n]{0,80}\\b6\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b",
+            "\\b6\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b[^.\\n]{0,80}(first|head|start|beginning|leading)",
+            "\\bHEAD\\b[^.\\n\\d]{0,30}\\b6\\b",
+            "6,?144"
+          ]
+        },
+        {
+          "name": "keeps the last 2 KB (TAIL)",
+          "any": [
+            "(last|tail|end|final|trailing)[^.\\n]{0,80}\\b2\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b",
+            "\\b2\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b[^.\\n]{0,80}(last|tail|end|final|trailing)",
+            "\\bTAIL\\b[^.\\n\\d]{0,30}\\b2\\b",
+            "2,?048"
+          ]
+        },
+        {
+          "name": "says how much was cut",
+          "any": [
+            "bytes\\s+cut",
+            "(marker|note|count|message|line|notice)[^.\\n]{0,80}(cut|omitted|dropped|removed|truncated|skipped|elided)",
+            "how\\s+(much|many)[^.\\n]{0,80}(cut|omitted|dropped|removed|truncated|skipped|elided)"
+          ]
+        }
+      ],
+      "files": [
+        "crates/bifrost-core/src/check.rs"
+      ],
+      "note": "check.rs keeps the first HEAD = 6 KB and the last TAIL = 2 KB of a run's output, with a `[… N bytes cut …]` marker between them; Outcome.bytes counts everything the command wrote.",
+      "selfcheck": {
+        "right": "In check.rs only the beginning and the end of the output are kept: the first 6 KB (HEAD) and the last 2 KB (TAIL), with a marker in between that says how many bytes were cut. Outcome.bytes still counts everything the command wrote.",
+        "right_looked_at": [
+          "crates/bifrost-core/src/check.rs"
+        ],
+        "wrong": "The output is kept whole and written to a log file in the data folder; only the model is shown a summary that says the check failed.",
+        "wrong_looked_at": [
+          "crates/bifrost-core/src/edit.rs"
+        ]
+      }
+    },
+    {
+      "id": "03-tray-menu",
+      "question": "What items does the Bifrost tray menu have, and where is it built?",
+      "required": [
+        {
+          "name": "built in tray.rs",
+          "any": [
+            "tray\\.rs"
+          ]
+        },
+        {
+          "name": "a Model loaded switch",
+          "any": [
+            "model\\s+loaded"
+          ]
+        },
+        {
+          "name": "Open Mimir and Open Hugin",
+          "any": [
+            "open\\s+mimir[\\s\\S]{0,300}open\\s+hugin",
+            "open\\s+hugin[\\s\\S]{0,300}open\\s+mimir"
+          ]
+        },
+        {
+          "name": "Start at login",
+          "any": [
+            "start\\s+at\\s+login",
+            "launch\\s+at\\s+(login|startup)"
+          ]
+        }
+      ],
+      "files": [
+        "apps/vidar/src-tauri/src/tray.rs"
+      ],
+      "note": "install() in apps/vidar/src-tauri/src/tray.rs builds: a disabled status line, the Model loaded tick, a Model submenu (the picker), Open Vidar (Ctrl+Alt+W), Open Mimir, Open Hugin (Ctrl+Alt+H), Start at login and Quit Bifrost.",
+      "selfcheck": {
+        "right": "The tray is built by install() in apps/vidar/src-tauri/src/tray.rs. The menu has a status line, a Model loaded tick, a Model submenu, Open Vidar, Open Mimir, Open Hugin, Start at login and Quit Bifrost.",
+        "right_looked_at": [
+          "apps/vidar/src-tauri/src/tray.rs"
+        ],
+        "wrong": "The tray menu is built in apps/mimir/src-tauri/src/lib.rs and has two items: Settings and Exit.",
+        "wrong_looked_at": [
+          "apps/mimir/src-tauri/src/lib.rs"
+        ]
+      }
+    },
+    {
+      "id": "04-claude-check-scope",
+      "question": "How does Mimir's Check with Claude make sure only the question and the diff are sent to Claude?",
+      "required": [
+        {
+          "name": "tools turned off (--tools \"\")",
+          "any": [
+            "--tools",
+            "built-?in\\s+tools",
+            "\\bno\\s+tools\\b",
+            "tools\\s+(are\\s+)?(off|disabled|turned\\s+off)"
+          ]
+        },
+        {
+          "name": "hooks, CLAUDE.md, settings and MCP kept out (--safe-mode, --strict-mcp-config)",
+          "any": [
+            "safe[- ]mode",
+            "strict[- ]mcp"
+          ]
+        },
+        {
+          "name": "run in an empty folder of its own",
+          "any": [
+            "(empty|neutral|own|separate|clean|fresh|temp(orary)?)\\s+(temp\\w*\\s+)?(folder|directory|dir)\\b",
+            "neutral_dir",
+            "bifrost-claude-check"
+          ]
+        },
+        {
+          "name": "the prompt goes in on stdin",
+          "any": [
+            "\\bstdin\\b",
+            "standard\\s+input"
+          ]
+        }
+      ],
+      "files": [
+        "crates/bifrost-core/src/claude.rs"
+      ],
+      "note": "claude.rs `run`: `claude -p --output-format json --tools \"\" --no-session-persistence --safe-mode --strict-mcp-config --append-system-prompt …`, the prompt (question + diff, built by `prompt`) on stdin, run in an empty folder (%TEMP%\\bifrost-claude-check); Mimir's `claude_check` also compares the preview's hash again at send time and refuses when the switch is off.",
+      "selfcheck": {
+        "right": "claude.rs builds the prompt from the question and the diff only and passes it to `claude -p` on stdin. The built-in tools are turned off with --tools \"\", --safe-mode keeps hooks, CLAUDE.md files and settings out, --strict-mcp-config keeps MCP servers out, and the command runs in an empty folder of its own.",
+        "right_looked_at": [
+          "crates/bifrost-core/src/claude.rs"
+        ],
+        "wrong": "Mimir uploads the whole project folder to Claude's API with an API key stored in config.json, and trusts Claude to ignore the rest.",
+        "wrong_looked_at": [
+          "apps/mimir/src-tauri/src/lib.rs",
+          "crates/bifrost-core/src/config.rs"
+        ]
+      }
+    },
+    {
+      "id": "05-undo-backups",
+      "question": "Where are undo backups kept, and what does each change write there?",
+      "required": [
+        {
+          "name": "a backups folder in the Bifrost data folder",
+          "any": [
+            "bifrost[\\\\/]+backups",
+            "backups_dir[\\s\\S]{0,200}data_dir",
+            "data\\s+(folder|dir\\w*)[^.\\n]{0,80}backups",
+            "backups[^.\\n]{0,80}data\\s+(folder|dir\\w*)"
+          ]
+        },
+        {
+          "name": "a .json record per change",
+          "any": [
+            "\\.json\\b"
+          ]
+        },
+        {
+          "name": "a .bak with the original bytes for an edit or delete",
+          "any": [
+            "\\.bak\\b"
+          ]
+        }
+      ],
+      "files": [
+        "crates/bifrost-core/src/edit.rs"
+      ],
+      "note": "edit.rs backups_dir() = the data folder's `backups` (%APPDATA%\\bifrost\\backups). apply() writes `<id>.json` (the record) and, for an edit or a delete, `<id>.bak` holding the file's original bytes.",
+      "selfcheck": {
+        "right": "edit.rs backups_dir() is the `backups` folder of the data folder, %APPDATA%\\bifrost\\backups. Each change writes <id>.json, the record, and an edit or a delete also writes <id>.bak with the original bytes of the file.",
+        "right_looked_at": [
+          "crates/bifrost-core/src/edit.rs"
+        ],
+        "wrong": "Backups are kept next to each edited file as file.rs~ in the project folder, one per change, and git is used for undo.",
+        "wrong_looked_at": [
+          "crates/bifrost-core/src/tools.rs"
+        ]
+      }
+    },
+    {
+      "id": "06-scratch-copy",
+      "question": "In hugin -p, how is the scratch copy of the folder made, and why not a git worktree?",
+      "required": [
+        {
+          "name": "a shallow git clone of HEAD",
+          "any": [
+            "\\bclone",
+            "--depth",
+            "shallow"
+          ]
+        },
+        {
+          "name": "the uncommitted files copied over",
+          "any": [
+            "uncommitted",
+            "untracked",
+            "working[- ](tree|copy|directory|folder)",
+            "git\\s+status"
+          ]
+        },
+        {
+          "name": "a worktree writes into the user's .git",
+          "any": [
+            "\\.git\\b[^.\\n]{0,80}(writ\\w*|leav\\w*|entr\\w*|modif\\w*|touch\\w*)",
+            "(writ\\w*|leav\\w*|entr\\w*|modif\\w*|touch\\w*)[^.\\n]{0,80}\\.git\\b",
+            "worktree[^.\\n]{0,100}(writ\\w*|leav\\w*|entr\\w*)"
+          ]
+        }
+      ],
+      "files": [
+        "crates/bifrost-core/src/scratch.rs"
+      ],
+      "note": "scratch.rs: a clone of one commit (`git clone --no-checkout --depth 1 --no-local --template=` through a file:// URL), HEAD checked out with `git read-tree -u --reset`, then the uncommitted files copied as bytes from `git status`. `git worktree add` writes into the user's .git, and a killed run leaves its entry there.",
+      "selfcheck": {
+        "right": "The scratch copy (scratch.rs) is a shallow clone of one commit, git clone --depth 1 --no-local through a file:// URL, and then the uncommitted files are copied over as exact bytes. A git worktree is not used because git worktree add writes into the user's own .git, and a killed run would leave its entry there.",
+        "right_looked_at": [
+          "crates/bifrost-core/src/scratch.rs"
+        ],
+        "wrong": "The folder is copied with robocopy into %TEMP%, node_modules included; the real folder itself is used for the checks.",
+        "wrong_looked_at": [
+          "apps/hugin/src/print.rs"
+        ]
+      }
+    },
+    {
+      "id": "07-unattended-policy",
+      "question": "In hugin -p, which tool calls are allowed to run without asking anyone and which are refused, and where is that decided?",
+      "required": [
+        {
+          "name": "decided in unattended.rs",
+          "any": [
+            "unattended"
+          ]
+        },
+        {
+          "name": "edit, create, delete and move are allowed",
+          "any": [
+            "edit_file|create_file|delete_file|move_file",
+            "\\bedits?\\b[^.\\n]{0,80}(allow\\w*|permit\\w*|approv\\w*)",
+            "(allow\\w*|permit\\w*|approv\\w*)[^.\\n]{0,80}\\bedit"
+          ]
+        },
+        {
+          "name": "the check is allowed unless a build file was changed",
+          "any": [
+            "build\\.rs",
+            "cargo\\.toml",
+            "package\\.json",
+            "build\\s+files?",
+            "runs_code",
+            "conftest",
+            "makefile"
+          ]
+        },
+        {
+          "name": "shell commands are refused",
+          "any": [
+            "(run_command|shell|command)s?[^.\\n]{0,80}(den\\w+|refus\\w+|not\\s+(offered|allowed|permitted)|never|disallow\\w*|forbid\\w*)",
+            "(den\\w+|refus\\w+|not\\s+allowed|disallow\\w*)[^.\\n]{0,80}(run_command|shell|command)"
+          ]
+        }
+      ],
+      "files": [
+        "crates/bifrost-core/src/agent/unattended.rs"
+      ],
+      "note": "unattended::decide in crates/bifrost-core/src/agent/unattended.rs: edit_file, create_file, delete_file and move_file are allowed (they land in the scratch copy); run_check is allowed unless the card lists changed build files or the turn edited a file that makes a check run code (runs_code: build.rs, Cargo.toml, package.json, conftest.py, Makefile…); everything else is denied, run_command included (hugin -p offers no shell).",
+      "selfcheck": {
+        "right": "The rule is unattended::decide in agent/unattended.rs. Edits, creates, deletes and moves (edit_file, create_file, delete_file, move_file) are allowed because they land in the scratch copy. run_check is allowed unless the turn changed a build file such as build.rs, Cargo.toml or package.json, which runs_code treats as running code. Everything else is denied, a shell command (run_command) included.",
+        "right_looked_at": [
+          "crates/bifrost-core/src/agent/unattended.rs"
+        ],
+        "wrong": "Hugin -p asks the person at the terminal to approve each call with y or n, and has no policy of its own.",
+        "wrong_looked_at": [
+          "apps/hugin/src/input.rs"
+        ]
+      }
+    },
+    {
+      "id": "08-memory-limits",
+      "question": "What memory limits does a check or command run have, how big are they, and where are they set?",
+      "required": [
+        {
+          "name": "8 GiB for any one process",
+          "any": [
+            "(per[- ]process|each\\s+process|any\\s+(one\\s+)?process|one\\s+process|single\\s+process|PROCESS_MEMORY_LIMIT)[^.\\n\\d]{0,60}(?:\\b8\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|8,?589,?934,?592)",
+            "(?:\\b8\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|8,?589,?934,?592)\\s*[(,]?\\s*(?:(?:for|per|by|in|to|of|on|each|a)\\s+)?(?:(?:a|any|each|every|one|single)\\s+)*(?:process|PROCESS_MEMORY_LIMIT)"
+          ]
+        },
+        {
+          "name": "24 GiB for the whole run",
+          "any": [
+            "(whole\\s+run|entire\\s+run|all\\s+(the\\s+)?processes|RUN_MEMORY_LIMIT|per[- ]run|the\\s+run|job)[^.\\n\\d]{0,60}(?:\\b24\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|25,?769,?803,?776)",
+            "(?:\\b24\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|25,?769,?803,?776)\\s*[(,]?\\s*(?:(?:for|across|over|in|of|by)\\s+)?(?:(?:the|a|all|of|every|each|whole|entire)\\s+)*(?:run|processes|total|together|combined|RUN_MEMORY_LIMIT)"
+          ]
+        },
+        {
+          "name": "set in check.rs on a Windows job object",
+          "any": [
+            "job[- ]?object",
+            "JobObject",
+            "check\\.rs"
+          ]
+        }
+      ],
+      "files": [
+        "crates/bifrost-core/src/check.rs"
+      ],
+      "note": "check.rs: PROCESS_MEMORY_LIMIT = 8 GiB for any one process and RUN_MEMORY_LIMIT = 24 GiB for every process of a run together, set on the Windows job object the run's process tree is put in (JOB_OBJECT_LIMIT_PROCESS_MEMORY / JOB_OBJECT_LIMIT_JOB_MEMORY).",
+      "selfcheck": {
+        "right": "In check.rs a run's process tree is put in a Windows job object with two limits: PROCESS_MEMORY_LIMIT, 8 GiB for any one process, and RUN_MEMORY_LIMIT, 24 GiB for all of the run's processes together.",
+        "right_looked_at": [
+          "crates/bifrost-core/src/check.rs"
+        ],
+        "wrong": "In check.rs each process may commit 24 GiB, and the whole run 8 GiB together, enforced by a watchdog thread that polls task manager.",
+        "wrong_looked_at": [
+          "apps/hugin/src/print.rs"
+        ]
+      }
+    },
+    {
+      "id": "09-think-setting",
+      "question": "How does a model's `think` setting in the config reach the request that is sent to Ollama?",
+      "required": [
+        {
+          "name": "read from the config's model_settings",
+          "any": [
+            "model_settings",
+            "settings_for",
+            "ModelSettings"
+          ]
+        },
+        {
+          "name": "think_for in round.rs decides it",
+          "any": [
+            "think_for"
+          ]
+        },
+        {
+          "name": "only sent to a model that reports the thinking capability",
+          "any": [
+            "thinking\\s+capabilit",
+            "capabilit\\w+[^.\\n]{0,80}thinking",
+            "thinking[^.\\n]{0,80}capabilit",
+            "/api/show",
+            "reports?\\s+(the\\s+)?thinking"
+          ]
+        },
+        {
+          "name": "request_body in chat.rs writes it (false for off, else the level)",
+          "any": [
+            "request_body",
+            "think\\W{1,6}false",
+            "false[^.\\n]{0,80}\\boff\\b",
+            "\\boff\\b[^.\\n]{0,80}false"
+          ]
+        }
+      ],
+      "files": [
+        "crates/bifrost-core/src/config.rs",
+        "crates/bifrost-core/src/agent/round.rs",
+        "crates/bifrost-core/src/chat.rs"
+      ],
+      "note": "config.rs: `model_settings` holds a ModelSettings per model tag (`think`), read by Config::settings_for; round.rs `think_for` takes the caller's own think (a probe's --think) or else that, and keeps it only for a model whose /api/show capabilities include `thinking` (otherwise it is left out with a note); chat.rs `request_body` writes `think` as false for Off and as the level's word (low, medium, high) otherwise, and omits it when unset.",
+      "selfcheck": {
+        "right": "The config's model_settings maps a model tag to its think setting, read with settings_for. In round.rs think_for chooses it (a caller's own wins over the config), and only keeps it if the model reports the thinking capability in /api/show; otherwise it is left out with a note. chat.rs request_body then puts it in the request body: think false for off, otherwise the level's word.",
+        "right_looked_at": [
+          "crates/bifrost-core/src/config.rs",
+          "crates/bifrost-core/src/agent/round.rs",
+          "crates/bifrost-core/src/chat.rs"
+        ],
+        "wrong": "Vidar passes a --think flag straight to ollama.exe on its command line when it starts the model, so the config is not involved.",
+        "wrong_looked_at": [
+          "apps/vidar/src-tauri/src/lib.rs"
+        ]
+      }
+    },
+    {
+      "id": "10-compaction",
+      "question": "When a tool turn's conversation outgrows the model's context, how does compaction decide what to set aside?",
+      "required": [
+        {
+          "name": "oldest first",
+          "any": [
+            "oldest[- ]first",
+            "\\boldest\\b",
+            "starting\\s+(with|from)\\s+the\\s+oldest"
+          ]
+        },
+        {
+          "name": "old tool results and long arguments become a one-line stub",
+          "any": [
+            "\\bstubs?\\b",
+            "one[- ]line",
+            "placeholder",
+            "short\\s+(note|marker)"
+          ]
+        },
+        {
+          "name": "up to 75% of num_ctx",
+          "any": [
+            "0?\\.75",
+            "75\\s*%",
+            "three[- ]quarters",
+            "\\bBUDGET\\b"
+          ]
+        },
+        {
+          "name": "system prompt, user messages and the last message are never touched",
+          "any": [
+            "(system|user)\\s+(prompt|message)s?[^.\\n]{0,100}(never|not|untouched|kept|protected|skipped|left|spared)",
+            "(never|not|untouched|kept|protected|skipped|left|spared)[^.\\n]{0,100}(system|user)\\s+(prompt|message)"
+          ]
+        }
+      ],
+      "files": [
+        "crates/bifrost-core/src/compact.rs"
+      ],
+      "note": "compact.rs: oldest-first, old tool results (over 600 chars) and long arguments (over 2000) are replaced by a one-line `[Set aside to fit …]` stub until the estimate (characters / calibrated chars-per-token) fits BUDGET = 0.75 of num_ctx; never touched: the system prompt, user messages, the last message, the newest tool result and anything already set aside; thinking is dropped first, and the newest read of each file goes last.",
+      "selfcheck": {
+        "right": "compact.rs works oldest-first. Old tool results and long arguments are replaced by a one-line stub until the estimated prompt fits within 75% of num_ctx (BUDGET). The system prompt, the user messages and the last message are never touched, and the newest read of each file is set aside last.",
+        "right_looked_at": [
+          "crates/bifrost-core/src/compact.rs"
+        ],
+        "wrong": "When the context is full the whole conversation is summarised by a second model call, and the summary replaces everything but the last user message.",
+        "wrong_looked_at": [
+          "crates/bifrost-core/src/chat.rs"
+        ]
+      }
+    },
+    {
+      "id": "11-coding-model-offer",
+      "question": "How does Mimir decide whether to offer switching to the coding model (or back) when a project folder is chosen or cleared?",
+      "required": [
+        {
+          "name": "the decision is offer_for",
+          "any": [
+            "offer_for"
+          ]
+        },
+        {
+          "name": "a coding offer needs a project folder and a coding model",
+          "any": [
+            "(workspace|folder|project)[^.\\n]{0,120}(coding[_ ]model|coder)",
+            "(coding[_ ]model|coder)[^.\\n]{0,120}(workspace|folder|project)"
+          ]
+        },
+        {
+          "name": "the model must be installed",
+          "any": [
+            "install\\w*",
+            "\\bhas\\(",
+            "Ollama[^.\\n]{0,80}(has|lists?|pulled)"
+          ]
+        },
+        {
+          "name": "a switch back to the model used before, when the folder is cleared",
+          "any": [
+            "model_before_coding",
+            "switch\\w*\\s+back",
+            "(previous|prior|earlier|original|before)[^.\\n]{0,80}model",
+            "\\\"back\\\""
+          ]
+        }
+      ],
+      "files": [
+        "apps/mimir/src-tauri/src/lib.rs"
+      ],
+      "note": "offer_for in apps/mimir/src-tauri/src/lib.rs (a pure function of the config and the installed tags): kind `coding` when a workspace is set, coding_model is non-empty, differs from the current model (same_tag ignores :latest) and is installed; kind `back` when no workspace is set, the current model is the coding model, and model_before_coding names a different installed model; otherwise None.",
+      "selfcheck": {
+        "right": "offer_for in Mimir's lib.rs decides, from the config and the installed tags. If a workspace folder is set and a coding model is configured that differs from the current model and is installed, it offers the coding model. If no folder is set and the current model is the coding model, it offers to switch back to model_before_coding, if that one is installed. Otherwise there is no offer.",
+        "right_looked_at": [
+          "apps/mimir/src-tauri/src/lib.rs"
+        ],
+        "wrong": "Mimir always asks the user with a dialog on startup which of the installed models they want, and remembers the answer in localStorage.",
+        "wrong_looked_at": [
+          "apps/mimir/src-tauri/src/main.rs"
+        ]
+      }
+    },
+    {
+      "id": "12-malformed-tool-call",
+      "question": "What happens when a local model writes a tool call that Ollama cannot parse?",
+      "required": [
+        {
+          "name": "the turn is asked again through raw /api/generate",
+          "any": [
+            "/api/generate",
+            "raw\\s+(mode|generate|request)",
+            "\\brecover\\b",
+            "re-?ask\\w*",
+            "retr(y|ied|ies)"
+          ]
+        },
+        {
+          "name": "the call is read by a repair (parse_call / extract_calls)",
+          "any": [
+            "parse_call",
+            "extract_calls",
+            "\\brepair\\w*"
+          ]
+        },
+        {
+          "name": "if it still cannot be read, invalid_tool_call is fed back to the model",
+          "any": [
+            "invalid_tool_call",
+            "fed[_ ]back",
+            "feeds?\\s+(it\\s+|the\\s+\\w+\\s+)?back",
+            "back\\s+to\\s+the\\s+model"
+          ]
+        }
+      ],
+      "files": [
+        "crates/bifrost-core/src/chat.rs",
+        "crates/bifrost-core/src/toolcall.rs"
+      ],
+      "note": "chat.rs chat_tools: Ollama's parse error (invalid character, error parsing tool call…) makes it ask the same turn again through raw /api/generate in the model's layout (recover), where toolcall::parse_call (strict JSON, then a repair anchored on the tool's argument names) or xmlcall::extract_calls reads the call; a call still unreadable comes back as an `invalid_tool_call` stand-in call carrying Ollama's own message (capped at 1500 bytes), marked fed_back, so the model is told and can try again.",
+      "selfcheck": {
+        "right": "chat_tools in chat.rs asks the same turn again through raw /api/generate when Ollama rejects a call it could not parse, and reads the call with toolcall::parse_call, which tries strict JSON and then a repair based on the tool's argument names (xmlcall::extract_calls for Qwen3-Coder). If the call still cannot be read, it comes back as an invalid_tool_call carrying Ollama's message, fed back to the model so that it can try again.",
+        "right_looked_at": [
+          "crates/bifrost-core/src/chat.rs",
+          "crates/bifrost-core/src/toolcall.rs"
+        ],
+        "wrong": "The turn ends with an HTTP 500 error shown to the user, and the model's call is dropped silently.",
+        "wrong_looked_at": [
+          "crates/bifrost-core/src/ollama.rs"
+        ]
+      }
+    }
+  ]
+}

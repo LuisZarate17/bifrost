@@ -9,3 +9,5 @@ bifrost-core = { path = "../bifrost-core" }
 # For the G0 tool probe: tool schemas are JSON Schema, and tool-call arguments
 # come back as a serde_json::Value rather than a string.
 serde_json = "1.0.151"
+# For askprobe: a required fact is a set of regexes, matched against the model's answer.
+regex = "1"
