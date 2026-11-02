@@ -398,7 +398,8 @@
             "capabilit\\w+[^.\\n]{0,80}thinking",
             "thinking[^.\\n]{0,80}capabilit",
             "/api/show",
-            "reports?\\s+(the\\s+)?thinking"
+            "reports?\\s+(the\\s+)?thinking",
+            "has\\(\\s*\"thinking\"\\s*\\)"
           ]
         },
         {

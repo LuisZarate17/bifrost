@@ -370,7 +370,13 @@ fn measure_build(repo: &Path) -> Value {
             ("failed", format!("{:?}: {}", o.ended, tail.trim()))
         }
     };
-    println!("  build: {status} in {seconds:.0}s; free RAM {:?} MiB at the start, lowest {:?} MiB ({} samples)", ram.first_mib, ram.min_mib, ram.samples);
+    let mib = |m: Option<u64>| m.map_or("?".to_string(), |m| m.to_string());
+    println!(
+        "  build: {status} in {seconds:.0}s; free RAM {} MiB at the start, lowest {} MiB ({} samples)",
+        mib(ram.first_mib),
+        mib(ram.min_mib),
+        ram.samples
+    );
     if !note.is_empty() {
         println!("  build note: {note}");
     }
