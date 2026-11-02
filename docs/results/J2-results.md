@@ -57,3 +57,25 @@ Run overnight 2026-11-01→02 on autopilot.
 - **taskprobe:** 10/16 at app settings, the same as B, and 9/16 at t=0. But slow per run: 103 s
   against B's 51, with about 7 rounds per run.
 - **Speed:** it fits on the card, with decode 121–130 tok/s and prefill about 6,200 tok/s.
+
+
+  reports tools.
+- **realprobe 5/10, 1 false done (05):** PASS on 02, 03, 04, 06 and 09. FAIL on 01, 07 and 10 (it
+  doesn't compile) and on 08.
+- **askprobe:** 5 right, 5 partly, 2 wrong. **taskprobe:** 9/16 at app settings, 8/16 at t=0.
+- **Speed:** the same as B, decode 73 tok/s.
+  run, which is within the noise. Removing refusals didn't hurt its coding.
+
+## Gate J2, by the rule fixed at the lock
+
+The rule: a finalist has more realprobe PASSes than B (4), or the same number with fewer false
+dones. At most two, ranked by PASS count, then fewer false dones, then the faster time.
+
+| Model | PASS | Beats B? | Rank |
+|---|---|---|---|
+| qwen3.6:35b-a3b | 7 | yes | **finalist 1** |
+| ornith-1.5:9b | 6 | yes | **finalist 2** |
+| gpt-oss:20b | — | no (out at the screen gate) | |
+
+**J3 runs B, qwen3.6:35b-a3b and ornith-1.5:9b:** realprobe ×3, taskprobe propose ×3 and askprobe
+×2 each, with the digests checked against these.
