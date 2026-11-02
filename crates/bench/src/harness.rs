@@ -102,6 +102,8 @@ impl Sandbox {
         Ok(Self {
             local: local.clone(),
             env: vec![
+                // Hugin's own check builds the model's patch; it must not fetch a new dependency.
+                ("CARGO_NET_OFFLINE".to_string(), "true".to_string()),
                 ("APPDATA".to_string(), show(&appdata)),
                 ("LOCALAPPDATA".to_string(), show(&local)),
                 ("TEMP".to_string(), show(&temp)),

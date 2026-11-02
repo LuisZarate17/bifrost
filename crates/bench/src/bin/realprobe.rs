@@ -456,6 +456,9 @@ impl Scorer {
         vec![
             ("CARGO_TARGET_DIR".to_string(), show(&self.target)),
             ("CARGO_TERM_COLOR".to_string(), "never".to_string()),
+            // A patch that adds a dependency must not make cargo download it and run its build
+            // script: model-written code is scored, never code from the network.
+            ("CARGO_NET_OFFLINE".to_string(), "true".to_string()),
             ("APPDATA".to_string(), show(&appdata)),
             ("LOCALAPPDATA".to_string(), show(&local)),
             ("TEMP".to_string(), show(&temp)),
@@ -1409,7 +1412,17 @@ mod tests {
         }
         assert_eq!(get("TEMP"), get("TMP"));
         assert_ne!(get("APPDATA"), get("LOCALAPPDATA"));
+        assert!(env.iter().any(|(k, v)| k == "CARGO_NET_OFFLINE" && v == "true"), "scoring must be offline");
         let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// Hugin's own check, in the model's sandbox, is offline too.
+    #[test]
+    fn the_models_sandbox_is_offline() {
+        let root = std::env::temp_dir().join(format!("realprobe-offline-test-{}", std::process::id()));
+        let sandbox = harness::Sandbox::make(&root, "m:1", None).unwrap();
+        assert!(sandbox.env.iter().any(|(k, v)| k == "CARGO_NET_OFFLINE" && v == "true"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

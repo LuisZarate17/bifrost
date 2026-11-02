@@ -111,8 +111,20 @@ If two models qualify, take the higher realprobe score; if they're within 2 of 3
 A separate fast `ask_model` only if it beats the coding model by ≥ 3/12 on askprobe and swapping
 takes ≤ 15 s.
 
-**J2's screen gate**, from STAGE-J: realprobe ×1 runs only if toolprobe ≥ 9/10 and taskprobe is no
-more than 3/16 below B. At most two finalists go to J3, each above B on the screen.
+**J2's screen gate**, from STAGE-J: realprobe ×1 runs only if toolprobe ≥ 9/10 and taskprobe (at
+the app's settings) is no more than 3/16 below B's on the same screen.
+
+**Gate J2, the finalist rule, fixed now:** a finalist has more realprobe PASSes than B on the screen,
+or the same number with fewer false dones. At most two go to J3, ranked by PASS count, then fewer
+false dones, then the faster median Hugin time. If none qualifies, J3 is not run and the result is
+"keep qwen3-coder".
+
+**Screen order:** B = qwen3-coder:30b first, then gpt-oss:20b (think high), qwen3.6 35B-A3B (its own
+rules. flint:40b is left out until an Ollama fix.
+
+**Offline:** every cargo run the probes start, Hugin's own check included, has
+`CARGO_NET_OFFLINE=true`. A patch that adds a dependency fails to build; nothing is downloaded or
+run from the network.
 
 ## The lock
 
