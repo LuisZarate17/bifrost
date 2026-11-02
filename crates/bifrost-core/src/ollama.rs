@@ -43,6 +43,11 @@ pub struct LoadedModel {
     pub name: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    /// Bytes the loaded model takes in all, on the card and off it.
+    #[serde(default)]
+    pub size: Option<u64>,
+    #[serde(default)]
+    pub digest: Option<String>,
     #[serde(default)]
     pub size_vram: Option<u64>,
     #[serde(default)]
@@ -52,6 +57,12 @@ pub struct LoadedModel {
 impl LoadedModel {
     pub fn is(&self, tag: &str) -> bool {
         self.name.as_deref() == Some(tag) || self.model.as_deref() == Some(tag)
+    }
+
+    /// The share of the model that sits off the card, in `0.0..=1.0`: `(size - size_vram) / size`.
+    /// `None` when either number is missing or `size` is 0.
+    pub fn cpu_share(&self) -> Option<f64> {
+        cpu_share(self.size?, self.size_vram?)
     }
 
     pub fn size_vram_mib(&self) -> Option<u64> {
@@ -73,6 +84,14 @@ impl LoadedModel {
             .and_then(|year| year.parse::<u32>().ok())
             .is_some_and(|year| year >= 2200)
     }
+}
+
+/// `(size - size_vram) / size`, clamped to `0.0..=1.0`; `None` for a `size` of 0.
+pub fn cpu_share(size: u64, size_vram: u64) -> Option<f64> {
+    if size == 0 {
+        return None;
+    }
+    Some((size.saturating_sub(size_vram) as f64 / size as f64).clamp(0.0, 1.0))
 }
 
 #[derive(Deserialize)]
@@ -317,6 +336,64 @@ pub fn generate_measured(
     m.ttft = ttft.unwrap_or_default();
     m.total = started.elapsed();
     Ok(m)
+}
+
+/// What Ollama itself timed for one generate: its own durations, in nanoseconds, so prefill and
+/// decode speed can be told apart without a stream. See [`generate_timed`].
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct Timed {
+    #[serde(default)]
+    pub prompt_eval_count: u32,
+    #[serde(default)]
+    pub prompt_eval_duration: u64,
+    #[serde(default)]
+    pub eval_count: u32,
+    #[serde(default)]
+    pub eval_duration: u64,
+    #[serde(default)]
+    pub load_duration: u64,
+    #[serde(default)]
+    pub total_duration: u64,
+}
+
+impl Timed {
+    /// Prompt tokens read per second, from Ollama's own prompt-eval clock.
+    pub fn prefill_tps(&self) -> f64 {
+        per_second(self.prompt_eval_count, self.prompt_eval_duration)
+    }
+
+    /// Tokens written per second, from Ollama's own eval clock.
+    pub fn decode_tps(&self) -> f64 {
+        per_second(self.eval_count, self.eval_duration)
+    }
+}
+
+fn per_second(count: u32, nanos: u64) -> f64 {
+    if nanos == 0 { 0.0 } else { count as f64 / (nanos as f64 / 1e9) }
+}
+
+/// One non-streaming generate, at temperature 0 and `num_predict` tokens at most, answered with
+/// Ollama's own durations. For a speed measurement: the time to first token is not needed, and
+/// the prefill and decode clocks the final object carries are the ones to trust.
+pub fn generate_timed(tag: &str, prompt: &str, num_ctx: u32, num_predict: u32, timeout: Duration) -> Result<Timed, String> {
+    let body = serde_json::json!({
+        "model": tag,
+        "prompt": prompt,
+        "stream": false,
+        "options": { "num_ctx": num_ctx, "num_predict": num_predict, "temperature": 0 },
+    });
+
+    let response = client(timeout)?
+        .post(url("/api/generate"))
+        .json(&body)
+        .send()
+        .map_err(unreachable)?;
+
+    if !response.status().is_success() {
+        return Err(format!("Ollama returned HTTP {}", response.status()));
+    }
+
+    response.json::<Timed>().map_err(|e| format!("could not parse the generate reply: {e}"))
 }
 
 // The prompt the app ships with moved to `config::DEFAULT_PROMPT` at Before-G0
@@ -654,9 +731,61 @@ mod tests {
         LoadedModel {
             name: Some("qwen3-vl:8b-instruct-q4_K_M".into()),
             model: None,
+            size: None,
+            digest: None,
             size_vram: None,
             expires_at: expires_at.map(String::from),
         }
+    }
+
+    /// The shape `/api/ps` has in current Ollama releases.
+    const PS_BODY: &str = r#"{"models":[{"name":"qwen3-coder:30b","model":"qwen3-coder:30b",
+        "size":21474836480,"digest":"06c1097efce0431c2045fe7b2e5108366e43bee1b4603a7aded8f21689e90bca",
+        "details":{"parent_model":"","format":"gguf","family":"qwen3moe","families":["qwen3moe"],
+        "parameter_size":"30.5B","quantization_level":"Q4_K_M"},
+        "expires_at":"2318-01-06T22:13:05.123-08:00","size_vram":17179869184,"context_length":32768}]}"#;
+
+    #[test]
+    fn ps_reports_size_and_digest() {
+        let ps: PsResponse = serde_json::from_str(PS_BODY).unwrap();
+        let m = &ps.models[0];
+        assert!(m.is("qwen3-coder:30b"));
+        assert_eq!(m.size, Some(21_474_836_480));
+        assert_eq!(m.digest.as_deref(), Some("06c1097efce0431c2045fe7b2e5108366e43bee1b4603a7aded8f21689e90bca"));
+        assert_eq!(m.size_vram, Some(17_179_869_184));
+        assert!(m.pinned());
+        assert_eq!(m.cpu_share(), Some(0.2));
+    }
+
+    #[test]
+    fn ps_without_size_or_digest_still_parses() {
+        let ps: PsResponse = serde_json::from_str(r#"{"models":[{"name":"a:b","size_vram":5,"expires_at":"2026-01-01T00:00:00Z"}]}"#).unwrap();
+        let m = &ps.models[0];
+        assert_eq!((m.size, m.digest.as_deref(), m.size_vram), (None, None, Some(5)));
+        assert_eq!(m.cpu_share(), None);
+        assert!(serde_json::from_str::<PsResponse>("{}").unwrap().models.is_empty());
+    }
+
+    #[test]
+    fn timed_speeds_come_from_ollamas_own_clocks() {
+        let t: Timed = serde_json::from_str(
+            r#"{"response":"x","done":true,"prompt_eval_count":2000,"prompt_eval_duration":500000000,"eval_count":128,"eval_duration":2000000000}"#,
+        )
+        .unwrap();
+        assert_eq!(t.prefill_tps(), 4000.0);
+        assert_eq!(t.decode_tps(), 64.0);
+        // No clock, no speed (rather than infinity).
+        assert_eq!(Timed::default().decode_tps(), 0.0);
+    }
+
+    #[test]
+    fn the_cpu_share_is_what_sits_off_the_card() {
+        assert_eq!(cpu_share(100, 100), Some(0.0));
+        assert_eq!(cpu_share(100, 75), Some(0.25));
+        assert_eq!(cpu_share(100, 0), Some(1.0));
+        // A card figure above the total (rounding in Ollama's own report) is not a negative share.
+        assert_eq!(cpu_share(100, 120), Some(0.0));
+        assert_eq!(cpu_share(0, 0), None);
     }
 
     #[test]

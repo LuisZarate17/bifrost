@@ -377,6 +377,7 @@ dependencies = [
  "bifrost-core",
  "regex",
  "serde_json",
+ "windows 0.61.3",
 ]
 
 [[package]]
