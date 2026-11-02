@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, Eye, Refresh, Wrench, X } from "./Icons";
+import { Bulb, Check, Eye, Refresh, Wrench, X } from "./Icons";
 
 export type ModelInfo = {
   name: string;
@@ -11,6 +11,10 @@ export type ModelInfo = {
   isResident: boolean;
   residentMib: number;
   capabilities: string[];
+  /** What the family is known for, from the tag alone. Empty when unrecognised. */
+  bestAt: string[];
+  /** Which apps follow this tag: "Vidar" (the shared model), "Hugin" (the coding model). */
+  roles: string[];
   maxContext: number | null;
   error: string | null;
 };
@@ -39,14 +43,43 @@ export function splitName(name: string): { family: string; size: string; tag: st
 /**
  * Which capabilities are worth a badge.
  *
- * `completion` is on everything, so showing it would be noise — the two that
- * change what a model is *for* are whether it can see an image and whether it
- * can call a tool.
+ * `completion` is on everything, so showing it would be noise — the three that
+ * change what a model is *for* are whether it can see an image, whether it can
+ * call a tool and whether it can think before it answers.
  */
 const BADGES = [
   { key: "vision", label: "Vision", Icon: Eye, title: "Can be sent images. Vidar needs this for screenshots." },
   { key: "tools", label: "Tools", Icon: Wrench, title: "Can emit structured tool calls (see docs/G0-results.md)." },
+  { key: "thinking", label: "Thinking", Icon: Bulb, title: "Can reason before it answers. Slower, often better on hard problems." },
 ] as const;
+
+/** What each app's pick means, for the tooltip on its chip. */
+const ROLE_TITLES: Record<string, string> = {
+  Vidar: "Vidar answers screenshots with this. Changing the model here changes it for Vidar too.",
+  Hugin: "Hugin, and Mimir in a code folder, code with this.",
+};
+
+/** How much of the card a model needs beyond its weights: the context cache and
+ *  the runner's own overhead. A rough allowance, not a measurement. */
+const HEADROOM_MIB = 1536;
+
+/**
+ * Will the model run entirely on the GPU?
+ *
+ * Resident: it does when Ollama put at least 95% of the model in VRAM — what is
+ * left over is on the CPU. Not resident: it would when the weights plus 1.5 GiB
+ * of headroom fit in the card. `null` without a card reading, since there is
+ * nothing to compare against. `spillMib` is how much would not fit.
+ */
+export function gpuFit(m: ModelInfo, card: CardState | null): { fits: boolean; spillMib: number } | null {
+  if (!card) return null;
+  const sizeMib = m.size / 1_048_576;
+  if (m.isResident) {
+    return { fits: m.residentMib >= sizeMib * 0.95, spillMib: Math.max(0, sizeMib - m.residentMib) };
+  }
+  const need = sizeMib + HEADROOM_MIB;
+  return { fits: need <= card.totalMib, spillMib: Math.max(0, need - card.totalMib) };
+}
 
 /** A thin bar for "how full is the card". Shared by the dialog and the sidebar. */
 export function GpuMeter({ card, compact }: { card: CardState | null; compact?: boolean }) {
@@ -178,6 +211,7 @@ export function Switchboard({
         <ul className="models" role="radiogroup" aria-label="Installed models">
           {models.map((m) => {
             const picked = m.name === current;
+            const fit = gpuFit(m, card);
             return (
               <li key={m.name} className={"model" + (picked ? " picked" : "")}>
                 <button
@@ -193,22 +227,43 @@ export function Switchboard({
                     <span className="model-meta">
                       {m.parameterSize} · {m.quantization} · {(m.size / 1e9).toFixed(1)} GB
                     </span>
+                    <span className="caps">
+                      {m.bestAt.map((b) => (
+                        <span key={b} className="cap best" title={`Best at: ${b.toLowerCase()}, going by the model's name.`}>
+                          {b}
+                        </span>
+                      ))}
+                      {m.roles.map((r) => (
+                        <span key={r} className="cap" title={ROLE_TITLES[r]}>
+                          {r}&rsquo;s model
+                        </span>
+                      ))}
+                      {BADGES.filter((b) => m.capabilities.includes(b.key)).map(({ key, label, Icon, title }) => (
+                        <span key={key} className="cap" title={title}>
+                          <Icon width={12} height={12} />
+                          {label}
+                        </span>
+                      ))}
+                      {fit && (
+                        <span
+                          className={"cap" + (fit.fits ? "" : " warn")}
+                          title={
+                            fit.fits
+                              ? "Fits in the card's memory, so it runs at full speed."
+                              : `About ${(fit.spillMib / 1024).toFixed(1)} GB will not fit in the card's memory and runs on the CPU instead. Slower.`
+                          }
+                        >
+                          {fit.fits ? "Fits on GPU" : "Partly on CPU"}
+                        </span>
+                      )}
+                      {m.error && (
+                        <span className="cap warn" title={m.error}>
+                          unknown
+                        </span>
+                      )}
+                    </span>
                   </span>
                 </button>
-
-                <span className="caps">
-                  {BADGES.filter((b) => m.capabilities.includes(b.key)).map(({ key, label, Icon, title }) => (
-                    <span key={key} className="cap" title={title}>
-                      <Icon width={12} height={12} />
-                      {label}
-                    </span>
-                  ))}
-                  {m.error && (
-                    <span className="cap warn" title={m.error}>
-                      unknown
-                    </span>
-                  )}
-                </span>
 
                 <span className="residency">
                   {m.isResident ? (

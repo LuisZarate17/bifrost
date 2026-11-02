@@ -395,6 +395,35 @@ impl ModelDetail {
     }
 }
 
+/// What a model is best at, read off its tag alone.
+///
+/// **Only what the name makes plain.** A family this does not recognise gets an
+/// empty list, never a guess: a wrong "best at" is worse than none. Matching is
+/// by substring, case-insensitive, so `qwen3-vl:8b-instruct-q8_0` and
+/// `Qwen3-VL:8B` read the same. "General chat" is the fallback for the plain
+/// chat families and is claimed only when nothing more specific matched.
+pub fn best_at(tag: &str) -> Vec<&'static str> {
+    let t = tag.to_lowercase();
+    let any = |needles: &[&str]| needles.iter().any(|n| t.contains(n));
+
+    let mut out = Vec::new();
+    if any(&["coder", "coding", "devstral", "codestral", "codellama", "starcoder"]) {
+        out.push("Coding");
+    }
+    if any(&["-vl", "llava", "vision", "minicpm-v", "moondream"]) {
+        out.push("Screenshots");
+    }
+    if any(&["gpt-oss", "deepseek-r1", "qwq", "magistral"]) {
+        out.push("Reasoning");
+    }
+    // By how the family starts, so `dolphin3` is not taken for `phi`.
+    let family = t.split(':').next().unwrap_or("");
+    if out.is_empty() && ["llama", "mistral", "gemma", "phi", "qwen3", "qwen2.5"].iter().any(|f| family.starts_with(f)) {
+        out.push("General chat");
+    }
+    out
+}
+
 /// The word after the first `PARSER ` line in a modelfile, or `None` if there
 /// is no such line. Pulled into its own function so it is testable without a
 /// running Ollama.
@@ -641,6 +670,24 @@ mod tests {
     fn no_expiry_is_not_a_pin() {
         assert!(!loaded(None).pinned());
         assert!(!loaded(Some("")).pinned());
+    }
+
+    #[test]
+    fn best_at_reads_the_family_off_the_tag() {
+        assert_eq!(best_at("gpt-oss:20b"), ["Reasoning"]);
+        assert_eq!(best_at("qwen3-coder:30b"), ["Coding"]);
+        assert_eq!(best_at("qwen3-vl:8b-instruct-q8_0"), ["Screenshots"]);
+        assert_eq!(best_at("Qwen3-VL:8B"), ["Screenshots"]);
+        assert_eq!(best_at("llama3.1:8b"), ["General chat"]);
+        assert_eq!(best_at("qwen3:8b"), ["General chat"]);
+    }
+
+    #[test]
+    fn best_at_never_guesses() {
+        assert!(best_at("ornith-1.5:9b").is_empty());
+        assert!(best_at("").is_empty());
+        // A name that only contains a family's letters is not that family.
+        assert!(best_at("dolphin3:8b").is_empty());
     }
 
     #[test]

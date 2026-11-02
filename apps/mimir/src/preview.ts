@@ -30,6 +30,9 @@ import type { Summary } from "./Conversations";
 import type { CardState, ModelInfo } from "./Switchboard";
 
 const MODELS: ModelInfo[] = [
+  // The fixtures cover the picker's tags: a role on each of two apps, a model that
+  // fits and one that spills to the CPU, one that thinks, and one that is neither
+  // recognised nor labelled. The first is the one the rest of the preview calls current.
   {
     name: "qwen3-vl:8b-instruct-q4_K_M",
     size: 6_136_000_000,
@@ -39,7 +42,37 @@ const MODELS: ModelInfo[] = [
     isResident: true,
     residentMib: 8_120,
     capabilities: ["completion", "vision", "tools"],
+    bestAt: ["Screenshots"],
+    roles: ["Vidar"],
     maxContext: 262_144,
+    error: null,
+  },
+  {
+    name: "qwen3-coder:30b",
+    size: 18_600_000_000,
+    parameterSize: "30.5B",
+    quantization: "Q4_K_M",
+    isCurrent: false,
+    isResident: true,
+    residentMib: 12_500,
+    capabilities: ["completion", "tools"],
+    bestAt: ["Coding"],
+    roles: ["Hugin"],
+    maxContext: 262_144,
+    error: null,
+  },
+  {
+    name: "gpt-oss:20b",
+    size: 13_800_000_000,
+    parameterSize: "20.9B",
+    quantization: "MXFP4",
+    isCurrent: false,
+    isResident: false,
+    residentMib: 0,
+    capabilities: ["completion", "tools", "thinking"],
+    bestAt: ["Reasoning"],
+    roles: [],
+    maxContext: 131_072,
     error: null,
   },
   {
@@ -51,7 +84,23 @@ const MODELS: ModelInfo[] = [
     isResident: false,
     residentMib: 0,
     capabilities: ["completion", "vision", "tools"],
+    bestAt: ["Screenshots"],
+    roles: [],
     maxContext: 262_144,
+    error: null,
+  },
+  {
+    name: "llama3.1:8b",
+    size: 4_920_000_000,
+    parameterSize: "8.0B",
+    quantization: "Q4_K_M",
+    isCurrent: false,
+    isResident: false,
+    residentMib: 0,
+    capabilities: ["completion", "tools"],
+    bestAt: ["General chat"],
+    roles: [],
+    maxContext: 131_072,
     error: null,
   },
   {
@@ -63,6 +112,8 @@ const MODELS: ModelInfo[] = [
     isResident: false,
     residentMib: 0,
     capabilities: ["completion", "tools"],
+    bestAt: ["General chat"],
+    roles: [],
     maxContext: 131_072,
     error: null,
   },

@@ -242,6 +242,12 @@ struct ModelInfo {
     resident_mib: u64,
     /// Declared by `/api/show`: some of `completion`, `vision`, `tools`.
     capabilities: Vec<String>,
+    /// What the family is known for, from the tag alone — see [`ollama::best_at`].
+    /// Empty for a family it does not recognise.
+    best_at: Vec<String>,
+    /// Which apps follow this tag: "Vidar" for the shared model, "Hugin" for the
+    /// coding model (which is also Mimir's coding offer). Can be both.
+    roles: Vec<String>,
     /// The most the model itself supports, usually far above what fits.
     max_context: Option<u64>,
     /// Set when `/api/show` could not be reached for this tag. The model is
@@ -273,7 +279,16 @@ async fn models() -> Result<Vec<ModelInfo>, String> {
                     Ok(d) => (Some(d), None),
                     Err(e) => (None, Some(e)),
                 };
+                let mut roles = Vec::new();
+                if same_tag(&m.name, &cfg.model) {
+                    roles.push("Vidar".to_string());
+                }
+                if same_tag(&m.name, &cfg.coding_model) {
+                    roles.push("Hugin".to_string());
+                }
                 ModelInfo {
+                    best_at: ollama::best_at(&m.name).into_iter().map(String::from).collect(),
+                    roles,
                     is_current: m.name == cfg.model,
                     is_resident: resident.is_some(),
                     resident_mib: resident

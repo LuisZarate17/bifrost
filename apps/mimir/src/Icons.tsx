@@ -134,6 +134,14 @@ export const Eye = (p: P) => (
   </svg>
 );
 
+/** A bulb: a model that works something out before it answers. */
+export const Bulb = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M8 1.9a4.15 4.15 0 0 0-2.4 7.55c.5.4.85.95.85 1.55h3.1c0-.6.35-1.15.85-1.55A4.15 4.15 0 0 0 8 1.9Z" />
+    <path d="M6.5 12.6h3M7 14.25h2" />
+  </svg>
+);
+
 export const Alert = (p: P) => (
   <svg {...base(p)}>
     <path d="M8 2.25 1.75 13.25h12.5L8 2.25Z" />
