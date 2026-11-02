@@ -13,14 +13,22 @@
 //! 5. reads Windows' "shared GPU memory" for Ollama's runner: the GPU memory that spilled into
 //!    system RAM. Read through PowerShell, from the `\GPU Process Memory(*)\Shared Usage`
 //!    counter, summed over the instances of the runner's process ids. `N/A` if that cannot be read;
-//! 6. prefill and decode speed at about 2k and 16k prompt tokens: three runs each of a
-//!    deterministic filler of code text, `num_predict` 128, temperature 0, Ollama's own
-//!    prompt-eval and eval clocks; the median of each. The first line of the prompt differs per
-//!    run, so the prompt cache cannot make a prefill look free. The prompt text is the same for
-//!    every model; the number of tokens it comes to is not, and is reported;
+//! 6. prefill and decode speed at about 2k and 16k prompt tokens: a deterministic filler of code
+//!    text that ends by asking for hundreds of lines more (so a reply does not stop short of the
+//!    128 tokens `num_predict` allows, and `eval_count` is reported beside decode tok/s),
+//!    temperature 0, Ollama's own prompt-eval and eval clocks. The first run at each size is a
+//!    calibration: the filler is then scaled by target / actual `prompt_eval_count`, so that the
+//!    size lands near its target for this model's tokenizer, and the calibration run is left out
+//!    of the medians. Then three runs, the median of each. A run whose prompt came to more than
+//!    `num_ctx - num_predict` tokens was cut by Ollama: it is marked truncated and left out. The
+//!    first line of the prompt differs per run, so the prompt cache cannot make a prefill look
+//!    free. The text is the same for every model up to the scale; the number of tokens it comes
+//!    to is not, and is reported;
 //! 7. free RAM under a cold `cargo build -p bifrost-core` (a fresh target folder, deleted
 //!    afterwards) with the model still loaded: the lowest available physical memory seen, sampled
-//!    every 250 ms, and the build's seconds. A build Windows blocks is recorded as blocked;
+//!    every 250 ms, and the build's seconds. **The figure to compare is `free_ram_drop_mib`, how
+//!    far free RAM fell during the build; the free RAM at the start and the lowest depend on what
+//!    else the machine was running.** A build Windows blocks is recorded as blocked;
 //! 8. unloads the model.
 //!
 //! Run it from the repository root. Results go to evals/out/J1-speed-<unix>/results.json.
@@ -115,12 +123,18 @@ fn median(v: &[f64]) -> Option<f64> {
     Some(if v.len() % 2 == 1 { v[mid] } else { (v[mid - 1] + v[mid]) / 2.0 })
 }
 
+/// What the prompt ends with: it asks for far more than `num_predict` tokens, so the reply runs to
+/// the limit and decode speed is measured over about that many tokens.
+const CONTINUE: &str = "\nContinue this code for at least 300 more lines, one `fn step_N` per line in the same style. \
+                        Write only code, with no explanation, and do not stop before you have written them all.\n";
+
 /// A prompt of about `tokens` tokens: a header line that differs with `run` (so no two runs share
-/// a prefix), then lines of code, each one different from the last, until it is long enough.
+/// a prefix), then lines of code, each one different from the last, until it is `scale` times as
+/// long as `tokens` tokens of [`CHARS_PER_TOKEN`] would be, then [`CONTINUE`].
 /// Deterministic: the same arguments give the same text.
-fn filler_prompt(run: usize, tokens: usize) -> String {
-    let want = (tokens as f64 * CHARS_PER_TOKEN) as usize;
-    let mut text = format!("Run {run} of {tokens}. Read the code below, then say in one sentence what it does.\n\n");
+fn filler_prompt(run: usize, tokens: usize, scale: f64) -> String {
+    let want = (tokens as f64 * CHARS_PER_TOKEN * scale) as usize;
+    let mut text = format!("Run {run} of {tokens}. Here is a list of one-line functions.\n\n");
     let mut i = 0usize;
     while text.len() < want {
         text.push_str(&format!(
@@ -130,7 +144,27 @@ fn filler_prompt(run: usize, tokens: usize) -> String {
         ));
         i += 1;
     }
+    text.push_str(CONTINUE);
     text
+}
+
+/// Whether Ollama cut the prompt: a prompt of `prompt_tokens` leaves no room for `NUM_PREDICT`
+/// tokens in `num_ctx`.
+fn truncated(prompt_tokens: u64, num_ctx: u32) -> bool {
+    prompt_tokens > (num_ctx as u64).saturating_sub(NUM_PREDICT as u64)
+}
+
+/// The scale for the next prompt: this one's, times `target` over the `actual` tokens it came to.
+/// A prompt that was cut tells nothing of its true size, so it halves the scale instead. An actual
+/// of 0 (no count) leaves it as it is.
+fn rescale(scale: f64, target: usize, actual: u64, was_truncated: bool) -> f64 {
+    if was_truncated {
+        scale * 0.5
+    } else if actual == 0 {
+        scale
+    } else {
+        scale * target as f64 / actual as f64
+    }
 }
 
 fn mib(bytes: u64) -> u64 {
@@ -289,20 +323,77 @@ fn card_json(c: &Option<vram::VramSample>) -> Value {
     c.map_or(Value::Null, |s| json!({ "used_mib": s.used_mib, "total_mib": s.total_mib }))
 }
 
-/// One prompt size: three runs, and the medians.
+/// What one generate call of [`measure_speed`] came to.
+enum Probe {
+    /// A usable reading: prefill and decode speed, the prompt's and the reply's tokens.
+    Read(ollama::Timed),
+    /// A zero clock is a prompt Ollama served from its cache, or a reply cut to nothing: not a speed.
+    NoClock(String),
+    Failed(String),
+}
+
+fn probe_once(model: &str, tokens: usize, scale: f64, run: usize, num_ctx: u32) -> Probe {
+    let prompt = filler_prompt(run, tokens, scale);
+    match ollama::generate_timed(model, &prompt, num_ctx, NUM_PREDICT, GENERATE_TIMEOUT) {
+        Ok(t) if t.prompt_eval_duration > 0 && t.eval_duration > 0 => Probe::Read(t),
+        Ok(t) => Probe::NoClock(format!("no usable clock (prompt_eval {} ns, eval {} ns)", t.prompt_eval_duration, t.eval_duration)),
+        Err(e) => Probe::Failed(e.to_string()),
+    }
+}
+
+/// One prompt size: a calibration run (up to three, while the prompt is cut), then three runs, and
+/// the medians. A run cut by Ollama ([`truncated`]) is recorded and left out of the medians.
 fn measure_speed(model: &str, tokens: usize, num_ctx: u32) -> Value {
     if tokens as u64 + NUM_PREDICT as u64 + 64 > num_ctx as u64 {
         let why = format!("skipped: num_ctx {num_ctx} is too small for a prompt of about {tokens} tokens");
         println!("  ~{tokens} tokens: {why}");
         return json!({ "target_tokens": tokens, "skipped": why });
     }
-    let (mut prefill, mut decode) = (Vec::new(), Vec::new());
+    let (mut prefill, mut decode, mut replies) = (Vec::new(), Vec::new(), Vec::new());
     let (mut runs, mut errors) = (Vec::new(), Vec::new());
-    let mut prompt_tokens = None;
+    let mut prompt_tokens = Vec::new();
+    let mut scale = 1.0;
+
+    // Calibration: how many tokens this model's tokenizer makes of the filler.
+    for attempt in 1..=3 {
+        match probe_once(model, tokens, scale, 0, num_ctx) {
+            Probe::Read(t) => {
+                let cut = truncated(u64::from(t.prompt_eval_count), num_ctx);
+                let next = rescale(scale, tokens, u64::from(t.prompt_eval_count), cut);
+                println!(
+                    "  ~{tokens} tokens, calibration {attempt}: {} prompt tokens{}, scale {scale:.2} -> {next:.2}",
+                    t.prompt_eval_count,
+                    if cut { " (cut by Ollama)" } else { "" }
+                );
+                runs.push(json!({
+                    "run": 0, "calibration": true, "scale": scale, "truncated": cut,
+                    "prompt_eval_count": t.prompt_eval_count, "eval_count": t.eval_count,
+                }));
+                scale = next;
+                if !cut {
+                    break;
+                }
+            }
+            Probe::NoClock(why) | Probe::Failed(why) => {
+                println!("  ~{tokens} tokens, calibration {attempt}: {why}");
+                errors.push(format!("calibration {attempt}: {why}"));
+                break;
+            }
+        }
+    }
+
     for run in 1..=RUNS {
-        let prompt = filler_prompt(run, tokens);
-        match ollama::generate_timed(model, &prompt, num_ctx, NUM_PREDICT, GENERATE_TIMEOUT) {
-            Ok(t) if t.prompt_eval_duration > 0 && t.eval_duration > 0 => {
+        match probe_once(model, tokens, scale, run, num_ctx) {
+            Probe::Read(t) if truncated(u64::from(t.prompt_eval_count), num_ctx) => {
+                let why = format!(
+                    "run {run}: truncated: the prompt came to {} tokens, over num_ctx {num_ctx} - num_predict {NUM_PREDICT}; left out",
+                    t.prompt_eval_count
+                );
+                println!("  ~{tokens} tokens, {why}");
+                runs.push(json!({ "run": run, "truncated": true, "prompt_eval_count": t.prompt_eval_count }));
+                errors.push(why);
+            }
+            Probe::Read(t) => {
                 println!(
                     "  ~{tokens} tokens, run {run}: {} prompt tokens, prefill {:.0} tok/s, decode {:.1} tok/s ({} tokens)",
                     t.prompt_eval_count,
@@ -312,9 +403,11 @@ fn measure_speed(model: &str, tokens: usize, num_ctx: u32) -> Value {
                 );
                 prefill.push(t.prefill_tps());
                 decode.push(t.decode_tps());
-                prompt_tokens = Some(t.prompt_eval_count);
+                replies.push(t.eval_count as f64);
+                prompt_tokens.push(t.prompt_eval_count as f64);
                 runs.push(json!({
                     "run": run,
+                    "truncated": false,
                     "prompt_eval_count": t.prompt_eval_count,
                     "prompt_eval_ms": t.prompt_eval_duration as f64 / 1e6,
                     "eval_count": t.eval_count,
@@ -324,24 +417,19 @@ fn measure_speed(model: &str, tokens: usize, num_ctx: u32) -> Value {
                     "decode_tps": t.decode_tps(),
                 }));
             }
-            // A zero clock is a prompt Ollama served from its cache, or a reply cut to nothing:
-            // not a speed.
-            Ok(t) => {
-                let why = format!("run {run}: no usable clock (prompt_eval {} ns, eval {} ns)", t.prompt_eval_duration, t.eval_duration);
-                println!("  ~{tokens} tokens, {why}");
-                errors.push(why);
-            }
-            Err(e) => {
-                println!("  ~{tokens} tokens, run {run}: FAILED - {e}");
-                errors.push(format!("run {run}: {e}"));
+            Probe::NoClock(why) | Probe::Failed(why) => {
+                println!("  ~{tokens} tokens, run {run}: {why}");
+                errors.push(format!("run {run}: {why}"));
             }
         }
     }
     json!({
         "target_tokens": tokens,
-        "prompt_eval_count": prompt_tokens,
+        "scale": scale,
+        "prompt_eval_count": median(&prompt_tokens),
         "prefill_tps_median": median(&prefill),
         "decode_tps_median": median(&decode),
+        "decode_eval_count_median": median(&replies),
         "runs": runs,
         "errors": errors,
     })
@@ -371,8 +459,10 @@ fn measure_build(repo: &Path) -> Value {
         }
     };
     let mib = |m: Option<u64>| m.map_or("?".to_string(), |m| m.to_string());
+    let drop = ram.first_mib.zip(ram.min_mib).map(|(a, b)| a.saturating_sub(b));
     println!(
-        "  build: {status} in {seconds:.0}s; free RAM {} MiB at the start, lowest {} MiB ({} samples)",
+        "  build: {status} in {seconds:.0}s; free RAM dropped {} MiB (it was {} MiB at the start and fell to {} MiB; the start and the lowest depend on the machine) ({} samples)",
+        mib(drop),
         mib(ram.first_mib),
         mib(ram.min_mib),
         ram.samples
@@ -390,6 +480,7 @@ fn measure_build(repo: &Path) -> Value {
         "free_ram_start_mib": ram.first_mib,
         "free_ram_min_mib": ram.min_mib,
         "free_ram_drop_mib": ram.first_mib.zip(ram.min_mib).map(|(a, b)| a.saturating_sub(b)),
+        "ram_note": "free_ram_start_mib and free_ram_min_mib depend on what else the machine was running; compare free_ram_drop_mib",
         "samples": ram.samples,
         "target_deleted": removed,
     })
@@ -511,7 +602,7 @@ fn measure_loaded(
         Err(e) => println!("  N/A: {e}"),
     }
 
-    println!("6. prefill and decode speed ({RUNS} runs each, num_predict {NUM_PREDICT})");
+    println!("6. prefill and decode speed (a calibration run, then {RUNS} runs each, num_predict {NUM_PREDICT})");
     let speeds: Vec<Value> = PROMPT_SIZES.iter().map(|&t| measure_speed(model, t, num_ctx)).collect();
     // Context is allocated as it is used on some builds, so the spill is read again, after the work.
     let shared_after = read_shared_gpu();
@@ -534,11 +625,25 @@ fn measure_loaded(
             continue;
         }
         println!(
-            "~{:>5} tokens ({} actual): prefill {} tok/s, decode {} tok/s",
+            "~{:>5} tokens ({} actual): prefill {} tok/s, decode {} tok/s over {} tokens",
             s["target_tokens"],
-            fmt_opt(s["prompt_eval_count"].as_u64(), ""),
+            fmt_opt(s["prompt_eval_count"].as_f64().map(|v| format!("{v:.0}")), ""),
             fmt_opt(s["prefill_tps_median"].as_f64().map(|v| format!("{v:.0}")), ""),
-            fmt_opt(s["decode_tps_median"].as_f64().map(|v| format!("{v:.1}")), "")
+            fmt_opt(s["decode_tps_median"].as_f64().map(|v| format!("{v:.1}")), ""),
+            fmt_opt(s["decode_eval_count_median"].as_f64().map(|v| format!("{v:.0}")), "")
+        );
+        if let Some(n) = s["decode_eval_count_median"].as_f64()
+            && n < NUM_PREDICT as f64 / 2.0
+        {
+            println!("    (decode is over only {n:.0} tokens: the reply stopped short of {NUM_PREDICT}, so that figure is shaky)");
+        }
+    }
+    if build["status"] == "built" {
+        println!(
+            "free RAM dropped {} MiB during the build (start {} MiB, lowest {} MiB: those two depend on the machine, compare the drop)",
+            fmt_opt(build["free_ram_drop_mib"].as_u64(), ""),
+            fmt_opt(build["free_ram_start_mib"].as_u64(), ""),
+            fmt_opt(build["free_ram_min_mib"].as_u64(), "")
         );
     }
 
@@ -555,6 +660,7 @@ fn measure_loaded(
         "shared_gpu_after_load": shared(&shared_load),
         "shared_gpu_after_speed": shared(&shared_after),
         "speed": speeds,
+        "free_ram_drop_mib": build["free_ram_drop_mib"].clone(),
         "build": build,
     }))
 }
@@ -612,20 +718,57 @@ mod tests {
     #[test]
     fn a_filler_is_the_size_asked_for_and_never_the_same_twice() {
         for tokens in PROMPT_SIZES {
-            let p = filler_prompt(1, tokens);
+            let p = filler_prompt(1, tokens, 1.0);
             let want = (tokens as f64 * CHARS_PER_TOKEN) as usize;
-            assert!(p.len() >= want && p.len() < want + 200, "{} chars for {tokens} tokens", p.len());
-            assert_eq!(p, filler_prompt(1, tokens), "deterministic");
+            assert!(p.len() >= want + CONTINUE.len() && p.len() < want + CONTINUE.len() + 200, "{} chars for {tokens} tokens", p.len());
+            assert_eq!(p, filler_prompt(1, tokens, 1.0), "deterministic");
             // The difference is in the first line, so no prefix is shared past it.
-            let other = filler_prompt(2, tokens);
+            let other = filler_prompt(2, tokens, 1.0);
             assert_ne!(p.lines().next(), other.lines().next());
             assert_eq!(p.lines().nth(2), other.lines().nth(2));
         }
-        assert!(filler_prompt(1, 16_000).len() > 7 * filler_prompt(1, 2_000).len());
+        assert!(filler_prompt(1, 16_000, 1.0).len() > 7 * filler_prompt(1, 2_000, 1.0).len());
         // Every code line is different from the last.
-        let p = filler_prompt(1, 2_000);
+        let p = filler_prompt(1, 2_000, 1.0);
         let lines: Vec<&str> = p.lines().skip(2).collect();
         assert!(lines.windows(2).all(|w| w[0] != w[1]));
+    }
+
+    /// **The filler ends by asking for far more than the reply may hold,** so that decode is
+    /// measured over `num_predict` tokens and not over a one-line answer.
+    #[test]
+    fn the_filler_asks_for_more_than_the_reply_can_hold() {
+        let p = filler_prompt(1, 2_000, 1.0);
+        assert!(p.ends_with(CONTINUE) && CONTINUE.contains("at least 300 more lines") && CONTINUE.contains("no explanation"));
+        assert!(!p.contains("one sentence"));
+    }
+
+    #[test]
+    fn a_scale_makes_the_filler_longer_or_shorter() {
+        let (whole, half) = (filler_prompt(1, 16_000, 1.0), filler_prompt(1, 16_000, 0.5));
+        assert!(half.len() < whole.len() * 55 / 100 && half.len() > whole.len() * 45 / 100, "{} against {}", half.len(), whole.len());
+    }
+
+    #[test]
+    fn the_scale_follows_the_tokens_the_model_counted() {
+        // A prompt aimed at 2000 tokens that came to 2500 is cut to four fifths.
+        assert!((rescale(1.0, 2_000, 2_500, false) - 0.8).abs() < 1e-9);
+        // …and one that came to 1600 is stretched by a quarter.
+        assert!((rescale(1.0, 2_000, 1_600, false) - 1.25).abs() < 1e-9);
+        // A scale already applied is carried on from.
+        assert!((rescale(0.8, 2_000, 2_500, false) - 0.64).abs() < 1e-9);
+        // No count: left as it is. A cut prompt says nothing of its size: halved.
+        assert_eq!(rescale(0.8, 2_000, 0, false), 0.8);
+        assert_eq!(rescale(0.8, 16_000, 32_000, true), 0.4);
+    }
+
+    #[test]
+    fn a_prompt_over_num_ctx_less_num_predict_is_truncated() {
+        assert!(!truncated(32_640, 32_768));
+        assert!(truncated(32_641, 32_768));
+        assert!(truncated(32_768, 32_768));
+        assert!(!truncated(2_000, 32_768));
+        assert!(truncated(1, 100), "num_ctx less than num_predict leaves no room at all");
     }
 
     #[test]

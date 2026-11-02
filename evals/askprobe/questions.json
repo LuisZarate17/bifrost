@@ -26,7 +26,10 @@
           "any": [
             "(ignor\\w*|insensitiv\\w*|regardless\\s+of)\\s+(of\\s+)?(the\\s+)?case",
             "case[- ]insensitiv",
-            "eq_ignore_ascii_case"
+            "eq_ignore_ascii_case",
+            "(not|non|never)[- ]case[- ]sensitiv",
+            "case\\s+(does\\s+not|doesn['’]t)\\s+matter",
+            "case\\s+is\\s+ignored"
           ]
         }
       ],
@@ -55,18 +58,18 @@
         {
           "name": "keeps the first 6 KB (HEAD)",
           "any": [
-            "(first|head|start|beginning|leading)[^.\\n]{0,80}\\b6\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b",
-            "\\b6\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b[^.\\n]{0,80}(first|head|start|beginning|leading)",
-            "\\bHEAD\\b[^.\\n\\d]{0,30}\\b6\\b",
+            "(first|head|start|beginning|leading)[^\\n]{0,80}\\b6\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b",
+            "\\b6\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b[^\\n]{0,80}(first|head|start|beginning|leading)",
+            "\\bHEAD\\b[^\\n\\d]{0,30}\\b6\\b",
             "6,?144"
           ]
         },
         {
           "name": "keeps the last 2 KB (TAIL)",
           "any": [
-            "(last|tail|end|final|trailing)[^.\\n]{0,80}\\b2\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b",
-            "\\b2\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b[^.\\n]{0,80}(last|tail|end|final|trailing)",
-            "\\bTAIL\\b[^.\\n\\d]{0,30}\\b2\\b",
+            "(last|tail|end|final|trailing)[^\\n]{0,80}\\b2\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b",
+            "\\b2\\s*(KB|KiB|k|kilobytes?|\\*\\s*1024)\\b[^\\n]{0,80}(last|tail|end|final|trailing)",
+            "\\bTAIL\\b[^\\n\\d]{0,30}\\b2\\b",
             "2,?048"
           ]
         },
@@ -74,8 +77,8 @@
           "name": "says how much was cut",
           "any": [
             "bytes\\s+cut",
-            "(marker|note|count|message|line|notice)[^.\\n]{0,80}(cut|omitted|dropped|removed|truncated|skipped|elided)",
-            "how\\s+(much|many)[^.\\n]{0,80}(cut|omitted|dropped|removed|truncated|skipped|elided)"
+            "(marker|note|count|message|line|notice)[^\\n]{0,80}(cut|omitted|dropped|removed|truncated|skipped|elided)",
+            "how\\s+(much|many)[^\\n]{0,80}(cut|omitted|dropped|removed|truncated|skipped|elided)"
           ]
         }
       ],
@@ -201,8 +204,8 @@
           "any": [
             "bifrost[\\\\/]+backups",
             "backups_dir[\\s\\S]{0,200}data_dir",
-            "data\\s+(folder|dir\\w*)[^.\\n]{0,80}backups",
-            "backups[^.\\n]{0,80}data\\s+(folder|dir\\w*)"
+            "data\\s+(folder|dir\\w*)[^\\n]{0,80}backups",
+            "backups[^\\n]{0,80}data\\s+(folder|dir\\w*)"
           ]
         },
         {
@@ -240,9 +243,11 @@
         {
           "name": "a shallow git clone of HEAD",
           "any": [
-            "\\bclone",
+            "git\\s+clone",
+            "shallow[^\\n]{0,20}clon",
+            "clon\\w*[^\\n]{0,20}shallow",
             "--depth",
-            "shallow"
+            "clon(e|ed|es|ing)\\s+(of\\s+)?(the\\s+|a\\s+)?(single\\s+|one\\s+)?(HEAD|commit|repo\\w*)"
           ]
         },
         {
@@ -257,9 +262,9 @@
         {
           "name": "a worktree writes into the user's .git",
           "any": [
-            "\\.git\\b[^.\\n]{0,80}(writ\\w*|leav\\w*|entr\\w*|modif\\w*|touch\\w*)",
-            "(writ\\w*|leav\\w*|entr\\w*|modif\\w*|touch\\w*)[^.\\n]{0,80}\\.git\\b",
-            "worktree[^.\\n]{0,100}(writ\\w*|leav\\w*|entr\\w*)"
+            "\\.git\\b[^\\n]{0,80}(writ\\w*|leav\\w*|entr\\w*|modif\\w*|touch\\w*|regist\\w*)",
+            "(writ\\w*|leav\\w*|entr\\w*|modif\\w*|touch\\w*|regist\\w*)[^\\n]{0,80}\\.git\\b",
+            "worktree[^\\n]{0,100}(writ\\w*|leav\\w*|entr\\w*|regist\\w*)"
           ]
         }
       ],
@@ -285,15 +290,18 @@
         {
           "name": "decided in unattended.rs",
           "any": [
-            "unattended"
+            "unattended\\.rs",
+            "unattended::",
+            "\\bdecide\\b[^\\n]{0,60}unattended",
+            "unattended[^\\n]{0,60}\\bdecide\\b"
           ]
         },
         {
           "name": "edit, create, delete and move are allowed",
           "any": [
             "edit_file|create_file|delete_file|move_file",
-            "\\bedits?\\b[^.\\n]{0,80}(allow\\w*|permit\\w*|approv\\w*)",
-            "(allow\\w*|permit\\w*|approv\\w*)[^.\\n]{0,80}\\bedit"
+            "\\bedits?\\b[^\\n]{0,80}(allow\\w*|permit\\w*|approv\\w*)",
+            "(allow\\w*|permit\\w*|approv\\w*)[^\\n]{0,80}\\bedit"
           ]
         },
         {
@@ -311,8 +319,8 @@
         {
           "name": "shell commands are refused",
           "any": [
-            "(run_command|shell|command)s?[^.\\n]{0,80}(den\\w+|refus\\w+|not\\s+(offered|allowed|permitted)|never|disallow\\w*|forbid\\w*)",
-            "(den\\w+|refus\\w+|not\\s+allowed|disallow\\w*)[^.\\n]{0,80}(run_command|shell|command)"
+            "(run_command|shell|command)s?[^\\n]{0,80}(den\\w+|refus\\w+|not\\s+(offered|allowed|permitted)|never|disallow\\w*|forbid\\w*)",
+            "(den\\w+|refus\\w+|not\\s+allowed|disallow\\w*)[^\\n]{0,80}(run_command|shell|command)"
           ]
         }
       ],
@@ -338,15 +346,18 @@
         {
           "name": "8 GiB for any one process",
           "any": [
-            "(per[- ]process|each\\s+process|any\\s+(one\\s+)?process|one\\s+process|single\\s+process|PROCESS_MEMORY_LIMIT)[^.\\n\\d]{0,60}(?:\\b8\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|8,?589,?934,?592)",
-            "(?:\\b8\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|8,?589,?934,?592)\\s*[(,]?\\s*(?:(?:for|per|by|in|to|of|on|each|a)\\s+)?(?:(?:a|any|each|every|one|single)\\s+)*(?:process|PROCESS_MEMORY_LIMIT)"
+            "(per[- ]process|(each|every|any|one|single)\\s+(one\\s+|child\\s+|single\\s+)?process|\\ba\\s+process\\s+(may|can|is|are|must|cannot)|PROCESS_MEMORY_LIMIT)[^\\n\\d]{0,60}(?:\\b8\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|8,?589,?934,?592)",
+            "(?:\\b8\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|8,?589,?934,?592)\\s*[(,]?\\s*(?:(?:for|per|by|in|to|of|on|each|a)\\s+)?(?:(?:a|any|each|every|one|single)\\s+)*(?:process|PROCESS_MEMORY_LIMIT)",
+            "(?:\\b8\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|8,?589,?934,?592)[^\\n\\d]{0,40}\\b(per|each|every|any|one|single)[- ](child[- ]|one[- ]|single[- ])?process",
+            "\\bprocesses\\s+(are|is)\\s+[^\\n\\d]{0,40}(?:\\b8\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|8,?589,?934,?592)\\s*,?\\s*(each|apiece)"
           ]
         },
         {
           "name": "24 GiB for the whole run",
           "any": [
-            "(whole\\s+run|entire\\s+run|all\\s+(the\\s+)?processes|RUN_MEMORY_LIMIT|per[- ]run|the\\s+run|job)[^.\\n\\d]{0,60}(?:\\b24\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|25,?769,?803,?776)",
-            "(?:\\b24\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|25,?769,?803,?776)\\s*[(,]?\\s*(?:(?:for|across|over|in|of|by)\\s+)?(?:(?:the|a|all|of|every|each|whole|entire)\\s+)*(?:run|processes|total|together|combined|RUN_MEMORY_LIMIT)"
+            "(whole\\s+run|entire\\s+run|all\\s+(the\\s+)?processes|RUN_MEMORY_LIMIT|per[- ]run|the\\s+run|job)[^\\n\\d]{0,60}(?:\\b24\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|25,?769,?803,?776)",
+            "(?:\\b24\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|25,?769,?803,?776)\\s*[(,]?\\s*(?:(?:for|across|over|in|of|by)\\s+)?(?:(?:the|a|all|of|every|each|whole|entire)\\s+)*(?:run|processes|total|together|combined|RUN_MEMORY_LIMIT)",
+            "(?:\\b24\\s*(?:GB|GiB|G|gigabytes?|\\*\\s*1024)\\b|25,?769,?803,?776)[^\\n\\d]{0,40}\\b(across|over|spanning|for|in|shared\\s+by)\\s+(all\\s+(of\\s+)?(the\\s+)?|every\\s+|the\\s+|each\\s+)?(whole\\s+|entire\\s+)?(run|processes|job|tree|total)\\b"
           ]
         },
         {
@@ -395,8 +406,8 @@
           "name": "only sent to a model that reports the thinking capability",
           "any": [
             "thinking\\s+capabilit",
-            "capabilit\\w+[^.\\n]{0,80}thinking",
-            "thinking[^.\\n]{0,80}capabilit",
+            "capabilit\\w+[^\\n]{0,80}thinking",
+            "thinking[^\\n]{0,80}capabilit",
             "/api/show",
             "reports?\\s+(the\\s+)?thinking",
             "has\\(\\s*\"thinking\"\\s*\\)"
@@ -407,8 +418,8 @@
           "any": [
             "request_body",
             "think\\W{1,6}false",
-            "false[^.\\n]{0,80}\\boff\\b",
-            "\\boff\\b[^.\\n]{0,80}false"
+            "false[^\\n]{0,80}\\boff\\b",
+            "\\boff\\b[^\\n]{0,80}false"
           ]
         }
       ],
@@ -458,14 +469,14 @@
             "0?\\.75",
             "75\\s*%",
             "three[- ]quarters",
-            "\\bBUDGET\\b"
+            "BUDGET\\s*[=:(]?\\s*0?\\.75"
           ]
         },
         {
           "name": "system prompt, user messages and the last message are never touched",
           "any": [
-            "(system|user)\\s+(prompt|message)s?[^.\\n]{0,100}(never|not|untouched|kept|protected|skipped|left|spared)",
-            "(never|not|untouched|kept|protected|skipped|left|spared)[^.\\n]{0,100}(system|user)\\s+(prompt|message)"
+            "(system|user)\\s+(prompt|message)s?[^\\n]{0,100}(never|not|untouched|kept|protected|skipped|left|spared)",
+            "(never|not|untouched|kept|protected|skipped|left|spared)[^\\n]{0,100}(system|user)\\s+(prompt|message)"
           ]
         }
       ],
@@ -497,8 +508,8 @@
         {
           "name": "a coding offer needs a project folder and a coding model",
           "any": [
-            "(workspace|folder|project)[^.\\n]{0,120}(coding[_ ]model|coder)",
-            "(coding[_ ]model|coder)[^.\\n]{0,120}(workspace|folder|project)"
+            "(workspace|folder|project)[^\\n]{0,120}(coding[_ ]model|coder)",
+            "(coding[_ ]model|coder)[^\\n]{0,120}(workspace|folder|project)"
           ]
         },
         {
@@ -506,7 +517,8 @@
           "any": [
             "install\\w*",
             "\\bhas\\(",
-            "Ollama[^.\\n]{0,80}(has|lists?|pulled)"
+            "Ollama[^\\n]{0,80}(has|lists?|pulled)",
+            "pull(ed)?\\s+(in|into|from|on|with)\\s+Ollama"
           ]
         },
         {
@@ -514,8 +526,9 @@
           "any": [
             "model_before_coding",
             "switch\\w*\\s+back",
-            "(previous|prior|earlier|original|before)[^.\\n]{0,80}model",
-            "\\\"back\\\""
+            "(previous|prior|earlier|original|before)[^\\n]{0,80}model",
+            "\\\"back\\\"",
+            "\\bmodel\\b[^\\n]{0,40}\\b(earlier|previously)\\b"
           ]
         }
       ],
@@ -542,10 +555,7 @@
           "name": "the turn is asked again through raw /api/generate",
           "any": [
             "/api/generate",
-            "raw\\s+(mode|generate|request)",
-            "\\brecover\\b",
-            "re-?ask\\w*",
-            "retr(y|ied|ies)"
+            "\\braw\\b"
           ]
         },
         {

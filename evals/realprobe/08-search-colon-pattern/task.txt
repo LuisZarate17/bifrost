@@ -1,0 +1,9 @@
+In crates/bifrost-core/src/search.rs, `Pattern::parse` reads the `pattern` of the `list_files` and `search` tools. It treats any pattern with a colon in it as one that reaches outside the project folder, and answers "{raw} is not inside the project folder — patterns are relative to it, like src/**/*.rs". That is wrong for a pattern that is not a path out at all: a model that passes `serde_json::from_str` or `src/a:b/*.rs` is told it left the project, when the truth is that no file name can have a colon on Windows.
+
+Change `parse` so that a colon is "outside" only where it makes a drive, and any other colon gets its own answer:
+
+1. A drive is a letter and a colon at the start of the pattern (`C:`, `C:/**`, `C:\Users\**`, `c:src/*.rs`), or at the start of an alternative inside braces (`{C:/,x}/**`). Like an absolute path (starting with a slash) or one that reaches for a parent (`..`), it is refused exactly as it is now, with the "is not inside the project folder" text.
+2. A colon anywhere else (`src/a:b/*.rs`, `serde_json::from_str`, `undo(id:`, `*.rs:12`) is refused with exactly this text, `{raw}` being the pattern as it was given: `{raw} has a colon in it, which Windows does not allow in a file name — nothing could match it`. It must not say "not inside the project folder".
+3. A pattern that is outside in the first sense and also has a colon elsewhere (`/a:b`, `src/../a:b`, `C:/a:b`) is still reported as outside, not as a colon.
+
+Both answers come back through `list`, `search` and `validate`, which all go through `parse`. Every other pattern is read as it is now, and the existing tests must keep passing unchanged. Add tests in the existing `mod tests` for a colon that is not a drive, and for how a drive is told from one. Change nothing else.

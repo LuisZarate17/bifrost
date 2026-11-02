@@ -84,6 +84,9 @@ pub fn sandbox_config(model: &str, think: Option<Think>) -> String {
 
 pub struct Sandbox {
     pub env: Vec<(String, String)>,
+    /// The sandbox's `LOCALAPPDATA` (only `realprobe` clears what Hugin builds in it).
+    #[allow(dead_code)]
+    local: PathBuf,
 }
 
 impl Sandbox {
@@ -97,6 +100,7 @@ impl Sandbox {
         std::fs::write(&config, sandbox_config(model, think)).map_err(|e| format!("could not write {}: {e}", config.display()))?;
         let show = |p: &Path| p.to_string_lossy().into_owned();
         Ok(Self {
+            local: local.clone(),
             env: vec![
                 ("APPDATA".to_string(), show(&appdata)),
                 ("LOCALAPPDATA".to_string(), show(&local)),
@@ -104,6 +108,14 @@ impl Sandbox {
                 ("TMP".to_string(), show(&temp)),
             ],
         })
+    }
+
+    /// Delete what `hugin -p` built for its check, `<LOCALAPPDATA>ifrost\hugin-p`: a folder of
+    /// build output for each repository it ran in, which a long invocation would fill the disk
+    /// with. Best effort; the next run makes it again.
+    #[allow(dead_code)]
+    pub fn clear_build_cache(&self) {
+        let _ = std::fs::remove_dir_all(self.local.join("bifrost").join("hugin-p"));
     }
 }
 

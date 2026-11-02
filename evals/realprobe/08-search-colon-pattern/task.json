@@ -1,0 +1,16 @@
+{
+  "id": "08-search-colon-pattern",
+  "pin": "0940923",
+  "check": ["cargo", "test", "-p", "bifrost-core", "--lib"],
+  "hidden": [
+    {"kind": "append", "file": "crates/bifrost-core/src/search.rs", "src": "hidden.rs"}
+  ],
+  "hidden_count": 6,
+  "hidden_filter": "realprobe_hidden",
+  "suites": [["cargo", "test", "-p", "bifrost-core"]],
+  "wrong": [
+    {"patch": "wrong-1.patch", "why": "drops the colon rule altogether: a drive path is no longer outside and a colon elsewhere is accepted with no answer at all"},
+    {"patch": "wrong-2.patch", "why": "recognises a drive only at the very start of the pattern, so `{C:/,x}/**` (a drive inside an alternation, pinned by an existing test) gets the colon answer instead of the outside one"},
+    {"patch": "wrong-3.patch", "why": "checks for a colon before it checks for an absolute or `..` path, so `/a:b` and `src/../a:b` are reported as a colon, not as outside"}
+  ]
+}

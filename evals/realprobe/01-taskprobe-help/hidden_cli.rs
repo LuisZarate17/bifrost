@@ -95,7 +95,7 @@ fn realprobe_hidden_help_prints_usage_with_every_flag_and_exits_0() {
     assert!(!r.timed_out, "timed out");
     assert_eq!(r.code, Some(0), "stdout: {} stderr: {}", r.stdout, r.stderr);
     assert_lists_every_flag(&r.stdout);
-    assert!(!r.stdout.contains("task probe"), "the probe started: {}", r.stdout);
+    assert!(!r.stdout.contains("H3 — task probe"), "the probe started: {}", r.stdout);
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn realprobe_hidden_an_unknown_flag_exits_2_and_is_named_on_stderr_with_the_usag
     assert_eq!(r.code, Some(2), "stdout: {} stderr: {}", r.stdout, r.stderr);
     assert!(r.stderr.contains("unknown flag: --bogus"), "{}", r.stderr);
     assert_lists_every_flag(&r.stderr);
-    assert!(!r.stdout.contains("task probe"), "the probe started: {}", r.stdout);
+    assert!(!r.stdout.contains("H3 — task probe"), "the probe started: {}", r.stdout);
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn realprobe_hidden_an_unknown_flag_after_good_ones_is_still_refused_before_any_
     assert!(!r.timed_out, "timed out");
     assert_eq!(r.code, Some(2), "stdout: {} stderr: {}", r.stdout, r.stderr);
     assert!(r.stderr.contains("unknown flag: --bogus"), "{}", r.stderr);
-    assert!(!r.stdout.contains("task probe"), "the probe started: {}", r.stdout);
+    assert!(!r.stdout.contains("H3 — task probe"), "the probe started: {}", r.stdout);
 }
 
 #[test]

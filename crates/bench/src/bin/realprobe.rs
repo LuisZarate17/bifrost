@@ -12,13 +12,16 @@
 //!
 //! Hugin runs in a sandbox: `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP` point into a folder of
 //! this invocation's own, with a `config.json` that names the model, so the user's real
-//! settings are never read or written.
+//! settings are never read or written. Hugin's per-run build cache in it is deleted after each
+//! run. The scoring runs have a sandbox of their own the same way, so that a test the model
+//! wrote, calling `Config::save()`, cannot touch the real config.
 //!
 //! The scoring builds in the repo's own `target/` (as taskprobe does: a fresh target
 //! directory rebuilds every proc-macro, and this machine has refused a freshly linked one
-//! before), so no other cargo command may run beside it. A scoring run that times out, is
+//! before), so no other cargo command may run beside it. A scoring build that times out, is
 //! stopped, ends with no exit code or stays blocked by Smart App Control is an ERROR, never the
-//! model's FAIL.
+//! model's FAIL. A test run is built first (`--no-run`) and then run with a limit of its own
+//! ([`TEST_TIMEOUT`]): tests that began and never ended are the model's code hanging, a FAIL.
 //!
 //! Every cargo command goes through `check::run_with_input`, which is `check::run` with room
 //! for the whole output: `run`'s 6 KB head and 2 KB tail can cut out the `test result:` lines
@@ -42,6 +45,12 @@ mod harness;
 
 use harness::{Sandbox, Worktree, copy_hugin, first_line, git, require_installed, unix_now};
 
+// Hugin's own reading of "a patch that changes existing tests", so that the selfcheck asks the
+// question Hugin will ask of every patch a model hands back.
+#[allow(dead_code)]
+#[path = "../../../../apps/hugin/src/bent.rs"]
+mod bent;
+
 /// What Hugin is told it may take, and how long this program waits for it before it ends the
 /// process tree and books an ERROR.
 const HUGIN_TIME: u64 = 900;
@@ -49,6 +58,9 @@ const HUGIN_GUARD: Duration = Duration::from_secs(1000);
 /// One scoring command, cold: a build of every test binary in the package.
 const SCORE_TIMEOUT: Duration = Duration::from_secs(1800);
 const BUILD_TIMEOUT: Duration = Duration::from_secs(1800);
+/// The run of already built tests: far more than any test of these tasks needs, so a run that is
+/// still going has hung.
+const TEST_TIMEOUT: Duration = Duration::from_secs(300);
 /// The output kept of a command: all of it, for any run this program makes.
 const KEEP: usize = 16 * 1024 * 1024;
 /// A command refused by Smart App Control is touched and run again, this many runs in all.
@@ -245,10 +257,10 @@ fn unfinished(o: &check::Outcome) -> Option<String> {
     }
 }
 
-/// `argv` in `dir`, whole output kept. A Smart App Control block is touched past and run again,
-/// up to `BLOCK_TRIES` runs in all. `Err` is an ERROR: it could not start, did not finish, or
-/// stayed blocked.
-fn cargo(dir: &Path, task: Option<&Task>, argv: &[String], env: &[(String, String)], timeout: Duration) -> Result<check::Outcome, String> {
+/// `argv` in `dir`, whole output kept, however it ended. A Smart App Control block is touched
+/// past and run again, up to `BLOCK_TRIES` runs in all. `Err`: it could not start, or stayed
+/// blocked.
+fn cargo_raw(dir: &Path, task: Option<&Task>, argv: &[String], env: &[(String, String)], timeout: Duration) -> Result<check::Outcome, String> {
     for attempt in 1..=BLOCK_TRIES {
         let o = check::run_with_input(dir, argv, &[], KEEP, timeout, env, || false)?;
         if o.blocked.is_some() {
@@ -260,12 +272,57 @@ fn cargo(dir: &Path, task: Option<&Task>, argv: &[String], env: &[(String, Strin
             }
             return Err("blocked by Smart App Control".to_string());
         }
-        return match unfinished(&o) {
-            Some(why) => Err(why),
-            None => Ok(o),
-        };
+        return Ok(o);
     }
     Err("blocked by Smart App Control".to_string())
+}
+
+/// [`cargo_raw`] for a command that has to finish by itself. `Err` is an ERROR: it could not
+/// start, did not finish, or stayed blocked.
+fn cargo(dir: &Path, task: Option<&Task>, argv: &[String], env: &[(String, String)], timeout: Duration) -> Result<check::Outcome, String> {
+    let o = cargo_raw(dir, task, argv, env, timeout)?;
+    match unfinished(&o) {
+        Some(why) => Err(why),
+        None => Ok(o),
+    }
+}
+
+/// How a test run ended.
+enum Ran {
+    /// The build or the run finished by itself, whatever it found.
+    Done(check::Outcome),
+    /// The tests had begun and the run hit [`TEST_TIMEOUT`]: the model's code hangs.
+    Hung,
+}
+
+/// Whether a run was cut off by its timeout while test programs were running: a `running N tests`
+/// line is out and the run did not finish. A timeout before any such line is the environment's.
+fn hung(o: &check::Outcome) -> bool {
+    o.ended == check::Ended::TimedOut && tally(&o.output).began > 0
+}
+
+/// `argv` is a `cargo test` command, `filter` the test filter after `--`. Built first, with the
+/// usual limit (`--no-run`: a compile error ends it there, as `Done`), then run with
+/// [`TEST_TIMEOUT`]. A hang is `Hung`; any other end that is not a finish is an ERROR.
+fn cargo_tests(dir: &Path, task: &Task, argv: &[String], filter: Option<&str>, env: &[(String, String)]) -> Result<Ran, String> {
+    let mut build = argv.to_vec();
+    build.insert(argv.iter().position(|w| w == "--").unwrap_or(argv.len()), "--no-run".to_string());
+    let built = cargo(dir, Some(task), &build, env, SCORE_TIMEOUT)?;
+    if !built.passed() {
+        return Ok(Ran::Done(built));
+    }
+    let mut run = argv.to_vec();
+    if let Some(filter) = filter {
+        run.extend(["--".to_string(), filter.to_string()]);
+    }
+    let o = cargo_raw(dir, Some(task), &run, env, TEST_TIMEOUT)?;
+    if hung(&o) {
+        return Ok(Ran::Hung);
+    }
+    match unfinished(&o) {
+        Some(why) => Err(why),
+        None => Ok(Ran::Done(o)),
+    }
 }
 
 /// What `cargo test` printed, summed over every test program.
@@ -378,19 +435,31 @@ enum Judged {
 struct Scorer {
     /// The repo's own `target/`.
     target: PathBuf,
+    /// Where `APPDATA`, `LOCALAPPDATA`, `TEMP` and `TMP` point during scoring: a folder of this
+    /// invocation's own, so a test that saves the config writes there.
+    home: PathBuf,
     /// The test names listed at the pin, by task id: worked out once.
     pins: HashMap<String, BTreeSet<String>>,
 }
 
 impl Scorer {
-    fn new(repo: &Path) -> Self {
-        Self { target: repo.join("target"), pins: HashMap::new() }
+    fn new(repo: &Path, scratch: &Path) -> Self {
+        Self { target: repo.join("target"), home: scratch.join("scoring-home"), pins: HashMap::new() }
     }
 
     fn env(&self) -> Vec<(String, String)> {
+        let show = |p: &Path| p.to_string_lossy().into_owned();
+        let (appdata, local, temp) = (self.home.join("appdata"), self.home.join("local"), self.home.join("temp"));
+        for dir in [&appdata, &local, &temp] {
+            let _ = std::fs::create_dir_all(dir);
+        }
         vec![
-            ("CARGO_TARGET_DIR".to_string(), self.target.to_string_lossy().into_owned()),
+            ("CARGO_TARGET_DIR".to_string(), show(&self.target)),
             ("CARGO_TERM_COLOR".to_string(), "never".to_string()),
+            ("APPDATA".to_string(), show(&appdata)),
+            ("LOCALAPPDATA".to_string(), show(&local)),
+            ("TEMP".to_string(), show(&temp)),
+            ("TMP".to_string(), show(&temp)),
         ]
     }
 
@@ -453,9 +522,10 @@ impl Scorer {
             std::fs::write(&at, body).map_err(|e| format!("{}: {e}", at.display()))?;
         }
 
-        let mut argv = task.check.clone();
-        argv.extend(["--".to_string(), task.hidden_filter.clone()]);
-        let o = cargo(tree, Some(task), &argv, &env, SCORE_TIMEOUT)?;
+        let o = match cargo_tests(tree, task, &task.check, Some(&task.hidden_filter), &env)? {
+            Ran::Hung => return Ok(Judged::Wrong(format!("hidden tests: tests hung (still running after {}s)", TEST_TIMEOUT.as_secs()))),
+            Ran::Done(o) => o,
+        };
         let code = match o.ended {
             check::Ended::Exited(code) => code,
             _ => None,
@@ -465,7 +535,10 @@ impl Scorer {
         }
 
         for suite in &task.suites {
-            let o = cargo(tree, Some(task), suite, &env, SCORE_TIMEOUT)?;
+            let o = match cargo_tests(tree, task, suite, None, &env)? {
+                Ran::Hung => return Ok(Judged::Wrong(format!("`{}` fails: tests hung (still running after {}s)", suite.join(" "), TEST_TIMEOUT.as_secs()))),
+                Ran::Done(o) => o,
+            };
             let code = match o.ended {
                 check::Ended::Exited(code) => code,
                 _ => None,
@@ -672,7 +745,10 @@ fn run_hugin(ctx: &Ctx, hugin: &Path, sandbox: &Sandbox, task: &Task, run: usize
     .iter()
     .map(|s| s.to_string())
     .collect();
-    let o = check::run_with_input(&work.path, &argv, &text, KEEP, HUGIN_GUARD, &sandbox.env, || false)?;
+    let ran = check::run_with_input(&work.path, &argv, &text, KEEP, HUGIN_GUARD, &sandbox.env, || false);
+    // Its check built in a cache of its own: the patch is all that is read from here on.
+    sandbox.clear_build_cache();
+    let o = ran?;
     match &o.ended {
         check::Ended::TimedOut => return Err(format!("Hugin ran past {}s and its process tree was killed", HUGIN_GUARD.as_secs())),
         check::Ended::Stopped => return Err("Hugin was stopped".to_string()),
@@ -792,11 +868,25 @@ fn hidden_in_pin(task: &Task) -> Result<Vec<String>, String> {
     Ok(found)
 }
 
+/// The existing tests a patch removes lines from, as Hugin reads them (`apps/hugin/src/bent.rs`),
+/// one note each. Hugin sets any such patch's status to `review`, so a reference that does it
+/// could never be a PASS.
+fn tests_edited_by(patch: &[u8]) -> Vec<String> {
+    bent::changed_tests(patch).iter().map(|b| format!("the reference patch removes lines of existing tests — {}", b.warning())).collect()
+}
+
+/// [`tests_edited_by`] for the task's `reference.patch`.
+fn reference_edits_tests(task: &Task) -> Result<Vec<String>, String> {
+    let path = task.dir.join("reference.patch");
+    let patch = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(tests_edited_by(&patch))
+}
+
 fn selfcheck(ctx: &Ctx, tasks: &[Task]) -> bool {
     println!("J1 — realprobe selfcheck (no model, no Hugin)\n");
-    println!("| task | reference correct? | pin is FAIL? | wrong patches FAIL | hidden unreachable? |");
-    println!("|---|---|---|---|---|");
-    let mut scorer = Scorer::new(&ctx.repo);
+    println!("| task | reference correct? | pin is FAIL? | wrong patches FAIL | hidden unreachable? | reference edits no test? |");
+    println!("|---|---|---|---|---|---|");
+    let mut scorer = Scorer::new(&ctx.repo, &ctx.scratch);
     let mut all_ok = true;
     for task in tasks {
         let mut notes: Vec<String> = Vec::new();
@@ -850,9 +940,20 @@ fn selfcheck(ctx: &Ctx, tasks: &[Task]) -> bool {
                 "NO".to_string()
             }
         };
-        let row_ok = reference == "yes" && pin == "yes" && wrongs == format!("{0}/{0}", task.wrong.len()) && hidden == "yes";
+        let untouched = match reference_edits_tests(task) {
+            Ok(edited) if edited.is_empty() => "yes".to_string(),
+            Ok(edited) => {
+                notes.extend(edited);
+                "NO".to_string()
+            }
+            Err(e) => {
+                notes.push(e);
+                "NO".to_string()
+            }
+        };
+        let row_ok = reference == "yes" && pin == "yes" && wrongs == format!("{0}/{0}", task.wrong.len()) && hidden == "yes" && untouched == "yes";
         all_ok &= row_ok;
-        println!("| {} | {reference} | {pin} | {wrongs} | {hidden} |", task.id);
+        println!("| {} | {reference} | {pin} | {wrongs} | {hidden} | {untouched} |", task.id);
         for n in notes {
             println!("    {}: {n}", task.id);
         }
@@ -1026,7 +1127,7 @@ fn real_run(ctx: &Ctx, opts: &Opts, tasks: &[Task]) -> i32 {
     println!("tasks:  {} × {} runs", tasks.len(), opts.runs);
     println!("hugin:  {} (--time {HUGIN_TIME}, killed past {}s)\n", hugin.display(), HUGIN_GUARD.as_secs());
 
-    let mut scorer = Scorer::new(&ctx.repo);
+    let mut scorer = Scorer::new(&ctx.repo, &ctx.scratch);
     let mut results: Vec<RunResult> = Vec::new();
     for task in tasks {
         for run in 1..=opts.runs {
@@ -1256,6 +1357,82 @@ mod tests {
         }
         let task = load_tasks(&repo).unwrap().into_iter().find(|t| t.id == "01-taskprobe-help").unwrap();
         assert_eq!(model_check(&task), "cargo test -p bench --bin taskprobe --no-fail-fast");
+    }
+
+    fn outcome(ended: check::Ended, output: &str) -> check::Outcome {
+        check::Outcome {
+            ended,
+            elapsed: Duration::from_secs(1),
+            output: output.to_string(),
+            bytes: output.len() as u64,
+            complete: true,
+            blocked: None,
+            unfinished_tests: 0,
+        }
+    }
+
+    /// **A hung test is the model's FAIL:** a timeout after `running N tests` is a hang; one
+    /// before it, or any other kind of end, is not.
+    #[test]
+    fn a_timeout_after_the_tests_began_is_a_hang() {
+        let began = "   Finished `test` profile\n     Running unittests src\\lib.rs\n\nrunning 3 tests\ntest a ... ok\n";
+        assert!(hung(&outcome(check::Ended::TimedOut, began)));
+        assert!(!hung(&outcome(check::Ended::TimedOut, "   Compiling x v0.1.0\n")), "no test had begun: the environment's");
+        assert!(!hung(&outcome(check::Ended::Stopped, began)));
+        assert!(!hung(&outcome(check::Ended::Exited(Some(0)), began)));
+        // Still a timeout to `unfinished`, which is what `cargo` makes an ERROR of.
+        assert!(unfinished(&outcome(check::Ended::TimedOut, began)).is_some());
+        assert!(unfinished(&outcome(check::Ended::Exited(Some(101)), began)).is_none());
+    }
+
+    #[test]
+    fn hugins_build_cache_is_deleted_and_the_config_is_kept() {
+        let root = std::env::temp_dir().join(format!("realprobe-sandbox-test-{}", std::process::id()));
+        let sandbox = Sandbox::make(&root, "m:1", None).unwrap();
+        let cache = root.join("local").join("bifrost").join("hugin-p").join("abc").join("debug");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("big.rlib"), "x").unwrap();
+        sandbox.clear_build_cache();
+        assert!(!root.join("local").join("bifrost").join("hugin-p").exists());
+        assert!(root.join("appdata").join("bifrost").join("config.json").is_file());
+        sandbox.clear_build_cache(); // nothing there: no harm
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_scoring_runs_have_a_home_of_their_own() {
+        let scratch = std::env::temp_dir().join(format!("realprobe-home-test-{}", std::process::id()));
+        let env = Scorer::new(Path::new("repo"), &scratch).env();
+        let get = |k: &str| env.iter().find(|(n, _)| n == k).map(|(_, v)| PathBuf::from(v)).unwrap();
+        for key in ["APPDATA", "LOCALAPPDATA", "TEMP", "TMP"] {
+            assert!(get(key).starts_with(&scratch) && get(key).is_dir(), "{key}");
+        }
+        assert_eq!(get("TEMP"), get("TMP"));
+        assert_ne!(get("APPDATA"), get("LOCALAPPDATA"));
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
+    fn a_patch_that_removes_a_test_line_is_told_from_one_that_only_adds() {
+        let adds = "diff --git a/crates/x/src/a.rs b/crates/x/src/a.rs\n--- a/crates/x/src/a.rs\n+++ b/crates/x/src/a.rs\n@@ -1,2 +1,3 @@\n fn f() {}\n+fn g() {}\n #[cfg(test)]\n";
+        assert!(tests_edited_by(adds.as_bytes()).is_empty());
+        let code = "diff --git a/crates/x/src/a.rs b/crates/x/src/a.rs\n--- a/crates/x/src/a.rs\n+++ b/crates/x/src/a.rs\n@@ -1,2 +1,2 @@\n-fn f() {}\n+fn f() -> u8 { 0 }\n";
+        assert!(tests_edited_by(code.as_bytes()).is_empty(), "a changed line of the code is not a test edited");
+        let asserts = "diff --git a/crates/x/src/a.rs b/crates/x/src/a.rs\n--- a/crates/x/src/a.rs\n+++ b/crates/x/src/a.rs\n@@ -5,2 +5,2 @@\n-        assert_eq!(f(), 1);\n+        assert_eq!(f(), 2);\n";
+        assert_eq!(tests_edited_by(asserts.as_bytes()).len(), 1);
+        let file = "diff --git a/apps/x/tests/a.rs b/apps/x/tests/a.rs\n--- a/apps/x/tests/a.rs\n+++ b/apps/x/tests/a.rs\n@@ -1,1 +1,1 @@\n-let x = 1;\n+let x = 2;\n";
+        assert!(tests_edited_by(file.as_bytes())[0].contains("apps/x/tests/a.rs (-1)"));
+    }
+
+    /// **A reference that edits an existing test can never be a PASS:** Hugin turns that patch
+    /// into status `review`.
+    #[test]
+    fn no_reference_patch_edits_an_existing_test() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for task in load_tasks(&repo).unwrap() {
+            let edited = reference_edits_tests(&task).unwrap();
+            assert!(edited.is_empty(), "{}: {edited:?}", task.id);
+        }
     }
 
     #[test]

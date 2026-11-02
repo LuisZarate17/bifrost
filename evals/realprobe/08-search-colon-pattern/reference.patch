@@ -1,0 +1,77 @@
+diff --git a/crates/bifrost-core/src/search.rs b/crates/bifrost-core/src/search.rs
+index 159d0db..aeff5f4 100644
+--- a/crates/bifrost-core/src/search.rs
++++ b/crates/bifrost-core/src/search.rs
+@@ -106,6 +106,17 @@ fn search_text(text: &str) -> Result<(), String> {
+ 
+ // ── the pattern ─────────────────────────────────────────────────────────────
+ 
++/// Whether a pattern starts at a drive: `C:` at its start (`C:/x`, `C:x`), or as a whole
++/// alternative inside braces (`{C:/,x}/**`). A colon anywhere else is not a drive.
++fn names_drive(p: &str) -> bool {
++    let lead = |s: &str| matches!(s.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic());
++    lead(p)
++        || p.match_indices(['{', ',']).any(|(at, _)| {
++            let rest = &p[at + 1..];
++            lead(rest) && matches!(rest.as_bytes().get(2), None | Some(b'/' | b',' | b'}'))
++        })
++}
++
+ /// A glob, checked and compiled.
+ struct Pattern {
+     matcher: GlobMatcher,
+@@ -124,12 +135,17 @@ impl Pattern {
+         // nothing. A real file name with `..` in it is rare enough to lose.
+         // Brackets are read through too, so `[.][.]` counts as the `..` it is.
+         let flat: String = p.chars().filter(|c| !matches!(c, '[' | ']')).collect();
+-        let outside = p.starts_with('/') || p.contains(':') || flat.contains("//") || flat.contains("..");
++        let outside = p.starts_with('/') || names_drive(&p) || flat.contains("//") || flat.contains("..");
+         if outside {
+             return Err(format!(
+                 "{raw} is not inside the project folder — patterns are relative to it, like src/**/*.rs"
+             ));
+         }
++        // Any other colon is not a way out, just a name nothing can have: Windows
++        // does not allow one in a file name.
++        if p.contains(':') {
++            return Err(format!("{raw} has a colon in it, which Windows does not allow in a file name — nothing could match it"));
++        }
+         let p = p.trim_start_matches("./").trim_end_matches('/');
+         let p = if p.is_empty() { "**" } else { p };
+         // A folder's name means everything in it.
+@@ -840,6 +856,35 @@ mod tests {
+         }
+     }
+ 
++    /// A colon that is not a drive is no way out of the folder; it is a name no file has,
++    /// and the answer says so — a model that passes `serde_json::from_str` as a pattern
++    /// must not be told it left the project.
++    #[test]
++    fn a_colon_that_is_not_a_drive_is_refused_as_a_colon() {
++        let s = Sandbox::new("colon");
++        let ws = s.ws();
++        for bad in ["src/a:b/*.rs", "serde_json::from_str", "undo(id:", "*.rs:12", "src/{a:b,c}/*"] {
++            let err = list_in(&ws, Some(bad), None, &never).unwrap_err();
++            assert!(err.contains("colon") && !err.contains("not inside"), "{bad}: {err}");
++            assert!(err.starts_with(bad), "{bad}: {err}");
++        }
++        // The way out wins when a pattern has both.
++        for bad in ["C:/a:b", "src/../a:b", "/a:b"] {
++            let err = list_in(&ws, Some(bad), None, &never).unwrap_err();
++            assert!(err.contains("not inside the project folder"), "{bad}: {err}");
++        }
++        assert!(validate(&ws, Some("x"), Some("src/a:b/*.rs")).unwrap_err().contains("colon"));
++        assert!(validate(&ws, Some("x"), Some("src/**/*.rs")).is_ok());
++    }
++
++    #[test]
++    fn a_drive_is_told_from_a_colon_elsewhere() {
++        assert!(names_drive("C:") && names_drive("c:/x") && names_drive(r"C:\x") && names_drive("C:x"));
++        assert!(names_drive("{C:/,x}/**") && names_drive("x/{y,D:}/*"));
++        assert!(!names_drive("src/a:b") && !names_drive("ab:c") && !names_drive("src/{a:b,c}") && !names_drive("*.rs:1"));
++        assert!(!names_drive("") && !names_drive("C"));
++    }
++
+     #[test]
+     fn a_bare_name_matches_anywhere_and_a_path_only_there() {
+         let s = Sandbox::new("names");

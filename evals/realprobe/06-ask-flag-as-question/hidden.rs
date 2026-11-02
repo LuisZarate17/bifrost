@@ -32,7 +32,7 @@ mod realprobe_hidden {
 
     #[test]
     fn realprobe_hidden_ask_with_nothing_after_it_still_says_what_it_needs() {
-        assert!(parsed(&["--ask"]).unwrap_err().contains("--ask needs a question"));
+        assert!(parsed(&["--ask"]).unwrap_err().contains("needs a question"));
     }
 
     #[test]

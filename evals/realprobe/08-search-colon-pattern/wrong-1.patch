@@ -1,0 +1,13 @@
+diff --git a/crates/bifrost-core/src/search.rs b/crates/bifrost-core/src/search.rs
+index 159d0db..2fb233c 100644
+--- a/crates/bifrost-core/src/search.rs
++++ b/crates/bifrost-core/src/search.rs
+@@ -124,7 +124,7 @@ impl Pattern {
+         // nothing. A real file name with `..` in it is rare enough to lose.
+         // Brackets are read through too, so `[.][.]` counts as the `..` it is.
+         let flat: String = p.chars().filter(|c| !matches!(c, '[' | ']')).collect();
+-        let outside = p.starts_with('/') || p.contains(':') || flat.contains("//") || flat.contains("..");
++        let outside = p.starts_with('/') || flat.contains("//") || flat.contains("..");
+         if outside {
+             return Err(format!(
+                 "{raw} is not inside the project folder — patterns are relative to it, like src/**/*.rs"

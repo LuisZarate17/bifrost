@@ -832,6 +832,107 @@ mod tests {
         assert!(!run.present("each process may commit 24 GiB, and the whole run 8 GiB together") && !run.present("12 GB in total"));
     }
 
+    /// What a person (or a model) writes for a fact, and whether the shipped regexes must accept it:
+    /// `(question id, fact index, sentence, accepted)`. From the review of the regexes: the right
+    /// phrasings they once refused, and the wrong or vague ones they once let through. A window
+    /// between two words runs across a dot (`check.rs`, `e.g.`) but not across a line.
+    const SENTENCES: &[(&str, usize, &str, bool)] = &[
+        ("08-memory-limits", 0, "Each process is limited to 8 GiB and the whole run to 24 GiB.", true),
+        ("08-memory-limits", 0, "There is an 8 GiB limit per process.", true),
+        ("08-memory-limits", 0, "An 8 GiB limit per process, and a 24 GiB limit across all processes.", true),
+        ("08-memory-limits", 0, "A process may commit at most 8 GiB.", true),
+        ("08-memory-limits", 0, "Every process may use up to 8 GiB.", true),
+        ("08-memory-limits", 0, "Processes are limited to 8 GiB each.", true),
+        ("08-memory-limits", 0, "The cap is 8 GiB, applied to each child process.", true),
+        ("08-memory-limits", 0, "PROCESS_MEMORY_LIMIT is 16 GiB", false),
+        ("08-memory-limits", 0, "each process may commit 24 GiB, and the whole run 8 GiB together", false),
+        ("08-memory-limits", 0, "The whole run may use 8 GiB, shared by all processes.", false),
+        ("08-memory-limits", 0, "The processes of a run share 8 GiB in total.", false),
+        ("08-memory-limits", 1, "A 24 GiB limit applies across all processes in the run.", true),
+        ("08-memory-limits", 1, "A 24 GiB limit across all processes.", true),
+        ("08-memory-limits", 1, "The job as a whole may use 24 GiB.", true),
+        ("08-memory-limits", 1, "24 GiB limit for the whole run", true),
+        ("08-memory-limits", 1, "RUN_MEMORY_LIMIT (24 * 1024 * 1024 * 1024)", true),
+        ("08-memory-limits", 1, "the entire run is capped at 8 GiB", false),
+        ("08-memory-limits", 1, "each process may commit 24 GiB, and the whole run 8 GiB together", false),
+        ("02-check-output-cap", 0, "It keeps up to 6 KB of the output's beginning.", true),
+        ("02-check-output-cap", 0, "The head is HEAD (6 * 1024 bytes).", true),
+        ("02-check-output-cap", 0, "It retains the first 16 KB", false),
+        ("02-check-output-cap", 0, "It keeps the first part of the output (see check.rs), 6 KB", true),
+        ("02-check-output-cap", 1, "The last 2 KiB are kept", true),
+        ("02-check-output-cap", 1, "TAIL = 2 * 1024", true),
+        ("02-check-output-cap", 2, "A marker `[… N bytes cut …]` is inserted", true),
+        ("02-check-output-cap", 2, "The middle is replaced by a notice saying how many bytes were omitted", true),
+        ("10-compaction", 2, "It stops when the estimate is within the budget", false),
+        ("10-compaction", 2, "The BUDGET is checked on every pass", false),
+        ("10-compaction", 2, "BUDGET = 0.75", true),
+        ("10-compaction", 2, "until the prompt fits in 75% of num_ctx", true),
+        ("10-compaction", 2, "up to three quarters of the context window", true),
+        ("10-compaction", 2, "it targets 0.75 of the context", true),
+        ("10-compaction", 3, "the system prompt and user messages are never touched", true),
+        ("10-compaction", 3, "Never touched: system prompt, user messages, last message", true),
+        ("10-compaction", 3, "It never modifies the system prompt, the user's messages or the last message", true),
+        ("12-malformed-tool-call", 0, "The request is retried with the same parameters", false),
+        ("12-malformed-tool-call", 0, "It asks again through the raw /api/generate endpoint", true),
+        ("12-malformed-tool-call", 2, "it returns an invalid_tool_call result to the model", true),
+        ("12-malformed-tool-call", 2, "the error message is sent back to the model so it can retry", true),
+        ("05-undo-backups", 0, r"Backups go in %APPDATA%\bifrost\backups", true),
+        ("05-undo-backups", 0, "They are stored in the backups directory under the data directory", true),
+        ("05-undo-backups", 0, "Backups are in a folder called backups next to the config", false),
+        ("04-claude-check-scope", 3, "The prompt is piped to claude's standard input", true),
+        ("04-claude-check-scope", 3, "the prompt is passed via stdin", true),
+        ("04-claude-check-scope", 2, "It runs in a temporary directory", true),
+        ("04-claude-check-scope", 2, "Run in an empty temp folder", true),
+        ("07-unattended-policy", 0, "The policy is unattended::decide in agent/unattended.rs", true),
+        ("07-unattended-policy", 0, "decide() in unattended.rs", true),
+        ("07-unattended-policy", 0, "Hugin runs unattended, asking nobody", false),
+        ("07-unattended-policy", 3, "Shell commands such as run_command are always denied.", true),
+        ("07-unattended-policy", 3, "run_command is denied", true),
+        ("07-unattended-policy", 3, "Denied: anything else, e.g. a shell command", true),
+        ("06-scratch-copy", 0, "It makes a shallow clone", true),
+        ("06-scratch-copy", 0, "It runs git clone --depth 1 on a file:// URL", true),
+        ("06-scratch-copy", 0, "It clones the repository at HEAD", true),
+        ("06-scratch-copy", 0, "Clones are slow, so it copies the folder with robocopy", false),
+        ("06-scratch-copy", 2, "Because worktrees register themselves inside the real repository's .git folder", true),
+        ("06-scratch-copy", 2, "A worktree would add metadata to the user's repository", false),
+        ("11-coding-model-offer", 2, "the coding model has to be pulled in Ollama", true),
+        ("11-coding-model-offer", 2, "offer_for checks tags available", false),
+        ("11-coding-model-offer", 3, "it offers going back to the previous model", true),
+        ("11-coding-model-offer", 3, "switches to the model that was in use earlier", true),
+        ("11-coding-model-offer", 3, "switches to the model in use earlier", true),
+        ("03-tray-menu", 2, "Open Hugin and Open Mimir are present", true),
+        ("03-tray-menu", 2, "Open Vidar, Open Mimir, Open Hugin", true),
+        ("03-tray-menu", 3, "Launch at login", true),
+        ("09-think-setting", 2, "it only forwards think if /api/show lists thinking among the model's capabilities", true),
+        ("09-think-setting", 2, r#"If the model's capabilities contain "thinking" the value is kept"#, true),
+        ("09-think-setting", 2, "only when detail.supports_thinking is true", false),
+        ("09-think-setting", 3, "chat.rs builds the body: think false for Off", true),
+        ("09-think-setting", 3, r#"the request body gets "think": false when off"#, true),
+        ("09-think-setting", 3, "the request JSON includes the think field", false),
+        ("01-check-lookup", 1, "It is keyed by the folder path", true),
+        ("01-check-lookup", 1, "stored by workspace directory", false),
+        ("01-check-lookup", 1, "The map is keyed on the project's root", true),
+        ("01-check-lookup", 1, "The `checks` map is keyed by the workspace root_display()", true),
+        ("01-check-lookup", 2, "The key comparison is not case sensitive", true),
+        ("01-check-lookup", 2, "case-insensitively matched", true),
+        ("01-check-lookup", 2, "compared with eq_ignore_ascii_case", true),
+        ("01-check-lookup", 2, "The key is compared as it is written", false),
+    ];
+
+    /// **The regexes keep telling right from wrong:** every sentence of [`SENTENCES`].
+    #[test]
+    fn the_shipped_facts_take_the_right_sentences_and_refuse_the_wrong_ones() {
+        let qs = load_questions(&repo()).unwrap();
+        let mut bad = Vec::new();
+        for (id, n, text, accepted) in SENTENCES {
+            let q = qs.list.iter().find(|q| q.id == *id).unwrap_or_else(|| panic!("no question {id}"));
+            if q.required[*n].present(text) != *accepted {
+                bad.push(format!("{id} fact {n} ({}) should be {}: {text}", q.required[*n].name, if *accepted { "accepted" } else { "refused" }));
+            }
+        }
+        assert!(bad.is_empty(), "{} sentence(s) read wrongly:\n{}", bad.len(), bad.join("\n"));
+    }
+
     #[test]
     fn right_partly_and_wrong() {
         let q = question(4);

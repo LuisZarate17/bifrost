@@ -1,0 +1,24 @@
+diff --git a/crates/bifrost-core/src/search.rs b/crates/bifrost-core/src/search.rs
+index 159d0db..46f582e 100644
+--- a/crates/bifrost-core/src/search.rs
++++ b/crates/bifrost-core/src/search.rs
+@@ -124,8 +124,17 @@ impl Pattern {
+         // nothing. A real file name with `..` in it is rare enough to lose.
+         // Brackets are read through too, so `[.][.]` counts as the `..` it is.
+         let flat: String = p.chars().filter(|c| !matches!(c, '[' | ']')).collect();
+-        let outside = p.starts_with('/') || p.contains(':') || flat.contains("//") || flat.contains("..");
+-        if outside {
++        let drive = p.as_bytes().get(1) == Some(&b':') && p.as_bytes()[0].is_ascii_alphabetic();
++        let drive = drive || p.contains("{C:") || p.contains("{c:");
++        if drive {
++            return Err(format!(
++                "{raw} is not inside the project folder — patterns are relative to it, like src/**/*.rs"
++            ));
++        }
++        if p.contains(':') {
++            return Err(format!("{raw} has a colon in it, which Windows does not allow in a file name — nothing could match it"));
++        }
++        if p.starts_with('/') || flat.contains("//") || flat.contains("..") {
+             return Err(format!(
+                 "{raw} is not inside the project folder — patterns are relative to it, like src/**/*.rs"
+             ));
