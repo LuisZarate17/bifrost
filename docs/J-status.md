@@ -19,8 +19,7 @@ report after each.
 | | J1b | askprobe: 12 code questions | ✅ Built · local | 6 from I5, rechecked, plus 6 new; selfcheck holds. qwen3-coder: 6 right, 5 partly, 1 wrong |
 | | J1c | Speed and memory, measured the same way for every model | ✅ Built · local | speedprobe. qwen3-coder: 33.9% on the CPU, decode 73 tok/s at 2.7k, 64 at 22k; free RAM low 4.5 GB under a cargo build |
 | | Gate J1 | The harness frozen; the bars set before any run | Practice run done 2026-11-01; waiting on your OK to lock | The bars are in [J1](results/J1-results.md) |
-| **2. Runs** | J2 | Screen: one model per session | Not started | |
-| | Gate J2 | At most two finalists | Not started | |
-| | J3 | Run of record: the baseline and the finalists | Not started | |
+| | Gate J2 | At most two finalists | ✅ Done | qwen3.6:35b-a3b and ornith-1.5:9b |
+| | J3 | Run of record: the baseline and the finalists | ⏹ Stopped by Luis 2026-11-02 06:34 | B 13/30; qwen3.6 19 of 25 run (2 false done); ornith not run — [J3](results/J3-results.md) |
 | **3. Switch** | J4 | Switch the coding model, only on a clear win | Not started | |
 | | J5 | Tuning: KV cache and context size | Not started | |
