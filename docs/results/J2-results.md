@@ -9,6 +9,7 @@ Run overnight 2026-11-01→02 on autopilot.
 |---|---|---|---|---|---|---|---|
 | **B: qwen3-coder:30b** | **4/10** | 0 | 4 / 6 / 2 | 10/10 | 10/16 / 9/16 | 73.8 / 67.5 | 33.9% |
 | gpt-oss:20b, think high | — (gate: taskprobe 4 < 7) | — | 2 / 8 / 2 | 9/10 | 4/16 / 4/16 | 167.6 / 155.8 | 0% |
+| **qwen3.6:35b-a3b** (thinks by default) | **7/10** | **3** | 6 / 6 / 0 | 10/10 | 12/16 / 11/16 | 107.9 / 111.5 | 43.1% |
 
 ## B: qwen3-coder:30b (20:02–21:03)
 
@@ -30,3 +31,17 @@ Run overnight 2026-11-01→02 on autopilot.
 - **askprobe:** 2 right, 8 partly, 2 wrong.
 - **The fastest model here:** it fits on the card entirely, with decode at 168 tok/s at 2k and
   prefill about 10,000 tok/s.
+
+## qwen3.6:35b-a3b, its own think default (22:12–23:17)
+
+- **Download:** 21 GB in about 5 minutes; digest `a7eb95c5…`. It reports completion, vision,
+  tools and thinking (on by default).
+- **realprobe 7/10**, PASS on 02, 03, 04, 06, 07, 09 and 10. **3 false dones**, where it said done
+  but was wrong: 01 and 05 (the unknown-flag case) and 08 (a colon elsewhere).
+- **askprobe:** 6 right, 6 partly, 0 wrong, the best so far.
+- **taskprobe:** 12/16 at app settings, 11/16 at t=0.
+- **2 infrastructure errors** in taskprobe (b06 and b07 at app settings; 1 at t=0): Ollama
+  returned `500 {"error":"EOF"}`, so its runner dropped the request. Not the model's code and not
+  the harness, but switching rule 4 allows at most 1 in J3, so watch it there.
+- **Speed:** decode 108–112 tok/s, about 1.5× B's, even with 43% on the CPU. Prefill about 1,950
+  tok/s.
