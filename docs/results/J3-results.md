@@ -10,7 +10,7 @@ B and Gate J2's two finalists:
 |---|---|---|---|---|---|---|
 | **B: qwen3-coder:30b** | **13** | 1 | 0 | 28 (1 error) | 9 / 10 / 5 | 155.6 |
 | qwen3.6:35b-a3b (stopped) | **19 of 25 run** | 2 | 0 | not run | not run | — |
-| ornith-1.5:9b | not run | | | | | |
+| ornith-1.5:9b (early stop) | **12 of 21 run** | 1 | 0 | not run | not run | — |
 
 ## B: qwen3-coder:30b (02:24–05:27)
 
@@ -72,3 +72,40 @@ What the data does say:
 
 **No switch was made.** J4 needs Luis's OK. The recommendation, if he wants one, is in the session
 summary.
+
+## ornith-1.5:9b (08:49–10:18), compared run for run with an early stop
+
+Run after the stop. Realprobe ran task by task, 3 runs each, the same order as
+qwen3.6. After each task, from 12 runs on, it stopped early if ornith couldn't reach 17/25 (worse),
+or led qwen3.6 by 5 or more on the same runs (better). Otherwise it stopped at 25. The digest
+matched J2.
+
+**Verdict: early stop, worse.** After 21 runs: ornith 12 PASS, qwen3.6 17 on the same runs, so it
+could no longer reach 17/25.
+
+| Task | ornith | qwen3.6 |
+|---|---|---|
+| 01 taskprobe `--help` | FAIL FAIL PASS | CORRECT-NOT-DONE, FALSE-DONE, PASS |
+| 02 `hugin --version` | PASS PASS PASS | PASS PASS PASS |
+| 03 npx/pnpm/yarn | CORRECT-NOT-DONE PASS PASS | PASS PASS PASS |
+| 04 `LoadedModel` size/digest | PASS PASS PASS | PASS PASS PASS |
+| 05 toolprobe `--help` | FAIL PASS PASS | FALSE-DONE PASS PASS |
+| 06 `--ask` flag | CORRECT-NOT-DONE, FALSE-DONE, PASS | PASS PASS PASS |
+| 07 model_settings unknown keys | FAIL FAIL FAIL | CORRECT-NOT-DONE PASS PASS |
+
+It matched qwen3.6 on tasks 02–05, then fell behind on 06 and 07, the harder multi-part changes.
+1 false done in 21 runs (qwen3.6: 2 in 25). Its runs were slow: 01 took 9–13 minutes per try.
+
+## Conclusion
+
+On real tasks in this repo, **qwen3.6:35b-a3b is the best coder tested**:
+- 19/25 (76%), against B's 13/30 (43%) and ornith's 12/21 (57%);
+- 1.5× B's decode speed;
+- the best answer record after ornith in J2: 6 right, 0 wrong.
+
+Its risks:
+- 2 false dones in 25 runs;
+- Ollama `500 EOF` errors in its J2 taskprobe.
+
+The full switching rules couldn't be applied, because taskprobe ×3 and askprobe ×2 were never run
+for it. **J4 (switching `coding_model`) waits on Luis's OK.**
