@@ -1,0 +1,15 @@
+{
+  "id": "09-empty-check-is-none",
+  "pin": "0940923",
+  "check": ["cargo", "test", "-p", "bifrost-core", "--lib"],
+  "hidden": [
+    {"kind": "append", "file": "crates/bifrost-core/src/config.rs", "src": "hidden.rs"}
+  ],
+  "hidden_count": 5,
+  "hidden_filter": "realprobe_hidden",
+  "suites": [["cargo", "test", "-p", "bifrost-core"]],
+  "wrong": [
+    {"patch": "wrong-1.patch", "why": "fixes set_check but forgets the loader half: an empty command in the file still survives a load and the next save"},
+    {"patch": "wrong-2.patch", "why": "set_check ignores an empty command instead of clearing, so the folder's old check stays"}
+  ]
+}

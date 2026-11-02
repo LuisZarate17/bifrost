@@ -1,0 +1,16 @@
+{
+  "id": "03-check-cmd-shims",
+  "pin": "0940923",
+  "check": ["cargo", "test", "-p", "hugin", "--no-fail-fast"],
+  "hidden": [
+    {"kind": "append", "file": "apps/hugin/src/print.rs", "src": "hidden.rs"}
+  ],
+  "hidden_count": 6,
+  "hidden_filter": "realprobe_hidden",
+  "suites": [["cargo", "test", "-p", "hugin"]],
+  "wrong": [
+    {"patch": "wrong-1.patch", "why": "npx, pnpm and yarn are matched case-sensitively (only npm is case-insensitive), so NPX or Pnpm stays unchanged"},
+    {"patch": "wrong-2.patch", "why": "drops one of the three: handles npx and pnpm but forgets yarn"},
+    {"patch": "wrong-3.patch", "why": "matches by prefix, so a lookalike such as npxx or yarnpkg is rewritten to npxx.cmd / yarnpkg.cmd"}
+  ]
+}

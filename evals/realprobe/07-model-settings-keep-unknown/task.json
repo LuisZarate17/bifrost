@@ -1,0 +1,15 @@
+{
+  "id": "07-model-settings-keep-unknown",
+  "pin": "0940923",
+  "check": ["cargo", "test", "-p", "bifrost-core", "--lib"],
+  "hidden": [
+    {"kind": "append", "file": "crates/bifrost-core/src/config.rs", "src": "hidden.rs"}
+  ],
+  "hidden_count": 6,
+  "hidden_filter": "realprobe_hidden",
+  "suites": [["cargo", "test", "-p", "bifrost-core"]],
+  "wrong": [
+    {"patch": "wrong-1.patch", "why": "keeps the whole entry as unknown keys, so a bad think is written back as text and a valid think is written twice"},
+    {"patch": "wrong-2.patch", "why": "keeps unknown keys only when think is valid or absent; an entry with a bad think loses its other keys"}
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "id": "01-taskprobe-help",
+  "pin": "0940923",
+  "check": ["cargo", "test", "-p", "bench", "--bin", "taskprobe", "--test", "realprobe_taskprobe_flags", "--no-fail-fast"],
+  "hidden": [
+    {"kind": "append", "file": "crates/bench/src/bin/taskprobe.rs", "src": "hidden.rs"},
+    {"kind": "file", "path": "crates/bench/tests/realprobe_taskprobe_flags.rs", "src": "hidden_cli.rs"}
+  ],
+  "hidden_count": 9,
+  "hidden_filter": "realprobe_hidden",
+  "suites": [["cargo", "test", "-p", "bench"]],
+  "wrong": [
+    {"patch": "wrong-1.patch", "why": "--help prints the usage but exits 1"},
+    {"patch": "wrong-2.patch", "why": "unknown_flag takes the value after a value flag for a flag too, so '--only -x' and '--model --bogus' are rejected"},
+    {"patch": "wrong-3.patch", "why": "the usage forgets two flags (--ops and --think)"}
+  ]
+}

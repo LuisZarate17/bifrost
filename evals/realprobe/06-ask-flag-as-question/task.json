@@ -1,0 +1,16 @@
+{
+  "id": "06-ask-flag-as-question",
+  "pin": "0940923",
+  "check": ["cargo", "test", "-p", "hugin", "--no-fail-fast"],
+  "hidden": [
+    {"kind": "append", "file": "apps/hugin/src/main.rs", "src": "hidden.rs"}
+  ],
+  "hidden_count": 5,
+  "hidden_filter": "realprobe_hidden",
+  "suites": [["cargo", "test", "-p", "hugin"]],
+  "wrong": [
+    {"patch": "wrong-1.patch", "why": "rejects every word that starts with a dash after --ask, so a question like '-5 degrees: why?' or '-x' is refused"},
+    {"patch": "wrong-2.patch", "why": "applies the same rule to -p, which the task says to leave alone (-p --json must still be the task '--json')"},
+    {"patch": "wrong-3.patch", "why": "rejects only --json, so --ask --folder, --ask --time and the rest are still taken as the question"}
+  ]
+}

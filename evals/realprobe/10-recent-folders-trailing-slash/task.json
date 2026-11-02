@@ -1,0 +1,16 @@
+{
+  "id": "10-recent-folders-trailing-slash",
+  "pin": "0940923",
+  "check": ["cargo", "test", "-p", "mimir", "--lib"],
+  "hidden": [
+    {"kind": "append", "file": "apps/mimir/src-tauri/src/lib.rs", "src": "hidden.rs"}
+  ],
+  "hidden_count": 5,
+  "hidden_filter": "realprobe_hidden",
+  "suites": [["cargo", "test", "-p", "mimir"]],
+  "wrong": [
+    {"patch": "wrong-1.patch", "why": "dedupes only when the new spelling has the trailing separator; an old entry with the slash and a new one without stays twice"},
+    {"patch": "wrong-2.patch", "why": "tidies the stored spelling (stores the trimmed text) instead of keeping the newest spelling exactly as given"},
+    {"patch": "wrong-3.patch", "why": "handles a trailing backslash only; a trailing forward slash still makes a second entry"}
+  ]
+}

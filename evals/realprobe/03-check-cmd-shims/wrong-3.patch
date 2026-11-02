@@ -1,0 +1,47 @@
+diff --git a/apps/hugin/src/print.rs b/apps/hugin/src/print.rs
+index 2357dbc..48659fc 100644
+--- a/apps/hugin/src/print.rs
++++ b/apps/hugin/src/print.rs
+@@ -128,10 +128,14 @@ pub struct Args {
+     pub trace: Option<PathBuf>,
+ }
+ 
++/// The Node tools that are batch files on Windows, which a program is not started from by name alone.
++const SHIMS: [&str; 4] = ["npm", "npx", "pnpm", "yarn"];
++
+ /// `--check`'s text as the program and arguments it runs. **It is run directly, not by a
+ /// shell**, so quotes group words and nothing else is special — which is why a pipe, `&&`, a
+ /// redirect or a variable is refused rather than passed on as an argument that would mean
+-/// nothing. `npm` is spelled `npm.cmd`, which is what Windows runs.
++/// nothing. `npm`, `npx`, `pnpm` and `yarn` (in any case) are spelled `npm.cmd`, `npx.cmd`,
++/// `pnpm.cmd` and `yarn.cmd`, which is what Windows runs.
+ pub fn parse_check(text: &str) -> Result<Vec<String>, String> {
+     let mut words: Vec<String> = Vec::new();
+     let (mut word, mut started, mut quote) = (String::new(), false, None::<char>);
+@@ -169,8 +173,9 @@ pub fn parse_check(text: &str) -> Result<Vec<String>, String> {
+     if words.is_empty() {
+         return Err("--check needs a command".to_string());
+     }
+-    if words[0].eq_ignore_ascii_case("npm") {
+-        words[0] = "npm.cmd".to_string();
++    let lower = words[0].to_ascii_lowercase();
++    if SHIMS.iter().any(|name| lower.starts_with(name)) && !lower.ends_with(".cmd") {
++        words[0] = format!("{lower}.cmd");
+     }
+     Ok(words)
+ }
+diff --git a/apps/hugin/src/print_tests.rs b/apps/hugin/src/print_tests.rs
+index 3d4b7e2..9412b44 100644
+--- a/apps/hugin/src/print_tests.rs
++++ b/apps/hugin/src/print_tests.rs
+@@ -266,6 +266,10 @@ fn a_check_is_one_program_and_its_arguments_and_quotes_group_words() {
+     // npm is a batch file on Windows.
+     assert_eq!(parse_check("npm test"), Ok(words(&["npm.cmd", "test"])));
+     assert_eq!(parse_check("NPM run build"), Ok(words(&["npm.cmd", "run", "build"])));
++    // So are the other Node tools, in any case; a name that only starts like one is not one.
++    assert_eq!(parse_check("npx tsc --noEmit"), Ok(words(&["npx.cmd", "tsc", "--noEmit"])));
++    assert_eq!(parse_check("Pnpm test"), Ok(words(&["pnpm.cmd", "test"])));
++    assert_eq!(parse_check("YARN build"), Ok(words(&["yarn.cmd", "build"])));
+ }
+ 
+ #[test]

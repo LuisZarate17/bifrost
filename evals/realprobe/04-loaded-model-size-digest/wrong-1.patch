@@ -1,0 +1,27 @@
+diff --git a/crates/bifrost-core/src/ollama.rs b/crates/bifrost-core/src/ollama.rs
+index 6722e42..ff6359c 100644
+--- a/crates/bifrost-core/src/ollama.rs
++++ b/crates/bifrost-core/src/ollama.rs
+@@ -43,9 +43,13 @@ pub struct LoadedModel {
+     pub name: Option<String>,
+     #[serde(default)]
+     pub model: Option<String>,
++    #[serde(default, rename = "size_vram")]
++    pub size: Option<u64>,
+     #[serde(default)]
+     pub size_vram: Option<u64>,
+     #[serde(default)]
++    pub digest: Option<String>,
++    #[serde(default)]
+     pub expires_at: Option<String>,
+ }
+ 
+@@ -654,6 +658,8 @@ mod tests {
+         LoadedModel {
+             name: Some("qwen3-vl:8b-instruct-q4_K_M".into()),
+             model: None,
++            size: None,
++            digest: None,
+             size_vram: None,
+             expires_at: expires_at.map(String::from),
+         }

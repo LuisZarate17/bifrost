@@ -1,0 +1,55 @@
+diff --git a/apps/hugin/src/main.rs b/apps/hugin/src/main.rs
+index 681e84e..70cfcf1 100644
+--- a/apps/hugin/src/main.rs
++++ b/apps/hugin/src/main.rs
+@@ -93,6 +93,7 @@ usage: hugin [--folder <path>] [--shell <powershell|cmd|bash>] [--line] [--launc
+                     never stops the run
+   --claude-note     print the section for Claude Code's CLAUDE.md that says when to use -p
+   --help            show this help
++  --version         print the version (also -V)
+ 
+ With -p the exit code says how it came out: 0 done; 3 not done (the check failed, the patch
+ changes existing tests, the run was cut short, or the check gave no verdict: don't apply the
+@@ -114,6 +115,8 @@ leaves. In line mode, /stop stops the turn.
+ #[derive(Debug, PartialEq)]
+ enum Cmd {
+     Help,
++    /// `--version`: print the name and version, and write nothing.
++    Version,
+     /// `-p`: one task, done unattended in a copy of the folder.
+     Print(print::Args),
+     /// `--ask`: one question about the code, answered by reading it in place.
+@@ -136,6 +139,7 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
+     while let Some(arg) = args.next() {
+         match arg.as_str() {
+             "--help" | "-h" => return Ok(Cmd::Help),
++            "--version" | "-V" => return Ok(Cmd::Version),
+             "-p" => task = Some(args.next().ok_or("-p needs a task, or - to read it from standard input")?),
+             "--ask" => question = Some(args.next().ok_or("--ask needs a question, or - to read it from standard input")?),
+             "--launch" => return Ok(Cmd::Launch),
+@@ -219,6 +223,10 @@ fn main() -> ExitCode {
+             print!("{HELP}");
+             ExitCode::SUCCESS
+         }
++        Ok(Cmd::Version) => {
++            println!("hugin {}", env!("CARGO_PKG_VERSION"));
++            ExitCode::SUCCESS
++        }
+         Ok(Cmd::Print(args)) => print::run(args),
+         Ok(Cmd::Ask(args)) => ask::run(args),
+         Ok(Cmd::ClaudeNote) => {
+@@ -319,6 +327,14 @@ mod tests_main {
+         assert_eq!(args(&["--launch"]), Ok(Cmd::Launch));
+     }
+ 
++    #[test]
++    fn version_is_asked_for_by_either_flag_and_listed_in_the_help() {
++        assert_eq!(args(&["--version"]), Ok(Cmd::Version));
++        assert_eq!(args(&["-V"]), Ok(Cmd::Version));
++        assert!(args(&["--versions"]).is_err());
++        assert!(HELP.contains("--version"));
++    }
++
+     #[test]
+     fn the_shell_flag_takes_a_name_and_nothing_else() {
+         let shell = |list: &[&str]| match args(list) {

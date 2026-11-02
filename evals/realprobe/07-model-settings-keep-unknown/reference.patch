@@ -1,0 +1,87 @@
+diff --git a/crates/bifrost-core/src/agent/round.rs b/crates/bifrost-core/src/agent/round.rs
+index ac4d046..1a248c5 100644
+--- a/crates/bifrost-core/src/agent/round.rs
++++ b/crates/bifrost-core/src/agent/round.rs
+@@ -1043,7 +1043,7 @@ mod tests {
+ 
+     /// A config with a `think` set for one model.
+     fn thinking_config(tag: &str, think: Option<Think>) -> config::Config {
+-        let model_settings = std::collections::BTreeMap::from([(tag.to_string(), config::ModelSettings { think })]);
++        let model_settings = std::collections::BTreeMap::from([(tag.to_string(), config::ModelSettings { think, ..Default::default() })]);
+         config::Config { model_settings, ..config::Config::default() }
+     }
+ 
+diff --git a/crates/bifrost-core/src/config.rs b/crates/bifrost-core/src/config.rs
+index a4e5734..3a7dadf 100644
+--- a/crates/bifrost-core/src/config.rs
++++ b/crates/bifrost-core/src/config.rs
+@@ -140,10 +140,14 @@ impl Think {
+ }
+ 
+ /// What the config says about one model. Every field is optional: unset is the model's own.
+-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
++#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+ pub struct ModelSettings {
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub think: Option<Think>,
++    /// Keys in this entry that this build does not know, kept as they were so the next save
++    /// does not drop them, like [`Config::extra`].
++    #[serde(flatten)]
++    pub extra: serde_json::Map<String, serde_json::Value>,
+ }
+ 
+ /// What the apps agree on. Extended rather than replaced as Stage G lands —
+@@ -366,7 +370,8 @@ where
+ }
+ 
+ /// `model_settings`, keeping only the entries that are a tag mapped to an object, each with
+-/// the `think` it names if that is one of the four words, else none.
++/// the `think` it names if that is one of the four words, else none, and the keys it holds that
++/// are not `think` as they were.
+ fn lenient_model_settings<'de, D>(d: D) -> Result<BTreeMap<String, ModelSettings>, D::Error>
+ where
+     D: serde::Deserializer<'de>,
+@@ -378,8 +383,10 @@ where
+     Ok(map
+         .iter()
+         .filter_map(|(tag, entry)| {
+-            let think = entry.as_object()?.get("think").and_then(|v| v.as_str()).and_then(Think::parse);
+-            Some((tag.clone(), ModelSettings { think }))
++            let entry = entry.as_object()?;
++            let think = entry.get("think").and_then(|v| v.as_str()).and_then(Think::parse);
++            let extra = entry.iter().filter(|(k, _)| k.as_str() != "think").map(|(k, v)| (k.clone(), v.clone())).collect();
++            Some((tag.clone(), ModelSettings { think, extra }))
+         })
+         .collect())
+ }
+@@ -725,7 +732,7 @@ mod tests {
+             bifrost_login_chosen: true,
+             claude_checks: true,
+             claude_command: Some(r"C:\tools\claude.exe".into()),
+-            model_settings: BTreeMap::from([("gpt-oss:20b".into(), ModelSettings { think: Some(Think::High) })]),
++            model_settings: BTreeMap::from([("gpt-oss:20b".into(), ModelSettings { think: Some(Think::High), ..Default::default() })]),
+             extra: serde_json::Map::new(),
+             unsaved: false,
+         };
+@@ -910,6 +917,21 @@ mod tests {
+         }
+     }
+ 
++    /// Keys an entry holds that this build does not know survive a load and a save, as the
++    /// top-level ones do; a `think` that is not a word is still dropped, not kept as text.
++    #[test]
++    fn unknown_keys_in_a_model_settings_entry_survive_a_round_trip() {
++        let c: Config = serde_json::from_str(
++            r#"{"model_settings":{"gpt-oss:20b":{"think":"high","temperature":0.3},"bad":{"think":"extreme","top_k":40}}}"#,
++        )
++        .unwrap();
++        assert_eq!(c.settings_for("gpt-oss:20b").and_then(|s| s.think), Some(Think::High));
++        assert_eq!(c.settings_for("bad").and_then(|s| s.think), None);
++        let saved: serde_json::Value = serde_json::to_value(&c).unwrap();
++        assert_eq!(saved["model_settings"]["gpt-oss:20b"], serde_json::json!({"think":"high","temperature":0.3}));
++        assert_eq!(saved["model_settings"]["bad"], serde_json::json!({"top_k":40}));
++    }
++
+     #[test]
+     fn a_models_settings_are_found_whatever_the_case_of_its_tag() {
+         let c: Config =

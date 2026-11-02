@@ -1,0 +1,15 @@
+{
+  "id": "04-loaded-model-size-digest",
+  "pin": "0940923",
+  "check": ["cargo", "test", "-p", "bifrost-core", "--lib"],
+  "hidden": [
+    {"kind": "append", "file": "crates/bifrost-core/src/ollama.rs", "src": "hidden.rs"}
+  ],
+  "hidden_count": 4,
+  "hidden_filter": "realprobe_hidden",
+  "suites": [["cargo", "test", "-p", "bifrost-core"]],
+  "wrong": [
+    {"patch": "wrong-1.patch", "why": "size is read from the size_vram key (the two are confused), so the whole size is wrong and size_vram is lost"},
+    {"patch": "wrong-2.patch", "why": "adds the fields but forgets the struct literal in the existing test helper, so the crate's tests do not compile"}
+  ]
+}

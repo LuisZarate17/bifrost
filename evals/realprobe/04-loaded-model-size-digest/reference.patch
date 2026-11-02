@@ -1,0 +1,44 @@
+diff --git a/crates/bifrost-core/src/ollama.rs b/crates/bifrost-core/src/ollama.rs
+index 6722e42..f796e16 100644
+--- a/crates/bifrost-core/src/ollama.rs
++++ b/crates/bifrost-core/src/ollama.rs
+@@ -43,8 +43,14 @@ pub struct LoadedModel {
+     pub name: Option<String>,
+     #[serde(default)]
+     pub model: Option<String>,
++    /// The model's whole size in bytes, in memory or out of it (`size_vram` is the part on the GPU).
++    #[serde(default)]
++    pub size: Option<u64>,
+     #[serde(default)]
+     pub size_vram: Option<u64>,
++    /// The hash Ollama names the model's files by.
++    #[serde(default)]
++    pub digest: Option<String>,
+     #[serde(default)]
+     pub expires_at: Option<String>,
+ }
+@@ -654,11 +660,24 @@ mod tests {
+         LoadedModel {
+             name: Some("qwen3-vl:8b-instruct-q4_K_M".into()),
+             model: None,
++            size: None,
+             size_vram: None,
++            digest: None,
+             expires_at: expires_at.map(String::from),
+         }
+     }
+ 
++    #[test]
++    fn size_and_digest_are_read_when_ps_has_them_and_none_when_it_does_not() {
++        let with: PsResponse = serde_json::from_str(
++            r#"{"models":[{"name":"m:1","model":"m:1","size":6591830464,"size_vram":5333539264,"digest":"abc123","expires_at":"2026-11-01T10:00:00Z"}]}"#,
++        )
++        .unwrap();
++        assert_eq!((with.models[0].size, with.models[0].digest.as_deref()), (Some(6591830464), Some("abc123")));
++        let without: PsResponse = serde_json::from_str(r#"{"models":[{"name":"m:1","size_vram":1}]}"#).unwrap();
++        assert_eq!((without.models[0].size, without.models[0].digest.clone()), (None, None));
++    }
++
+     #[test]
+     fn a_pin_is_an_expiry_centuries_out() {
+         // Both read from /api/ps on 2026-09-27: after `load`, and after a chat.

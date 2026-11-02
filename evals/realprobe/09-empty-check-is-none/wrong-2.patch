@@ -1,0 +1,58 @@
+diff --git a/crates/bifrost-core/src/config.rs b/crates/bifrost-core/src/config.rs
+index a4e5734..58a5ef2 100644
+--- a/crates/bifrost-core/src/config.rs
++++ b/crates/bifrost-core/src/config.rs
+@@ -343,7 +343,8 @@ where
+     })
+ }
+ 
+-/// `checks`, keeping only entries that are a folder mapped to a list of strings.
++/// `checks`, keeping only entries that are a folder mapped to a non-empty list of strings: an
++/// empty command is no command, and is not kept to be written back.
+ fn lenient_checks<'de, D>(d: D) -> Result<BTreeMap<String, Vec<String>>, D::Error>
+ where
+     D: serde::Deserializer<'de>,
+@@ -360,6 +361,9 @@ where
+                 .iter()
+                 .map(|a| a.as_str().map(str::to_string))
+                 .collect::<Option<_>>()?;
++            if argv.is_empty() {
++                return None;
++            }
+             Some((folder.clone(), argv))
+         })
+         .collect())
+@@ -406,8 +410,11 @@ impl Config {
+     }
+ 
+     /// Set or clear this folder's check, replacing any entry that differs only
+-    /// in case.
++    /// in case. An empty command clears it, like `None`.
+     pub fn set_check(&mut self, root: &str, argv: Option<Vec<String>>) {
++        if argv.as_ref().is_some_and(|argv| argv.is_empty()) {
++            return;
++        }
+         self.checks.retain(|k, _| !k.eq_ignore_ascii_case(root));
+         if let Some(argv) = argv {
+             self.checks.insert(root.to_string(), argv);
+@@ -792,6 +799,20 @@ mod tests {
+         assert_eq!(c.check_for(r"C:\x"), None);
+     }
+ 
++    /// An empty command is not kept at all: setting one clears the folder's check, and a hand-edited
++    /// `"C:\\x": []` is gone on load, so the next save does not write it back.
++    #[test]
++    fn an_empty_command_is_cleared_when_set_and_dropped_when_loaded() {
++        let mut c = Config::default();
++        c.set_check(r"C:\x", Some(vec!["cargo".into(), "check".into()]));
++        c.set_check(r"c:\X", Some(vec![]));
++        assert!(c.checks.is_empty());
++        let c: Config = serde_json::from_str(r#"{"checks":{"C:\\x":[],"C:\\y":["cargo","test"]}}"#).unwrap();
++        assert_eq!(c.checks.len(), 1);
++        assert!(c.check_for(r"C:\y").is_some());
++        assert!(!serde_json::to_string(&c).unwrap().contains(r"C:\\x"));
++    }
++
+     #[test]
+     fn a_missing_ask_every_call_is_off() {
+         let c: Config = serde_json::from_str(r#"{"model":"x"}"#).unwrap();

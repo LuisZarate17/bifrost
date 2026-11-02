@@ -1,0 +1,75 @@
+diff --git a/crates/bench/src/bin/toolprobe.rs b/crates/bench/src/bin/toolprobe.rs
+index d87b39d..1a31d67 100644
+--- a/crates/bench/src/bin/toolprobe.rs
++++ b/crates/bench/src/bin/toolprobe.rs
+@@ -68,8 +68,48 @@ fn any(_: &serde_json::Value) -> bool {
+     true
+ }
+ 
++/// The flags that take the word after them as their value.
++const VALUE_FLAGS: [&str; 3] = ["--model", "--think", "--recover"];
++
++/// The flags that stand alone.
++const PLAIN_FLAGS: [&str; 2] = ["--help", "-h"];
++
++const USAGE: &str = "\
++usage: toolprobe [flags]
++
++  --model <tag>    the model to ask (default: the config's)
++  --think <level>  off, low, medium or high (default: the model's own)
++  --recover        go through the app's own path: native, then the raw retry
++  --help, -h       show this help
++";
++
++/// The first argument that starts with `-` and is not a flag toolprobe knows, if any. The word
++/// right after a flag that takes a value is that value, whatever it starts with.
++fn unknown_flag(args: &[String]) -> Option<String> {
++    let mut i = 0;
++    while i < args.len() {
++        let a = args[i].as_str();
++        if VALUE_FLAGS.contains(&a) {
++            i += 2;
++        } else if a.starts_with('-') && !PLAIN_FLAGS.contains(&a) {
++            return Some(a.to_string());
++        } else {
++            i += 1;
++        }
++    }
++    None
++}
++
+ fn main() {
+     let args: Vec<String> = std::env::args().skip(1).collect();
++    if let Some(bad) = unknown_flag(&args) {
++        eprintln!("unknown flag: {bad}\n\n{USAGE}");
++        std::process::exit(2);
++    }
++    if args.iter().any(|a| a == "--help" || a == "-h") {
++        print!("{USAGE}");
++        std::process::exit(0);
++    }
+     let cfg = config::load();
+     let model = match args.iter().position(|a| a == "--model") {
+         Some(i) => args.get(i + 1).cloned().unwrap_or(cfg.model),
+@@ -226,3 +266,21 @@ fn main() {
+     }
+     println!("\n  pass rate: {:.0}%", 100.0 * correct as f64 / total as f64);
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn words(list: &[&str]) -> Vec<String> {
++        list.iter().map(|s| s.to_string()).collect()
++    }
++
++    #[test]
++    fn an_unknown_flag_is_found_and_a_value_is_not_taken_for_one() {
++        assert_eq!(unknown_flag(&words(&[])), None);
++        assert_eq!(unknown_flag(&words(&["--model", "x", "--think", "high", "--recover", "-h"])), None);
++        assert_eq!(unknown_flag(&words(&["--model", "x", "--bogus", "--nope"])), Some("--bogus".into()));
++        assert_eq!(unknown_flag(&words(&["--model", "-x"])), None, "the word after a value flag is its value");
++        assert_eq!(unknown_flag(&words(&["--model=x"])), Some("--model=x".into()));
++    }
++}

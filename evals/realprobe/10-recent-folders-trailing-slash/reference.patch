@@ -1,0 +1,59 @@
+diff --git a/apps/mimir/src-tauri/src/lib.rs b/apps/mimir/src-tauri/src/lib.rs
+index dbca660..d65a502 100644
+--- a/apps/mimir/src-tauri/src/lib.rs
++++ b/apps/mimir/src-tauri/src/lib.rs
+@@ -863,9 +863,18 @@ async fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<Folder>,
+ /// How many folders the new-chat screen offers again.
+ const RECENT_FOLDERS: usize = 5;
+ 
+-/// Put a picked folder at the front of the recent list, once.
++/// Whether two recent-folder entries name the same folder: the same text in any case, not counting
++/// a trailing `\` or `/` (`C:\work` and `C:\work\` are one folder).
++fn same_recent_folder(a: &str, b: &str) -> bool {
++    let bare = |p: &str| p.trim_end_matches(['\\', '/']).to_string();
++    bare(a).eq_ignore_ascii_case(&bare(b))
++}
++
++/// Put a picked folder at the front of the recent list, once. A folder already there that
++/// differs only in case or a trailing `\` or `/` is the same folder: it is replaced, and the new
++/// spelling is the one kept.
+ fn remember(cfg: &mut config::Config, root: &str) {
+-    cfg.recent_workspaces.retain(|p| !p.eq_ignore_ascii_case(root));
++    cfg.recent_workspaces.retain(|p| !same_recent_folder(p, root));
+     cfg.recent_workspaces.insert(0, root.to_string());
+     cfg.recent_workspaces.truncate(RECENT_FOLDERS);
+ }
+@@ -1359,6 +1368,33 @@ pub fn run() {
+ mod tests {
+     use super::*;
+ 
++    fn recent(cfg: &config::Config) -> Vec<&str> {
++        cfg.recent_workspaces.iter().map(String::as_str).collect()
++    }
++
++    /// `C:\work` and `C:\work\` are one folder in the recent list, whichever was picked first, and
++    /// the newest spelling is the one kept, newest first, within the cap.
++    #[test]
++    fn a_trailing_separator_does_not_make_a_second_recent_folder() {
++        let mut cfg = config::Config::default();
++        remember(&mut cfg, r"C:\work");
++        remember(&mut cfg, r"C:\other");
++        remember(&mut cfg, r"C:\work\");
++        assert_eq!(recent(&cfg), [r"C:\work\", r"C:\other"]);
++        remember(&mut cfg, r"c:\OTHER/");
++        remember(&mut cfg, r"C:\work");
++        assert_eq!(recent(&cfg), [r"C:\work", r"c:\OTHER/"]);
++        // A folder with a longer name, or deeper in the same one, is another folder.
++        remember(&mut cfg, r"C:\work2");
++        remember(&mut cfg, r"C:\work\sub");
++        assert_eq!(cfg.recent_workspaces.len(), 4);
++        for i in 0..8 {
++            remember(&mut cfg, &format!(r"C:\f{i}\"));
++        }
++        assert_eq!(cfg.recent_workspaces.len(), RECENT_FOLDERS);
++        assert_eq!(cfg.recent_workspaces[0], r"C:\f7\");
++    }
++
+     #[test]
+     fn undoing_a_turn_of_more_than_the_limit_is_refused_before_anything_runs() {
+         let ids: Vec<String> = (0..=MAX_TURN_UNDO).map(|i| format!("{i:x}")).collect();

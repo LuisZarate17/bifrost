@@ -1,0 +1,40 @@
+diff --git a/apps/hugin/src/main.rs b/apps/hugin/src/main.rs
+index 681e84e..3742071 100644
+--- a/apps/hugin/src/main.rs
++++ b/apps/hugin/src/main.rs
+@@ -137,7 +137,7 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
+         match arg.as_str() {
+             "--help" | "-h" => return Ok(Cmd::Help),
+             "-p" => task = Some(args.next().ok_or("-p needs a task, or - to read it from standard input")?),
+-            "--ask" => question = Some(args.next().ok_or("--ask needs a question, or - to read it from standard input")?),
++            "--ask" => question = Some(ask_question(args.next())?),
+             "--launch" => return Ok(Cmd::Launch),
+             "--line" => line = true,
+             "--json" => json = true,
+@@ -198,6 +198,16 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
+     Ok(Cmd::Print(print::Args { task, check, json, folder, time, model, trace }))
+ }
+ 
++/// `--ask`'s question: the next word, which is not a flag. `--ask --json` has no question, and
++/// asking the model "--json" is not what was meant; a question that is a single dash is read from
++/// standard input, and one that starts with a single dash is still a question.
++fn ask_question(next: Option<String>) -> Result<String, String> {
++    match next {
++        Some(question) if question != "--json" => Ok(question),
++        _ => Err("--ask needs a question, or - to read it from standard input".to_string()),
++    }
++}
++
+ /// `--model`'s tag: anything Ollama could name, but not nothing.
+ fn parse_model(tag: &str) -> Result<String, String> {
+     let tag = tag.trim();
+@@ -400,6 +410,9 @@ mod tests_main {
+     #[test]
+     fn ask_refuses_what_it_cannot_do_and_says_so() {
+         assert!(args(&["--ask"]).unwrap_err().contains("needs a question"));
++        // A flag where the question should be is no question; a dash, or one dash and words, is.
++        assert!(args(&["--ask", "--json"]).unwrap_err().contains("--ask needs a question"));
++        assert_eq!(asked(&["--ask", "-5 degrees: why?"]).question, ask::Question::Text("-5 degrees: why?".into()));
+         assert!(args(&["-p", "x", "--ask", "y"]).unwrap_err().contains("two ways to run Hugin"));
+         assert!(args(&["--ask", "y", "-p", "x"]).unwrap_err().contains("two ways to run Hugin"));
+         assert!(args(&["--ask", "q", "--check", "cargo test"]).unwrap_err().contains("--check goes with -p"));

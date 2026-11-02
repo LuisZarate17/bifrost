@@ -1,0 +1,16 @@
+{
+  "id": "02-hugin-version",
+  "pin": "0940923",
+  "check": ["cargo", "test", "-p", "hugin", "--no-fail-fast"],
+  "hidden": [
+    {"kind": "file", "path": "apps/hugin/tests/realprobe_hugin_version.rs", "src": "hidden.rs"}
+  ],
+  "hidden_count": 4,
+  "hidden_filter": "realprobe_hidden",
+  "suites": [["cargo", "test", "-p", "hugin"]],
+  "wrong": [
+    {"patch": "wrong-1.patch", "why": "only --version is parsed; the short -V is forgotten (still an unknown argument, exit 2)"},
+    {"patch": "wrong-2.patch", "why": "wrong output format: prints 'hugin v0.1.0' instead of 'hugin 0.1.0'"},
+    {"patch": "wrong-3.patch", "why": "the flag works but the help does not list --version"}
+  ]
+}

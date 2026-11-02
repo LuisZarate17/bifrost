@@ -1,0 +1,17 @@
+{
+  "id": "05-toolprobe-help",
+  "pin": "0940923",
+  "check": ["cargo", "test", "-p", "bench", "--bin", "toolprobe", "--test", "realprobe_toolprobe_flags", "--no-fail-fast"],
+  "hidden": [
+    {"kind": "append", "file": "crates/bench/src/bin/toolprobe.rs", "src": "hidden.rs"},
+    {"kind": "file", "path": "crates/bench/tests/realprobe_toolprobe_flags.rs", "src": "hidden_cli.rs"}
+  ],
+  "hidden_count": 9,
+  "hidden_filter": "realprobe_hidden",
+  "suites": [["cargo", "test", "-p", "bench"]],
+  "wrong": [
+    {"patch": "wrong-1.patch", "why": "-h is forgotten: only --help is the help, so -h is an unknown flag (exit 2)"},
+    {"patch": "wrong-2.patch", "why": "--recover is treated as a value flag and swallows the next word, so '--recover -x' is not rejected"},
+    {"patch": "wrong-3.patch", "why": "the unknown-flag message and usage go to standard output instead of standard error"}
+  ]
+}

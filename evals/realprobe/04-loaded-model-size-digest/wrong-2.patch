@@ -1,0 +1,30 @@
+diff --git a/crates/bifrost-core/src/ollama.rs b/crates/bifrost-core/src/ollama.rs
+index 6722e42..232414b 100644
+--- a/crates/bifrost-core/src/ollama.rs
++++ b/crates/bifrost-core/src/ollama.rs
+@@ -44,8 +44,12 @@ pub struct LoadedModel {
+     #[serde(default)]
+     pub model: Option<String>,
+     #[serde(default)]
++    pub size: Option<u64>,
++    #[serde(default)]
+     pub size_vram: Option<u64>,
+     #[serde(default)]
++    pub digest: Option<String>,
++    #[serde(default)]
+     pub expires_at: Option<String>,
+ }
+ 
+@@ -659,6 +663,12 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn size_and_digest_are_read() {
++        let ps: PsResponse = serde_json::from_str(r#"{"models":[{"name":"m","size":5,"digest":"abc"}]}"#).unwrap();
++        assert_eq!((ps.models[0].size, ps.models[0].digest.as_deref()), (Some(5), Some("abc")));
++    }
++
+     #[test]
+     fn a_pin_is_an_expiry_centuries_out() {
+         // Both read from /api/ps on 2026-09-27: after `load`, and after a chat.
