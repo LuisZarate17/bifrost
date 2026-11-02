@@ -81,6 +81,16 @@ export function gpuFit(m: ModelInfo, card: CardState | null): { fits: boolean; s
   return { fits: need <= card.totalMib, spillMib: Math.max(0, need - card.totalMib) };
 }
 
+/** A "best at" chip's tooltip: what it means, and where the claim comes from. */
+function bestTitle(name: string, best: string): string {
+  if (best === "Custom") return "variant: its refusals were removed. It codes like the model it was made from.";
+  const n = name.toLowerCase();
+  if (best === "Coding" && (n.includes("qwen3.6") || n.includes("ornith"))) {
+    return "Best at: coding, measured on real tasks in this repo (Stage J bake-off).";
+  }
+  return `Best at: ${best.toLowerCase()}, going by the model's name.`;
+}
+
 /** A thin bar for "how full is the card". Shared by the dialog and the sidebar. */
 export function GpuMeter({ card, compact }: { card: CardState | null; compact?: boolean }) {
   if (!card) return null;
@@ -229,7 +239,7 @@ export function Switchboard({
                     </span>
                     <span className="caps">
                       {m.bestAt.map((b) => (
-                        <span key={b} className="cap best" title={`Best at: ${b.toLowerCase()}, going by the model's name.`}>
+                        <span key={b} className="cap best" title={bestTitle(m.name, b)}>
                           {b}
                         </span>
                       ))}

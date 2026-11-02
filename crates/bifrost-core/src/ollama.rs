@@ -479,13 +479,19 @@ impl ModelDetail {
 /// by substring, case-insensitive, so `qwen3-vl:8b-instruct-q8_0` and
 /// `Qwen3-VL:8B` read the same. "General chat" is the fallback for the plain
 /// chat families and is claimed only when nothing more specific matched.
+///
+/// Two families are here **because they were measured**, not named: Stage J's bake-off had
+/// qwen3.6 and ornith solve real coding tasks in this repo (docs/results/J3-results.md).
 pub fn best_at(tag: &str) -> Vec<&'static str> {
     let t = tag.to_lowercase();
     let any = |needles: &[&str]| needles.iter().any(|n| t.contains(n));
 
     let mut out = Vec::new();
-    if any(&["coder", "coding", "devstral", "codestral", "codellama", "starcoder"]) {
+    if any(&["coder", "coding", "devstral", "codestral", "codellama", "starcoder", "qwen3.6", "ornith"]) {
         out.push("Coding");
+    }
+    if any(&["variant", "custom"]) {
+        out.push("Custom");
     }
     if any(&["-vl", "llava", "vision", "minicpm-v", "moondream"]) {
         out.push("Screenshots");
@@ -809,11 +815,15 @@ mod tests {
         assert_eq!(best_at("Qwen3-VL:8B"), ["Screenshots"]);
         assert_eq!(best_at("llama3.1:8b"), ["General chat"]);
         assert_eq!(best_at("qwen3:8b"), ["General chat"]);
+        // Measured in Stage J's bake-off, not read off the name.
+        assert_eq!(best_at("qwen3.6:35b-a3b"), ["Coding"]);
+        assert_eq!(best_at("ornith-1.5:9b"), ["Coding"]);
+        assert_eq!(best_at("example/qwen3-coder-variant:latest"), ["Coding", "Custom"]);
     }
 
     #[test]
     fn best_at_never_guesses() {
-        assert!(best_at("ornith-1.5:9b").is_empty());
+        assert!(best_at("falcon-mamba:7b").is_empty());
         assert!(best_at("").is_empty());
         // A name that only contains a family's letters is not that family.
         assert!(best_at("dolphin3:8b").is_empty());

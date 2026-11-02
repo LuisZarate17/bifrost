@@ -21,5 +21,4 @@ report after each.
 | | Gate J1 | The harness frozen; the bars set before any run | Practice run done 2026-11-01; waiting on your OK to lock | The bars are in [J1](results/J1-results.md) |
 | | Gate J2 | At most two finalists | ✅ Done | qwen3.6:35b-a3b and ornith-1.5:9b |
 | | J3 | Run of record: the baseline and the finalists | ⏹ Stopped by Luis 2026-11-02 06:34 | B 13/30; qwen3.6 19 of 25 run (2 false done); ornith 12 of 21, stopped early as worse. qwen3.6 is the best coder tested; J4 waits on Luis — [J3](results/J3-results.md) |
-| **3. Switch** | J4 | Switch the coding model, only on a clear win | Not started | |
 | | J5 | Tuning: KV cache and context size | Not started | |
