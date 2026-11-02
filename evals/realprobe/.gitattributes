@@ -1,0 +1,2 @@
+# The patches and hidden tests apply to an LF checkout of the pin; keep them LF everywhere.
+* text eol=lf
