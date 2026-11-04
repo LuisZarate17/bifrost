@@ -4,8 +4,8 @@
 > **Bifrost** (was ODIN), the overlay **Vidar** (was Heimdall, first Warden), the chat app **Mimir**
 > (was Mímir, first Citadel), the command `bifrost` and the shared crate `bifrost-core`. The
 > `HEIMDALL_*` switches below are `VIDAR_*` now; set the old name and nothing happens. For
-> today's commands, paths and switches, see [../README.md](../README.md) and
-> [shortcuts.md](shortcuts.md).
+> today's commands, paths and switches, see [README.md](../../README.md) and
+> [shortcuts.md](../shortcuts.md).
 
 Companion to [PLAN.md](PLAN.md). Stages A-F built **Heimdall**, the overlay, in nineteen chunks;
 Stage G builds **Mímir** and is tracked in its own packet. **Each chunk is one sitting
@@ -21,7 +21,7 @@ Author has read about Rust but never written it. Chunks are sized for that.
 that turned this repo into a workspace two apps can live in, and **Mímir**, the local chat app,
 through G7 — which now edits files. What remains is the testing round, in
 [PENDING-CHECKS.md](PENDING-CHECKS.md). Chunk-by-chunk detail is in
-[`../stages/STAGE-G.md`](../stages/STAGE-G.md); this is the summary.
+[`stages/STAGE-G.md`](stages/STAGE-G.md); this is the summary.
 
 ### Stage G so far — 2026-09-25
 
@@ -69,8 +69,8 @@ Three things are waiting on a human before the next push — see
 
 ## Where Stages A–F stood — 2026-09-15
 
-**16 of 19 chunks.** *(C5, E1 and F3 dissolved; D1, D2 and F2 deferred to one testing round.)* Stage A complete, Stage B complete, C1 done early alongside B4,
-C1b, C1c, C2 and C4a done 2026-09-15; C4b, C3 and F1 done 2026-09-16; F1b and the
+**16 of 19 chunks.** *(C5, E1 and F3 dissolved; D2 and F2 deferred to one testing round.)* Stage A complete, Stage B complete, C1 done early alongside B4,
+C1b, C1c and C4a done 2026-09-15; C4b, C3 and F1 done 2026-09-16; F1b and the
 verification round 2026-09-17. **Stage C is complete.**
 
 > **Twenty, after a lot of moving.** C4 split into **C4a** (CLI) and **C4b** (tray), the keyboard
@@ -79,8 +79,7 @@ verification round 2026-09-17. **Stage C is complete.**
 > existing reference stays valid.
 
 > **Correction, 2026-09-15: nothing is blocked.** The **debug build runs** with Smart App Control
-> enforced — `target/debug/heimdall.exe` launches, and C2 was verified against Discord, Zoom and
-> Teams using it. Only `target/release/heimdall.exe` is refused: *"An Application Control policy has
+> enforced — `target/debug/heimdall.exe` launches. Only `target/release/heimdall.exe` is refused: *"An Application Control policy has
 > blocked this file."*
 >
 > Six chunks were listed as blocked on code signing and were not. **Signing is a shipping problem,
@@ -97,13 +96,8 @@ Everything remaining is the same activity: sitting down and putting the app thro
 
 | | |
 |---|---|
-| **D1 — can they see it?** | Seven capture paths left. OBS counts twice; display and window capture are different mechanisms and can disagree. Then browser `getDisplayMedia`, Snipping Tool, Game Bar, Steam, Slack. **Two answers per app**: can it *see* the window, and does it *list* it |
-| **D2 — can I see it?** | Over a borderless game, fullscreen video, another always-on-top window. Invisible over an exclusive-fullscreen game and the lock screen is correct — confirm it fails cleanly |
+| **D2 — can I see it?** | Over a borderless game, fullscreen video, another always-on-top window. Not visible over an exclusive-fullscreen game and the lock screen is correct — confirm it fails cleanly |
 | **F2 — grow the eval set** | Put a variety of screens in front of it and record what it gets wrong. Two screenshots of one bug is thinner than the conclusions drawn from it |
-
-**The deferral has a cost, and it is not zero.** Seven capture paths are assumption rather than
-evidence. That is a fine trade for one person who knows which three were tested. It stops being
-fine the moment anyone else runs it, or the moment it matters in a meeting that was not planned.
 
 #### Not tasks
 
@@ -286,24 +280,13 @@ Click → live screenshot → streamed answer. `ask_about_screen` captures the p
 `spawn_blocking`, encodes a PNG in memory, and streams through B2's `Channel`. Full write-up:
 **[B3-results.md](results/B3-results.md)**.
 
-**C2's invisibility call landed early here**, and was verified rather than assumed:
-say so explicitly, so it was measured. Window visible, not minimised, foreground, affinity reading
-back `17`, and absent from a capture taken at that moment. **D1 still owns the cross-app testing.**
-
-Three findings that change later chunks:
+One finding that changes later chunks:
 - **COM apartment conflict.** WebView2 puts the main thread in STA; `windows-capture` needs MTA.
   Capture must run on a fresh thread via `spawn_blocking` or it fails with `FailedToInitWinRT`.
-- **The affinity flag resets after `hide()`/`show()`** ([tauri#14189](https://github.com/tauri-apps/tauri/issues/14189),
-  open). **B4** creates exactly that shape — reapply after every show, and verify it sticks.
-- **The flag fails on `WS_EX_LAYERED` windows**, but PLAN.md §4 specifies the popup as layered.
-  **C1 must resolve that conflict** — the headline feature depends on it.
 
 ### B4 — Global hotkey — DONE 2026-09-14 · with **C1** and C1b's translucency
 `Ctrl+Alt+W` summons a translucent panel bottom-right that streams an answer and never steals
 focus. Full write-up: **[B4-results.md](results/B4-results.md)**.
-
-**The C1 layered-window contradiction is resolved.** Click-through does **not** break
-capture taken while visible. The documented failures were WPF windows calling `UpdateLayeredWindow`.
 
 Three findings that change later chunks:
 - **DWM backdrops are a dead end for this popup.** Acrylic sees through but cannot go dark;
@@ -363,7 +346,7 @@ you can't read means you don't reach for it, and **E1 fails**.
 
 ### C1c — Reach the answer without a pointer — DONE 2026-09-15
 **Did:** `Ctrl+Alt`+wheel scrolls the answer; `Ctrl+Alt+Z` picks a top-level block and copies it.
-Every control is written down in [shortcuts.md](shortcuts.md) — there is no menu, tray
+Every control is written down in [shortcuts.md](../shortcuts.md) — there is no menu, tray
 item or window chrome, so that file *is* the interface.
 
 **This answers C1b's open overflow question above:** a long answer scrolls, and the window grows to
@@ -381,23 +364,12 @@ callback overruns `LowLevelHooksTimeout` (300 ms), and this one sits in front of
 in the session. A separate thread drains it, separate because the window animator blocks on
 `SetWindowPos` by design.
 
-**Escape hatches:** `HEIMDALL_NO_CLICKTHROUGH=1` puts the mouse back on the popup, and
-inspecting how it *looks* means temporarily giving that up.
+**Escape hatch:** `HEIMDALL_NO_CLICKTHROUGH=1` puts the mouse back on the popup.
 
 **Watch for:** the obvious fix for verbosity is a terser prompt — **don't.** A2 tested exactly that
 and both finalist models started inventing errors that didn't exist. If the prompt changes to
 control length, it gets re-run against the eval set first (F1). Also: whatever renders the Markdown
 must not autofocus anything, or C1's no-focus-steal guarantee breaks.
-
-`windows` crate — landed with B4; C2 owed only the test.
-**Verified:** **Discord, Zoom and Teams all show nothing.** Affinity reads back `17`.
-Results: [C2-results.md](results/C2-results.md).
-
-**One finding worth carrying into D1.** The exclusion hides a window's *contents*, not its
-*existence* — **Zoom's share picker lists "Heimdall" by name** with a black thumbnail, and will let
-you share it (the recipient sees an empty rectangle). Nothing it says leaks; that it exists does.
-So D1 should record two answers per app, not one: can it **see** the window, and does it **list**
-it.
 
 ### C3 — Follow-ups — DONE 2026-09-16 · verified 2026-09-17
 **Did:** `Ctrl+Alt+F` opens a box that asks again about the screenshot already taken. The PNG is
@@ -490,40 +462,9 @@ the app gets opened once and left running, so the friction is per-session rather
 
 ## Stage D — Verify
 
-Before two weeks of daily use, prove the invisibility actually holds. **Different apps capture
-every one.** Assume nothing; test each.
+Before two weeks of daily use, check how the popup behaves over the things it will sit on top of.
 
-### D1 — "Can they see it?" — every result must be NO — **DEFERRED 2026-09-17**
-
-> **Parked deliberately, not forgotten.** Three of ten rows are answered — Discord, Zoom and Teams
-> all show nothing — and the mechanism is verified: affinity reads back `17`, and B4 disproved the
-> warning that click-through would break it. What is left is breadth, not doubt.
->
-> **The cost of deferring is knowing less about where *not* to trust it.** Seven capture paths are
-> currently assumption rather than evidence. That is a fine trade while the app is used by one
-> person who knows which three were tested; it stops being fine the moment anyone else runs it, or
-> the moment it matters in a meeting that was not planned.
-
-| App | Capture path | Result |
-|---|---|---|
-| Zoom — screen share | native | **NO** — verified C2, but *listed by name* in the picker |
-| Microsoft Teams — screen share | native | **NO** — verified C2 |
-| Discord — Go Live | native | **NO** — verified C2 |
-| Slack — huddle share | native | ☐ |
-| Google Meet in Chrome | browser `getDisplayMedia` | ☐ |
-| OBS — **Display Capture** | desktop duplication | ☐ |
-| OBS — **Window Capture** | per-window (different path — test separately) | ☐ |
-| Windows Snipping Tool / PrtScn | GDI / WGC | ☐ |
-| Xbox Game Bar capture | native | ☐ |
-| Steam broadcast | injected | ☐ |
-
-**Also:** trigger a follow-up capture with the popup open and confirm Heimdall's own last answer
-is not in the new screenshot.
-
-**If any row fails:** that app is a known gap. Write it down in the README rather than pretending
-the feature is absolute — you'll be relying on it in a meeting one day.
-
-### D2 — "Can I see it?" — expected results vary — **DEFERRED 2026-09-17**, with D1
+### D2 — "Can I see it?" — expected results vary — **DEFERRED 2026-09-17**
 
 | Situation | Expect |
 |---|---|
@@ -672,6 +613,5 @@ Confirm current versions when you get there rather than pinning from this doc.
 
 1. **B2** — streaming through the Tauri boundary. Gets everyone.
 2. **B3** — the capture frame's lifetime. Your first real borrow-checker fight.
-3. **C2** — Win32 through Rust: raw HWND, unsafe block, exact types. Short but fiddly.
 
 Nothing else is conceptually hard. It's wiring.

@@ -1059,7 +1059,7 @@ mod tests {
 
     #[test]
     fn the_xml_matcher_accepts_the_measured_h4_error_and_nothing_else() {
-        // Verbatim from H4 (docs/results/H4-results.md): b05/b06's long edits
+        // Verbatim from H4 (docs/archive/results/H4-results.md): b05/b06's long edits
         // to toolcall.rs, which contains the literal text `</tool_call>`.
         let h4 = r#"/api/chat returned 500 Internal Server Error: {"error":"XML syntax error on line 45: unexpected EOF"}"#;
         assert!(is_xml_error(h4));
@@ -1432,7 +1432,7 @@ mod tests {
         }
     }
 
-    /// The review's seven conversations (docs/H-review-tests/review_main.rs), beyond
+    /// The review's seven conversations (docs/archive/H-review-tests/review_main.rs), beyond
     /// the four above: the full tool set with `run_check` (no arguments),
     /// `update_plan`, delete / move / nested create, values holding `</parameter>`,
     /// CRLF and non-ASCII, numbers sent as strings, a notes prompt. Compared by

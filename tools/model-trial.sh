@@ -9,7 +9,7 @@
 # tool-call probe (G0), the full task benchmark (H3, 16 tasks, 3 runs at the app's
 # sampling plus 1 at temperature 0), then remove it.
 #
-# Written for H4 (docs/results/H4-results.md). Use Git's bash, not `bash` on the
+# Written for H4 (docs/archive/results/H4-results.md). Use Git's bash, not `bash` on the
 # PATH — on this machine that is WSL's. And start it detached (Start-Process): a
 # run takes hours, longer than a tool's background task is allowed to live.
 #

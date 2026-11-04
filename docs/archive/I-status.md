@@ -1,6 +1,6 @@
 # Stage I — where it stands
 
-Every chunk and gate of [STAGE-I.md](../stages/STAGE-I.md), done or not. **Updated at the end of
+Every chunk and gate of [STAGE-I.md](stages/STAGE-I.md), done or not. **Updated at the end of
 every chunk**, alongside its results doc. Last updated 2026-10-21, after I5.
 
 **8 of 8 chunks done, plus I4b and I4c · 1 of 4 gates passed** (Gates 1 and 2 skipped,
@@ -33,5 +33,5 @@ Stage I. Until then everything stays committed locally under the old folder name
 ## Decided before the build
 
 Names, colors, badges, Hugin's behavior and the one opt-in exception to the no-cloud rule are in
-[STAGE-I.md](../stages/STAGE-I.md) under "Decisions already made", chosen between 2026-10-01 and
+[STAGE-I.md](stages/STAGE-I.md) under "Decisions already made", chosen between 2026-10-01 and
 2026-10-12. Memory, skills, background jobs and the phone link are later stages.

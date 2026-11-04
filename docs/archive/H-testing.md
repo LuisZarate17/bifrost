@@ -6,7 +6,7 @@ use of them are already tested in code, by probes and by the end-to-end scripts 
 whether the real chips, cards and keys do what they say, and how it feels.
 
 The longer reasoning lives in [PENDING-CHECKS.md](PENDING-CHECKS.md); the plan in
-[STAGE-H.md](../stages/STAGE-H.md); what each chunk measured in `docs/results/H*-results.md`.
+[STAGE-H.md](stages/STAGE-H.md); what each chunk measured in `docs/results/H*-results.md`.
 Stage G's worksheet is [G-testing.md](G-testing.md).
 
 > **Names.** Renamed 2026-10-12 at Stage I's I0: Heimdall is now **Vidar**, Mímir is **Mimir**, the

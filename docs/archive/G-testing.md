@@ -201,6 +201,7 @@ thread, rather than the chat quietly going strange.
 
 ## After this
 
+- **Vidar's own testing round** — can you see the popup over games, video and other windows — is
   [D-testing.md](D-testing.md). An afternoon of its own.
 - Tick the matching items in [PENDING-CHECKS.md](PENDING-CHECKS.md), and put anything that failed
   there with what you saw.

@@ -481,7 +481,7 @@ impl ModelDetail {
 /// chat families and is claimed only when nothing more specific matched.
 ///
 /// Two families are here **because they were measured**, not named: Stage J's bake-off had
-/// qwen3.6 and ornith solve real coding tasks in this repo (docs/results/J3-results.md).
+/// qwen3.6 and ornith solve real coding tasks in this repo (docs/archive/results/J3-results.md).
 pub fn best_at(tag: &str) -> Vec<&'static str> {
     let t = tag.to_lowercase();
     let any = |needles: &[&str]| needles.iter().any(|n| t.contains(n));

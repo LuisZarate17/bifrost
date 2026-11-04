@@ -12,6 +12,7 @@ machine. Conversations, history, attachments, and eventually tool calling.
 It is a **new app in an existing workspace**, not a feature bolted onto the one already there.
 
 The existing app is **Warden**: a summoned overlay that screenshots the screen on a hotkey and
+streams an answer into a corner popup. Warden is **finished**
 (Stage C complete; `BUILD.md` says "nothing to build"). **Only G3 changes Warden**, and only to make
 it follow the model this app chooses.
 
@@ -90,7 +91,7 @@ warden/
                       ^ Warden's, at the root — this is the collision Before G0 fixes
 ```
 
-**Read [`docs/README.md`](../docs/README.md) first.** It maps every document and, more usefully,
+**Read [`docs/README.md`](../NAVIGATOR.md) first.** It maps every document and, more usefully,
 every function: which file registers the hotkey, where the capture pipeline lives, where the
 clipboard write happens. It will save you grepping.
 

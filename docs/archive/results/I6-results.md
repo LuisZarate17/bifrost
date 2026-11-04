@@ -1,7 +1,7 @@
 # I6 — Check with Claude, in Mimir
 
 Mimir can ask Claude to check a turn's changes, on a click: the one exception to Bifrost's no-cloud
-rule ([STAGE-I.md](../../stages/STAGE-I.md), Context). **Built 2026-10-17**, with I5 and Gate 2
+rule ([STAGE-I.md](../stages/STAGE-I.md), Context). **Built 2026-10-17**, with I5 and Gate 2
 skipped ("Move onto I6"); checked against the real `claude` on 2026-10-21.
 
 ## The open question, settled

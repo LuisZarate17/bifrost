@@ -4,19 +4,20 @@ Local AI tools that share one model and one machine. Nothing leaves the computer
 
 | | |
 |---|---|
+| **Vidar** | A summoned overlay. Press a hotkey, get an answer about whatever is on screen, in a corner popup. **Finished and in daily use.** Its process also carries the **Bifrost tray** — the model's switch and picker, Open Mimir, Open Hugin (Ctrl+Alt+H), Start at login. |
 | **Mimir** | The main workspace: a local chat app that reads, finds and edits code in a folder you pick, runs the folder's check, and decides which model is loaded. **Built through Stage H** |
-| **Hugin** | A coding agent in the terminal, in the spirit of Claude Code, on Mimir's engine. **Built** (I2–I5): full screen, reads, searches, edits, the folder's check and any shell command, each approved first; **Ctrl+Alt+H** opens it in the last folder, and `hugin` works in any terminal. **`hugin -p`** lets Claude Code hand it a task: it works in a throwaway copy of the folder and hands back an answer, a patch and the check's result — [docs/I-status.md](docs/I-status.md) |
+| **Hugin** | A coding agent in the terminal, in the spirit of Claude Code, on Mimir's engine. **Built** (I2–I5): full screen, reads, searches, edits, the folder's check and any shell command, each approved first; **Ctrl+Alt+H** opens it in the last folder, and `hugin` works in any terminal. **`hugin -p`** lets Claude Code hand it a task: it works in a throwaway copy of the folder and hands back an answer, a patch and the check's result — [docs/archive/I-status.md](docs/archive/I-status.md) |
 | **`bifrost`** | Vidar's pipeline from the command line, plus `warm` / `off` / `status` power control |
 
-Things with an icon get a name; things you type get a description (PLAN.md §0b). Bifrost is the
+Things with an icon get a name; things you type get a description (docs/archive/PLAN.md §0b). Bifrost is the
 bridge between them.
 
 **Status.** Stages A–C are complete — `Ctrl+Alt+W` anywhere captures the screen and streams an
 answer into the popup. What is left of the original plan is one afternoon of testing, see
-[docs/BUILD.md](docs/BUILD.md). **Stages G and H are built** — Mimir chats, edits files in a folder
+[docs/archive/BUILD.md](docs/archive/BUILD.md). **Stages G and H are built** — Mimir chats, edits files in a folder
 you pick, finds code, runs the folder's check and undoes a whole turn; Stage G's checks by hand
-still wait in [docs/G-testing.md](docs/G-testing.md). **Now: Stage I** — the rename is done, Mimir's turn loop
-is now the shared engine's, and Hugin runs on it in the terminal; see [docs/I-status.md](docs/I-status.md).
+still wait in [docs/archive/G-testing.md](docs/archive/G-testing.md). **Now: Stage I** — the rename is done, Mimir's turn loop
+is now the shared engine's, and Hugin runs on it in the terminal; see [docs/archive/I-status.md](docs/archive/I-status.md).
 
 ## The apps
 
@@ -38,7 +39,7 @@ at the root now skips both apps for exactly this reason (`default-members` in `C
 `cargo build -p mimir` would still do it, so don't.
 
 Release builds are refused by Smart App Control on this machine; debug builds usually run, and when
-one is blocked, rebuilding for a fresh hash clears it. See [docs/PLAN.md](docs/PLAN.md) §3.
+one is blocked, rebuilding for a fresh hash clears it. See [docs/archive/PLAN.md](docs/archive/PLAN.md) §3.
 
 **Every control Vidar has is in [docs/shortcuts.md](docs/shortcuts.md)** — there is no menu and no
 window chrome, so that file is the interface.
@@ -49,7 +50,7 @@ The same pipeline without the GUI in the way. It is also ahead of the app on con
 delay and a model flag for one run.
 
 The binary is `bifrost`, the project's own name — a name you type rather than one that carries an
-icon (PLAN.md §0b).
+icon (docs/archive/PLAN.md §0b).
 
 ```
 cargo build                                       # builds the crates (not the apps) into target/
@@ -77,8 +78,7 @@ exists while `odin` still holds data, nothing is moved, `bifrost` is used, and t
 
 A global hotkey triggers a full-screen capture via Windows Graphics Capture, which gets sent with a
 default prompt to a local vision model running in Ollama. The answer streams into a small popup
-pinned to the bottom-right corner. That popup is excluded from screen and window capture
-follow-up screenshot.
+pinned to the bottom-right corner. The popup never takes focus.
 
 The model holds **~8 GB** while resident, so `warm` and `off` are explicit rather than on a timer —
 a timeout decides for you and leaves you guessing whether the next press is instant or a stall.
@@ -104,25 +104,24 @@ bifrost/
 │   └── bench/          benchmark harness, plus the tool-call and file-edit probes
 ├── evals/              rubric, fixtures, saved runs
 ├── tools/              shortcuts, icon, the end-to-end tests that drive Mimir, the practice folder
-├── docs/               plan, build log, shortcuts, results  →  docs/README.md
-└── stages/             execution packets — paste one into a fresh chat
+└── docs/               shortcuts, how it was built, and the raw development log (docs/archive/)
 ```
 
 *(Restructured at Before-G0 step 1 of Stage G, renamed at I0 of Stage I. The project is
 **Bifrost** (was ODIN); **Vidar** is the overlay (was Heimdall) and **Mimir** the chat app (was
-Mímir). `stages/` and `docs/results/` keep the names they were written with — PLAN.md §0b.)*
+Mímir). `docs/archive/` keeps the names it was written with — PLAN.md §0b.)*
 
 ## Docs
 
-**[docs/README.md](docs/README.md) is the index** — it says what each document is and when to reach
+**[docs/archive/NAVIGATOR.md](docs/archive/NAVIGATOR.md) is the index to the development log** — it says what each document is and when to reach
 for it. The four you will actually open:
 
 | | |
 |---|---|
 | [docs/shortcuts.md](docs/shortcuts.md) | Every control. This is the interface |
-| [docs/PLAN.md](docs/PLAN.md) | Scope, the machine, decisions already closed, hard rules |
-| [docs/BUILD.md](docs/BUILD.md) | The build plan, chunk by chunk, and what is left |
-| [stages/STAGE-I.md](stages/STAGE-I.md) | The next thing — one engine, and Hugin in the terminal |
+| [docs/archive/PLAN.md](docs/archive/PLAN.md) | Scope, the machine, decisions already closed, hard rules |
+| [docs/archive/BUILD.md](docs/archive/BUILD.md) | The build plan, chunk by chunk, and what is left |
+| [docs/archive/stages/STAGE-I.md](docs/archive/stages/STAGE-I.md) | The next thing — one engine, and Hugin in the terminal |
 
 ## Stack
 

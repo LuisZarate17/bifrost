@@ -1,6 +1,6 @@
 # Stage J — where it stands
 
-Every chunk and gate of [STAGE-J.md](../stages/STAGE-J.md), done or not. **Updated at the end of
+Every chunk and gate of [STAGE-J.md](stages/STAGE-J.md), done or not. **Updated at the end of
 every chunk.** Last updated 2026-11-01, when Gate J0 closed Phase 0.
 
 **Started 2026-10-25.** One chunk at a time; in the runs, one model per session, with a

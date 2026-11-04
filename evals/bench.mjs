@@ -11,7 +11,7 @@
 //       [--warmup-image path.png] [--prompt-file prompt.txt] [--out evals/out] \
 //       [--gpu-trace] [--mode matrix|gate] [--no-warmup]
 //
-// See PLAN.md / BUILD.md (F1) for the motivation and STAGE-A.md for the A2 write-up this feeds.
+// See docs/archive/PLAN.md / BUILD.md (F1) for the motivation and docs/archive/stages/STAGE-A.md for the A2 write-up this feeds.
 //
 // IMPORTANT — prompt-cache correctness (measured empirically on this machine, 2026-09-08):
 // Ollama caches prefill across successive /api/generate calls to the SAME loaded model whenever

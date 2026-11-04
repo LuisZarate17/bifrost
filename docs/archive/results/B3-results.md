@@ -1,7 +1,6 @@
 # B3 — Button-triggered capture: results
 
-**Completed 2026-09-13.** Chunk B3 of [BUILD.md](../BUILD.md), plus C2's invisibility call pulled
-forward.
+**Completed 2026-09-13.** Chunk B3 of [BUILD.md](../BUILD.md).
 
 ## What was built
 
@@ -41,58 +40,6 @@ would park a tokio **worker** — the same small pool B2's streaming command use
 > **This was the chunk's one genuine unknown.** No source confirmed `windows-capture` + Tauri 2 +
 > `spawn_blocking` working end to end; the plan said so plainly and called the first run the real
 > test. **It worked.** No `FailedToInitWinRT`, capture on the first click.
-
----
-
-
-Research could only call this *"inferred, not verbatim-confirmed"*: Microsoft's
-public operating system features and APIs"* — **without ever naming Windows.Graphics.Capture**,
-which is our capture path.
-
-So it was measured. With the window in this state, read from Windows at capture time:
-
-```
-IsWindowVisible : True
-IsIconic        : False
-Rect on screen  : L=26 T=26 R=842 B=665
-Is foreground   : True
-```
-
-A WGC capture taken at that moment contains **VS Code at those exact coordinates and no trace of
-Warden**. Not a black rectangle — absent, with what was behind it showing through.
-
-**A first attempt at this proved nothing and was discarded.** Warden was absent from that capture
-too, but VS Code was maximised, so the window could simply have been behind it. Bringing Warden to
-the foreground first, and reading back `IsWindowVisible`/`IsIconic`/`GetForegroundWindow`, is what
-made the result mean anything.
-
-It also holds **from inside the app**: the model's answer describes VS Code, the Claude Code
-session and `main.rs`, and never mentions a small window with a "What's on my screen?" button.
-
-the latter removes the window entirely (Windows 10 2004 / build 19041+). Only the latter is
-genuinely invisible.
-
-**Called directly, not via Tauri's wrapper.** `tao`'s `set_content_protected` does
-invisible. Warden calls the raw API and reports the outcome:
-
----
-
-## Two problems this creates for later chunks
-
-**1. The flag resets after `hide()`/`show()` — [tauri#14189](https://github.com/tauri-apps/tauri/issues/14189), open.**
-A reporter sets content protection once in `setup()`, then toggles the window with a global
-hotkey; after the first cycle it degrades to a black rectangle. One commenter: *"after
-not helping."*
-
-**That is exactly Warden's shape once B4 lands.** Budget for reapplying after every `show()`, and
-**verify that reapplication actually sticks** rather than assuming.
-
-**2. The flag fails on `WS_EX_LAYERED` windows** —
-[Win32CaptureSample#51](https://github.com/robmikh/Win32CaptureSample/issues/51), consistent with
-the documented `ERROR_NOT_ENOUGH_MEMORY` behaviour. **PLAN.md §4 specifies the popup as topmost +
-no-activate + layered.** Those two cannot both hold. **C1 has to resolve it**, and if layering is
-required the invisibility guarantee is at risk — which would undercut the project's headline
-feature.
 
 ---
 
@@ -139,6 +86,7 @@ Two agents this chunk — the first time a chunk needed more than one.
 
 | | Agent 1 | Agent 2 |
 |---|---|---|
+| Task | WGC capture inside async Tauri | A second, parallel research task |
 | Model | Sonnet | Sonnet |
 | Spend | **116,129 tokens**, 54 calls, 9.5 min | **110,109 tokens**, 61 calls, 9.6 min |
 | Returned | ~4,500 tokens | ~4,500 tokens |
@@ -147,11 +95,6 @@ Two agents this chunk — the first time a chunk needed more than one.
 
 **Agent 1 prevented a failure that would have looked like a bug in our code.** `FailedToInitWinRT`
 from a COM apartment conflict is not something you reason your way to from a stack trace.
-
-**Agent 2's value was different: it was honest about what it could not confirm.** It said plainly
-that Microsoft never names WGC, which is what prompted measuring it rather than trusting it. It
-also surfaced tauri#14189 and the `WS_EX_LAYERED` conflict — **two problems that belong to future
-chunks**, neither of which would have surfaced until they bit.
 
 ### Running comparison
 
@@ -162,25 +105,21 @@ chunks**, neither of which would have surfaced until they bit.
 | **A4** | 1 | 73K | `reqwest` TLS change needing NASM |
 | **B1** | 1 | 85K | A scaffolder that deletes the repo |
 | **B2** | 1 | 86K | A false warning in our own docs |
-| **B3** | 2 | 226K | A COM apartment conflict, and two future-chunk landmines |
+| **B3** | 2 | 226K | A COM apartment conflict |
 
-**Six chunks, six catches.** The B3 amendment: *an agent that says "I could not confirm this" is
-doing its job* — that admission is what turned an assumption into a measurement.
+**Six chunks, six catches.**
 
 ---
 
 ## Notes and limitations
 
-1. **One call working is not the guarantee holding.** **D1** still owns testing exclusion against
-   Zoom, Teams, Discord, Slack, Meet, OBS (both paths), Snipping Tool, Game Bar and Steam. Only WGC
-   via our own crate has been verified.
-2. **Still no styling.** Replaced wholesale at C1/C1b.
-3. **The prompt is a frontend constant.** `capture/prompt.txt` does it properly for the CLI; E1
+1. **Still no styling.** Replaced wholesale at C1/C1b.
+2. **The prompt is a frontend constant.** `capture/prompt.txt` does it properly for the CLI; E1
    owns making it tunable without a rebuild.
-4. **Ollama still manual** — the A1 gap; C5 owns it.
-5. **`panic = "abort"` in release** means a stray `expect()` kills the packaged app outright. The
+3. **Ollama still manual** — the A1 gap; C5 owns it.
+4. **`panic = "abort"` in release** means a stray `expect()` kills the packaged app outright. The
    commands return `Result`, but `run()` still uses `expect`. Worth fixing before C1.
-6. **Not tested in the packaged `.exe` this chunk** — dev only. B2 established that streaming
+5. **Not tested in the packaged `.exe` this chunk** — dev only. B2 established that streaming
    behaves identically in both, but the capture path has only been exercised in dev.
 
 ---
@@ -190,6 +129,3 @@ doing its job* — that admission is what turned an assumption into a measuremen
 **B4 — global hotkey.** `Ctrl+Alt+W` via Tauri 2's global-shortcut plugin; fallback
 `Ctrl+Alt+Space`; never `Alt+Space`. Registration **fails silently** if another app owns the combo,
 so it has to fail loudly on purpose.
-
-And B4 is where **tauri#14189** starts to matter: a hotkey-toggled window is precisely the shape
-that resets the affinity flag.

@@ -103,7 +103,7 @@ pub const DEFAULT_HUGIN_SHELL: &str = "bash";
 /// `DEFAULT_MODEL`, at 32s/task. Text-only — reports no `vision` capability — so
 /// it is never the model Vidar can use, and the two cannot be resident
 /// together on this card: 18 GB plus the 6 GB vision model does not fit in 16 GB.
-/// See `docs/results/H4-results.md`.
+/// See `docs/archive/results/H4-results.md`.
 pub const DEFAULT_CODING_MODEL: &str = "qwen3-coder:30b";
 
 /// Ollama's `think` setting for a model (J0d): `off`, or how hard it reasons before it

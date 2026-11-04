@@ -1,7 +1,7 @@
 # Stage J — the model bake-off: find a local model that makes Hugin and Mimir good
 
 > **Status: started 2026-10-25; Phase 0 closed.** J0a–J0c are done and pushed. J0c+, J0d and Gate J0 are done and
-> pushed, 2026-11-01: Phase 0 is closed. Next is Phase 1. Live status: [J-status.md](../docs/J-status.md).
+> pushed, 2026-11-01: Phase 0 is closed. Next is Phase 1. Live status: [J-status.md](../J-status.md).
 
 ## TL;DR
 
@@ -100,7 +100,7 @@ it brings the server's tool-parser fixes.
 - Done when both fidelity tests pass repeatedly, and toolprobe and taskprobe propose ×1 are unchanged.
 - **Outcome (2026-10-26):** the sampling step was dropped. Both paths already sample the same way, and
   the mismatch came from `llama-server`'s prompt cache, so the test now warms up first. See
-  [J0c+-results.md](../docs/results/J0c+-results.md).
+  [J0c+-results.md](../results/J0c+-results.md).
 
 **J0c+ close-out** (set 2026-11-01). Both taskprobe attempts were stopped for low memory; the
 second scored 2/16 for code that scored 10/16.

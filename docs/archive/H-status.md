@@ -1,6 +1,6 @@
 # Stage H — where it stands
 
-Every chunk and gate of [STAGE-H.md](../stages/STAGE-H.md), done or not. **Updated at the end of
+Every chunk and gate of [STAGE-H.md](stages/STAGE-H.md), done or not. **Updated at the end of
 every chunk**, alongside its results doc. Last updated 2026-10-11, after the re-check of both review rounds.
 
 **12 of 12 chunks done · 3 of 3 gates passed. Stage H is complete.**

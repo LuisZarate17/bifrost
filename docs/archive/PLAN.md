@@ -1,7 +1,7 @@
 # Bifrost — Handoff Packet
 
-> Press one key. **Warden** looks at your screen and answers immediately, in a corner popup that
-> nobody you're screen sharing with can see. Entirely on your own machine.
+> Press one key. **Warden** looks at your screen and answers immediately, in a corner popup.
+> Entirely on your own machine.
 
 **Status:** **Stages A–C are COMPLETE** and Warden is finished and in daily use — the hotkey
 captures the screen and streams an answer into the popup. Model chosen at A2:
@@ -10,14 +10,14 @@ captures the screen and streams an answer into the popup. Model chosen at A2:
 
 **Stage H is complete and pushed** — Mimir finds code, checks its work and runs longer.
 The independent review's two rounds of fixes are done, and re-checked 2026-10-11; see [`H-status.md`](H-status.md)
-and [`../stages/STAGE-H.md`](../stages/STAGE-H.md).
+and [`stages/STAGE-H.md`](stages/STAGE-H.md).
 
 **Now: Stage I, set 2026-10-12.** I0, the rename, is done: ODIN is now **Bifrost**, Heimdall
 **Vidar**, and Mímir **Mimir** (§0b). The colors and badges (I0b) are done, and so is I1: Mimir's
 turn loop now lives in the shared crate, where the probes run it too. Gate 1 was skipped on Luis's
 word, and **Hugin** (I2), a terminal agent on that loop, is built, with shell commands (I3) and
 Ctrl+Alt+H (I4). Next: `hugin -p`, so Claude Code can hand it work (I5). See
-[`../stages/STAGE-I.md`](../stages/STAGE-I.md) and [`I-status.md`](I-status.md). The checks by
+[`stages/STAGE-I.md`](stages/STAGE-I.md) and [`I-status.md`](I-status.md). The checks by
 hand for Stage G still wait in [`PENDING-CHECKS.md`](PENDING-CHECKS.md).
 
 **Repo root:** `C:\Users\you\source\repos\odin` *(renamed from `warden` on 2026-09-25, the same
@@ -46,7 +46,7 @@ Fixed:
   *Amended once, on purpose, 2026-10-12:* Bifrost never calls the cloud on its own. The single
   exception is Stage I's **Check with Claude** button in Mimir (I6) — off by default, only on a
   click, and it says what it sends before it sends it. Claude Code calling `hugin -p` is Claude's
-  side reaching in; Hugin itself stays local. See [`../stages/STAGE-I.md`](../stages/STAGE-I.md).
+  side reaching in; Hugin itself stays local. See [`stages/STAGE-I.md`](stages/STAGE-I.md).
 
 ---
 
@@ -162,6 +162,7 @@ on what each was trying to fix — the failed ones are as informative as the win
 | GPU | RTX 5070 Ti, **16 GB** VRAM, Blackwell, compute cap 12.0, driver 610.62 |
 | CPU | Ryzen 7 9700X, 8c/16t · 31 GB RAM |
 | Display | **One monitor, 1920×1080, 100% scaling** — no DPI handling needed at all |
+| OS | Windows 11 Pro, build **26200** |
 | Machine | **Not domain-joined**, Windows Defender only — but see the Smart App Control note below |
 | Installed | Docker Desktop 4.82, Node 24.18 |
 | **Not** installed | CUDA toolkit. *(Rust 1.98.1 and Ollama 0.33.3 installed at A1.)* |
@@ -199,8 +200,7 @@ than a blocker.
 > *"This is a project-level blocker, not a build nuisance. Pinned, not solved."* That was wrong,
 > and wrong in the costly direction — it discouraged the one-command test that disproved it.
 >
-> **The debug build runs** with SAC enforced. C2 was verified against Discord, Zoom and Teams
-> using it. Only *release* builds are refused every time. When a debug binary is blocked, a
+> **The debug build runs** with SAC enforced. Only *release* builds are refused every time. When a debug binary is blocked, a
 > rebuild for a fresh hash clears it — seen repeatedly during the Stage G restructure, where
 > relinking produced a genuinely different binary from identical source.
 >
@@ -291,21 +291,6 @@ Overlay window flags: `WS_EX_TOPMOST` + `WS_EX_NOACTIVATE`, layered, no taskbar 
 
 ---
 
-## 5. The invisibility requirement
-
-its own follow-up screenshot. One Win32 call does both:
-
-```
-```
-
-**Honest limits:**
-- Nothing against a phone camera or a hardware capture card on the display output.
-- Varies by each sharing app's capture path — test the ones you actually use.
-- Tauri doesn't expose it. Call Win32 via the `windows` crate on the raw HWND.
-- Hides Warden from **your own** recordings too. Toggle off to film a demo.
-
----
-
 ## 6. Model
 
 - **Settled at A2 on 2026-09-08: `qwen3-vl:8b-instruct-q4_K_M`.** 8,151 MiB resident, 1.2 s to
@@ -381,9 +366,10 @@ Each is a place you can stop:
 3. Capture + default prompt → streamed answer, in the main window.
 4. Global hotkey triggers the above.
 5. Move the answer into a corner popup: topmost, no-activate, no focus steal.
-7. Follow-up box against the same capture.
-8. Tray icon and power control. **No launch on login** — C5 was dissolved 2026-09-14; you open Warden when you want the hotkey live, which is what §0's "summoned, never ambient" actually asks for.
+6. Follow-up box against the same capture.
+7. Tray icon and power control. **No launch on login** — C5 was dissolved 2026-09-14; you open Warden when you want the hotkey live, which is what §0's "summoned, never ambient" actually asks for.
 
+**Done when** the hotkey summons the corner popup over whatever you are doing, streams an answer, and never takes focus.
 
 **Expect the borrow checker to bite in two places:** the lifetime of the capture frame buffer,
 and moving streamed chunks across the async Tauri boundary. Both are normal; neither means the
@@ -438,8 +424,6 @@ being used, not by sounding good.)*
 
 ## 8. Known traps
 
-- **The popup captures itself.** Without the exclusion flag, a follow-up screenshot contains
-  Warden's own last answer and the model reads itself back.
 - **GDI capture returns black** on fullscreen and hardware-accelerated content. Use WGC.
 - **Ollama unloads the model** after five minutes by default, and nothing masks the cold start
   here. Handled by the explicit power control in §6b — not by a longer timeout.

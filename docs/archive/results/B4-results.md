@@ -14,8 +14,7 @@ about your screen, and stays until you press it again. Your cursor never leaves 
 | Position | Bottom-right of the **work area**, and it follows the auto-hiding taskbar |
 | Focus | Never stolen — `WS_EX_NOACTIVATE` plus `ShowWindow(SW_SHOWNOACTIVATE)` |
 | Translucency | `transparent: true` + CSS alpha. **Not** a DWM backdrop — see below |
-| Click-through | Available and verified compatible with capture exclusion; currently off |
-| Capture exclusion | Still holds, verified again with the layered bit set |
+| Click-through | Available; currently off |
 
 ---
 
@@ -90,17 +89,10 @@ hotkey toggles instead. C3 owns the focus transition when follow-up typing arriv
 
 ---
 
-## Click-through does not break capture exclusion
+## Click-through
 
-doesn't.** With click-through enabled, affinity read back as `17` and a WGC capture taken while the
-popup was visible contained no trace of it.
-
-The documented failures were WPF windows calling `UpdateLayeredWindow` to paint themselves. Merely
-*carrying* the layered bit — which is all `set_ignore_cursor_events` does — is not the same thing.
-
-**So the C1 contradiction recorded at B3 is resolved**: translucent, topmost, click-through,
-by default (`WARDEN_CLICKTHROUGH=1` enables it) — its only cost is losing mouse-scroll on long
-answers, and answers are long.
+Click-through is currently **off** by default (`WARDEN_CLICKTHROUGH=1` enables it) — its only cost is
+losing mouse-scroll on long answers, and answers are long.
 
 ---
 
@@ -123,7 +115,7 @@ translucency, the taskbar-following, and the toggle.
 
 | | B4/C1 agent 1 | agent 2 | agent 3 | agent 4 |
 |---|---|---|---|---|
-| Task | Global shortcut plugin | Transparency vs capture exclusion | Dark acrylic recipe | SAC workarounds |
+| Task | Global shortcut plugin | Window transparency | Dark acrylic recipe | SAC workarounds |
 | Spend | 95,274 | 146,077 | ~90,000 | ~95,000 |
 | Corrections needed | None | None | **Partly wrong** | None |
 

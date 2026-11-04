@@ -8,7 +8,7 @@
 ## Context
 
 Stage H is complete and pushed (12/12 chunks, both review rounds fixed, hand checks 38/38 —
-[H-status.md](../docs/H-status.md)). **Mímir** codes in a folder with Qwen3-Coder 30B-A3B: it
+[H-status.md](../H-status.md)). **Mímir** codes in a folder with Qwen3-Coder 30B-A3B: it
 finds code, edits, runs the check, undoes a whole turn, and keeps a context budget.
 
 Stage I does three things:
@@ -97,7 +97,7 @@ Hugin works, because both depend on how the shared loop reports a turn.
 - **Review:** an **independent review** of the diff against the chunk's guarantees, by someone who
   didn't write it. Fix what it finds and re-run the checks.
 - **Paperwork:**
-  - Anything that needs a person goes into [PENDING-CHECKS.md](../docs/PENDING-CHECKS.md) and an
+  - Anything that needs a person goes into [PENDING-CHECKS.md](../PENDING-CHECKS.md) and an
     `I-testing.md` worksheet.
   - A write-up in `docs/results/I<n>-results.md`, in H's shape.
   - The chunk's row in `docs/I-status.md`.

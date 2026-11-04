@@ -7,7 +7,7 @@ whole. Nothing else changed. **Built 2026-10-12**, in four commits on `stage-i`.
 ## Why
 
 Stage I builds Hugin, a terminal agent, on an engine Mimir shares, so nothing new should be built
-under names that are about to change ([STAGE-I.md](../../stages/STAGE-I.md)). The names are Luis's
+under names that are about to change ([STAGE-I.md](../stages/STAGE-I.md)). The names are Luis's
 own set, chosen 2026-10-03 for how they feel ([PLAN.md](../PLAN.md) §0b).
 
 ## What changed
@@ -158,6 +158,7 @@ The H re-check on 2026-10-11 had 33/33.
   `--check` agrees. Taskbar pins can't be changed by a script; that is a hand check.
 - **The grep audit.** No old name is left outside the list above.
 - **By hand** ([I-testing.md](../I-testing.md) §0). Vidar's and Mimir's checks passed on
+  2026-10-14: the hotkey, the tray, the moved config, every
   conversation, the theme starting over, and an old Undo finding its record.
 - **Housekeeping.** The old build outputs (`heimdall`, `odin`, `warden`, `citadel`) were deleted
   from `target\debug`, along with a leftover temp folder from a test.
@@ -175,7 +176,6 @@ The H re-check on 2026-10-11 had 33/33.
   - **`move-repo.ps1`** didn't rebuild the CLI and probes after `cargo clean`, and didn't say to
     start it from outside the repo. It now does both, and sets its own process's folder too.
     Separately, a test showed that a running script can rename the folder it lives in.
-    BUILD.md's note says its `HEIMDALL_*` switches are `VIDAR_*`.
   - **Smaller fixes:**
     - a preview fixture named the removed `npm run app`;
     - the retired shortcuts are removed only when they point at one of this repo's exes;

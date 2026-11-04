@@ -1,7 +1,7 @@
 //! Recovering tool calls in `qwen3-coder:30b`'s own layout — a different shape
 //! from [`crate::toolcall`]'s Qwen ChatML, and a different robustness problem.
 //!
-//! **Two failures, measured at H4 (`docs/results/H4-results.md`, raw logs
+//! **Two failures, measured at H4 (`docs/archive/results/H4-results.md`, raw logs
 //! under `evals/out/H4-2026-10-01/`).**
 //!
 //! 1. 6 of 48 runs died with `/api/chat returned 500 Internal Server Error:

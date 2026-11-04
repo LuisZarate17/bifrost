@@ -1,7 +1,7 @@
 # Stage H — Execution Packet
 
 **Paste this into a fresh chat.** Self-contained; it doesn't assume the earlier conversations.
-**Where it stands:** [docs/H-status.md](../docs/H-status.md).
+**Where it stands:** [docs/H-status.md](../H-status.md).
 
 ---
 
@@ -9,7 +9,7 @@
 
 **Mímir** (`apps/mimir`) is the local chat app built in Stage G. Through G7 it learned to read,
 edit and create files in one folder you pick, each call approved one at a time, and measured 98%
-byte-exact on single edits ([G7-results.md](../docs/results/G7-results.md)). It has three tools,
+byte-exact on single edits ([G7-results.md](../results/G7-results.md)). It has three tools,
 ten rounds per answer and a 32k context on `qwen3-vl:8b-instruct-q4_K_M`.
 
 **What it cannot do yet** is what makes a coding assistant trustworthy: it cannot find code by
@@ -81,10 +81,10 @@ benchmark run with it on and off, and stays only if the pass rate holds.
   `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223`
 - an **independent review** of the diff against the chunk's guarantees, by someone who did not
   write it; fix what it finds and re-run the checks
-- what needs a person goes into [PENDING-CHECKS.md](../docs/PENDING-CHECKS.md) and the
-  [H-testing.md](../docs/H-testing.md) worksheet
+- what needs a person goes into [PENDING-CHECKS.md](../PENDING-CHECKS.md) and the
+  [H-testing.md](../H-testing.md) worksheet
 - a write-up in `docs/results/H<n>-results.md`, in G7-results.md's shape
-- its row in [H-status.md](../docs/H-status.md), the one-page chart of where Stage H stands
+- its row in [H-status.md](../H-status.md), the one-page chart of where Stage H stands
 
 Probes use editprobe's scheme — **3 runs at the app's own sampling plus 1 at temperature 0** —
 and a margin set **before** the run, so the numbers cannot move the bar.
@@ -93,7 +93,7 @@ and a margin set **before** the run, so the numbers cannot move the bar.
 
 ## H1 — `run_check`, and the groundwork the new tools need
 
-> **Built 2026-09-29, f95365f** — [H1-results.md](../docs/results/H1-results.md). Fix tasks 33% →
+> **Built 2026-09-29, f95365f** — [H1-results.md](../results/H1-results.md). Fix tasks 33% →
 > 79% with the check.
 
 **Do:**
@@ -163,7 +163,7 @@ missing somewhere.
 
 ## H2 — `list_files` and `search`
 
-> **Built 2026-09-29, 6653c27** — [H2-results.md](../docs/results/H2-results.md). Named questions
+> **Built 2026-09-29, 6653c27** — [H2-results.md](../results/H2-results.md). Named questions
 > 0% → 88%; vague ones stay near 10%. Gate 1 passed 2026-09-30.
 
 **Do:** `crates/odin-core/src/search.rs`, on the `ignore` crate for `.gitignore` rules and a
@@ -201,7 +201,7 @@ tools or their wording before building a benchmark on top of them.
 
 ## H3 — `taskprobe`
 
-> **Built 2026-09-30** — [H3-results.md](../docs/results/H3-results.md). As designed, except
+> **Built 2026-09-30** — [H3-results.md](../results/H3-results.md). As designed, except
 > that the removals number twelve, not about fourteen (16 tasks in all); reads
 > in the probe are confined to the worktree, and runs share the repo's own target folder rather
 > than a fresh one.
@@ -230,7 +230,7 @@ above ten.
 
 ## H4 — Baseline, then the model decision
 
-> **Measured 2026-10-01** — [H4-results.md](../docs/results/H4-results.md). Bar set first: ≥10/48.
+> **Measured 2026-10-01** — [H4-results.md](../results/H4-results.md). Bar set first: ≥10/48.
 > Baseline 6/48 · Devstral Small 2 24/48 · **Qwen3-Coder 30B-A3B 25/48, 5× faster** · gpt-oss
 > 11/48. All three cleared; none fits the card but gpt-oss; all are text-only. **Gate 2, decided
 > 2026-10-01: Qwen3-Coder** — once a recovery path for its XML tool calls is built and measured.
@@ -256,7 +256,7 @@ cleanly, while a text-only model is loaded (G3).
 
 ## H4a — Reading Qwen3-Coder's tool calls
 
-> **Built 2026-10-02** — [H4a-results.md](../docs/results/H4a-results.md). Tool probe 10/10 through the app's path;
+> **Built 2026-10-02** — [H4a-results.md](../results/H4a-results.md). Tool probe 10/10 through the app's path;
 > the render matches Ollama's prompt token for token; benchmark 28/48 with **no errors**, against
 > H4's 25/48 with 8.
 
@@ -278,7 +278,7 @@ warm prompt cache, so compare token counts and calls, not prose.
 
 ## H4b — Offering the coding model with a folder
 
-> **Built 2026-10-02** — [H4b-results.md](../docs/results/H4b-results.md). Choosing a folder offers
+> **Built 2026-10-02** — [H4b-results.md](../results/H4b-results.md). Choosing a folder offers
 > Qwen3-Coder; clearing it offers the way back; e2e 14/14, and the H1/H2 and G7 e2e still pass.
 
 **Do:** `Config.coding_model` (default `qwen3-coder:30b`) and `Config.model_before_coding`. Rust
@@ -298,7 +298,7 @@ often chosen before the first question — the offer must start it.
 
 ## H5 — The approval policy
 
-> **Built 2026-10-02** — [H5-results.md](../docs/results/H5-results.md). Option B: reads, listings and searches
+> **Built 2026-10-02** — [H5-results.md](../results/H5-results.md). Option B: reads, listings and searches
 > inside the folder run without asking — cards per coding task 3.9 → 2.5, finding code 0 —
 > with gitignored, secret-named, linked, remote and broad-folder reads still asking, and
 > `ask_every_call` to switch it off. Benchmark 29/48 after the wording change (28 before).
@@ -321,7 +321,7 @@ that promises otherwise.
 
 ## H6 — Undo a whole turn
 
-> **Built 2026-10-02** — [H6-results.md](../docs/results/H6-results.md). A turn with two or more edits ends in "N edits in
+> **Built 2026-10-02** — [H6-results.md](../results/H6-results.md). A turn with two or more edits ends in "N edits in
 > this turn · Undo all", asked twice; every file's chain is checked before anything is written;
 > the real model's two-file turn came back byte for byte. The line sits at
 > the end of the turn rather than "on an answer", so a turn that was stopped or ended in an error
@@ -347,7 +347,7 @@ The policy works in daily use.
 
 ## H7 — A context budget inside the turn
 
-> **Built 2026-10-02** — [H7-results.md](../docs/results/H7-results.md). Old results are set aside, oldest first, before Ollama
+> **Built 2026-10-02** — [H7-results.md](../results/H7-results.md). Old results are set aside, oldest first, before Ollama
 > has to cut — the newest read of each file last, not never as written above. At 8k the request
 > survives (e2e 8/8); at 32k the benchmark stays under budget (26/48 off, 30/48 on, no cuts either
 > way). Rounds stay at 10.
@@ -362,7 +362,7 @@ user's request, calibrated against the last `promptEvalCount`. It says what it d
 
 ## H8 — Partial reads
 
-> **Built 2026-10-03** — [H8-results.md](../docs/results/H8-results.md). `read_file` takes `start_line`/`end_line`, the range in
+> **Built 2026-10-03** — [H8-results.md](../results/H8-results.md). `read_file` takes `start_line`/`end_line`, the range in
 > a header; a file over 64 KB answers with its line count. A 120 KB file edited at line 2102, byte for
 > byte (e2e 18/18); taskprobe 29/48 with ranges, 28/48 without, at almost one more round a task.
 
@@ -372,7 +372,7 @@ count. `repair()` only recovers strings, so accept numbers sent as strings.
 
 ## H9 — File operations
 
-> **Built 2026-10-03** — [H9-results.md](../docs/results/H9-results.md). New folders, delete and move, each asked and undoable,
+> **Built 2026-10-03** — [H9-results.md](../results/H9-results.md). New folders, delete and move, each asked and undoable,
 > nothing able to overwrite. opsprobe 15/15 with Undo all restoring every run byte for byte;
 > taskprobe 28/48 with the tools, 30/48 without, and the model never misused them.
 
@@ -405,7 +405,7 @@ undo removes the folders it created.
 
 ## H10 — Project instructions, a task list, a repo map
 
-> **Built 2026-10-08** — [H10-results.md](../docs/results/H10-results.md). Project notes (off until turned on per folder) and a
+> **Built 2026-10-08** — [H10-results.md](../results/H10-results.md). Project notes (off until turned on per folder) and a
 > task list ship; the repo map was measured and left out — one vague question gained, three no-tool
 > ones lost, unasked edits. The finish line: 2 of 3 real rename-and-test runs did the whole job,
 > and Undo all restored every run byte for byte. **Stage H is complete.**

@@ -6,7 +6,7 @@
 //   2. node tools/e2e/mimir-acceptance.mjs
 //      node tools/e2e/mimir-acceptance.mjs --runs 1    fewer runs
 //
-// stages/STAGE-H.md says what "done" means: rename a function across files, add a
+// docs/archive/stages/STAGE-H.md says what "done" means: rename a function across files, add a
 // function with a unit test, `cargo test` passes, and Undo all puts it all back. This
 // does exactly that, three times, against a throwaway crate and the real model, with
 // every card approved:

@@ -62,8 +62,8 @@ does have focus, so a key event can reach the page. Every other moment it cannot
 
 **`Esc` does not dismiss the popup.** It can't: the window is created `focusable: false` so that
 summoning it never pulls the caret out of whatever you were typing in, and a window that never takes
-focus never receives key events. `Ctrl+Alt+W` does both jobs. (See `PLAN.md` step 6 and
-`docs/B4-results.md`.)
+focus never receives key events. `Ctrl+Alt+W` does both jobs. (See `archive/PLAN.md` step 5 and
+`archive/results/B4-results.md`.)
 
 ---
 
@@ -276,12 +276,3 @@ recorded at B4 — it costs the mouse wheel, "and answers are long". `Ctrl+Alt`+
 objection without taking a key from anyone, so the default flipped.
 
 The keyboard shortcuts work identically either way.
-
-**Click-through does not weaken the capture exclusion.** It is the one Tauri feature that sets
-here, it doesn't. The affinity is read back from Windows on every show and the popup says so in its
-log: `affinity verified: 17 (excluded)`.
-
-
-A diagnostic switch, not one to leave on. Set it to anything and the popup is no longer kept out of
-screen capture, so it can be screenshotted to see how it looks. While it is set, a screen share
-shows the popup too. The log says so whenever the exclusion would have been applied:

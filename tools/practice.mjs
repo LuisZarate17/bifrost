@@ -3,7 +3,7 @@
 //   node tools/practice.mjs          create it, or put it back the way it started
 //   node tools/practice.mjs --path   print where it is, and change nothing
 //
-// docs/G-testing.md walks through it. Every file here has known contents, so each
+// docs/archive/G-testing.md walks through it. Every file here has known contents, so each
 // check has an exact right answer — "line 2 changes, nothing else" is only
 // checkable when you know what line 2 said.
 //

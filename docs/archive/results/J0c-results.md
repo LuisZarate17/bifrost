@@ -22,7 +22,7 @@ The newest candidate models need a newer Ollama than 0.33.3. **Done 2026-10-25.*
 | Render fidelity, Stage H's tools and awkward values | ✅ |
 | Render fidelity, the first test | ❌ **fails** — see below |
 | Hugin `--ask` and `-p` | ✅ answered in 13.7 s, naming the right file; `-p` ended `done` |
-| Mimir and Vidar | ✅ both start and stay up; Vidar's log shows its hotkeys and capture exclusion working |
+| Mimir and Vidar | ✅ both start and stay up; Vidar's log shows its hotkeys working |
 
 `ollama ps`: 22 GB at a 32k context, 34% on the CPU and 66% on the GPU — the same as before.
 

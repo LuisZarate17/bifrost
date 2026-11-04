@@ -25,9 +25,9 @@ visible in the timing. B2 recorded it first; this is the second app to inherit t
 
 The dependency list is the tell: **4 against 12**. No `windows-capture`, no `global-shortcut`
 plugin, no tray, and — at this chunk — no `windows` crate at all. All of that exists solely to make
+Warden's popup click-through.
 
-Citadel is the inverse window: focusable, decorated, resizable, in the taskbar, **visible on a
-screen share**. Copying any of Warden's Win32 work here would have been a bug, not a shortcut.
+Citadel is the inverse window: focusable, decorated, resizable, in the taskbar. Copying any of Warden's Win32 work here would have been a bug, not a shortcut.
 
 What *did* carry over is the streaming shape and `@odin/ui` — which is why mid-stream fence repair
 and the injection refusals C1b measured came for free instead of being written twice.

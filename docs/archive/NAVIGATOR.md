@@ -5,13 +5,13 @@ know what you want but not where it lives, it is on this page.
 
 ## Start here
 
-- **What does this key do?** → [shortcuts.md](shortcuts.md)
+- **What does this key do?** → [shortcuts.md](../shortcuts.md)
   Vidar has no menu and no window chrome, so that file *is* the interface.
 - **Where does the project stand?** → [BUILD.md](BUILD.md)
 - **Why was this decided?** → [PLAN.md](PLAN.md)
-- **How do I build and run it?** → [../README.md](../README.md)
+- **How do I build and run it?** → [README.md](../../README.md)
   `npm run app:vidar`, never a plain `cargo build`.
-- **What's next?** → [../stages/STAGE-I.md](../stages/STAGE-I.md), and where it stands in
+- **What's next?** → [stages/STAGE-I.md](stages/STAGE-I.md), and where it stands in
   [I-status.md](I-status.md)
 - **Where is that function?** → [Where things live in code](#where-things-live-in-code)
 - **What was actually measured?** → [Results](#results)
@@ -27,7 +27,7 @@ Read it before re-deriving something, or when wondering whether a feature belong
 
 **[BUILD.md](BUILD.md)** — the build plan, stages A–F, chunk by chunk, and what is left.
 
-**[shortcuts.md](shortcuts.md)** — every control Vidar has, and why each one is that key and
+**[shortcuts.md](../shortcuts.md)** — every control Vidar has, and why each one is that key and
 not another. The most-opened file here.
 
 **[D-testing.md](D-testing.md)** — the deferred testing round, as a worksheet to fill in at the
@@ -53,18 +53,18 @@ keypress, a hover, or a second machine. Where "built but never actually pressed"
 
 ## Execution packets
 
-In [`../stages/`](../stages/), not here — they are inputs you paste into a fresh chat, rather than
+In [`stages/`](stages/), not here — they are inputs you paste into a fresh chat, rather than
 records of what happened.
 
-- **[STAGE-A.md](../stages/STAGE-A.md)** — foundations, no GUI. Complete.
-- **[STAGE-B.md](../stages/STAGE-B.md)** — the app shell. Complete.
-- **[STAGE-G.md](../stages/STAGE-G.md)** — **Mimir**, the local chat app sharing Vidar's
+- **[STAGE-A.md](stages/STAGE-A.md)** — foundations, no GUI. Complete.
+- **[STAGE-B.md](stages/STAGE-B.md)** — the app shell. Complete.
+- **[STAGE-G.md](stages/STAGE-G.md)** — **Mimir**, the local chat app sharing Vidar's
   model. Built through G7 (editing files); the testing round is open.
-- **[STAGE-H.md](../stages/STAGE-H.md)** — Mimir learns to find code, check its work and run
+- **[STAGE-H.md](stages/STAGE-H.md)** — Mimir learns to find code, check its work and run
   longer: twelve chunks (H1–H10, plus H4a and H4b) in four phases, each gated on a measurement. H1 (the check command), H2
   (finding code) and H3 (the benchmark of real work) built; H4 measured three coding models;
   Gate 2 chose Qwen3-Coder. H4a reads its tool calls, H4b offers it when a folder is chosen. H5 and H6 built. H7 built. H8 built. H9 built. H10 built — Stage H complete.
-- **[STAGE-I.md](../stages/STAGE-I.md)** — the rename to **Bifrost** (Heimdall becomes **Vidar**,
+- **[STAGE-I.md](stages/STAGE-I.md)** — the rename to **Bifrost** (Heimdall becomes **Vidar**,
   Mímir becomes **Mimir**), the turn loop moved into the shared crate, and **Hugin**, a terminal
   agent on it that works with Claude Code both ways. Eight chunks in four phases, each gated; where
   it stands is [I-status.md](I-status.md). Set 2026-10-12.
@@ -122,8 +122,6 @@ About 2,000 lines, and most of the app is in it.
 - **Capture → Ollama → stream** — `ask_about_screen()` (~228)
 - **Screen capture itself** — `capture_screen_blocking()` (~148)
   Must run in `spawn_blocking` — WebView2 puts the main thread in COM STA, and WGC needs MTA.
-- **The invisibility feature** — `exclude_from_capture()` (~549)
-  Re-applied on every show and read back by `report_affinity()` (~1307), never assumed.
 - **Where the popup sits, and the pointer dodge** — `target_rect()` (~702)
 - **The glide between positions** — `animate()` (~998)
 - **Showing without stealing focus** — `show_without_focus()` (~846), `hide_now()` (~1202)
@@ -250,8 +248,7 @@ machine that ran them.
 - **[B1](results/B1-results.md)** — Tauri 2 + React + TypeScript. A window opens
 - **[B2](results/B2-results.md)** — streaming over a `Channel`.
   **Never return the answer as a command's `Result`** — it buffers the whole thing.
-- **[B3](results/B3-results.md)** — capture behind a button, exclusion verified against Heimdall's
-  own screenshot
+- **[B3](results/B3-results.md)** — capture behind a button, streamed through a Tauri `Channel`
 - **[B4](results/B4-results.md)** — hotkey and corner popup. Translucency is CSS alpha, not a DWM
   backdrop
 
@@ -259,7 +256,6 @@ machine that ran them.
 
 - **[C1b](results/C1b-results.md)** — making the answer readable, and the injection cases that
   must stay inert
-  and Teams
 - **[C4a](results/C4a-results.md)** — power control in the CLI.
   **off −8,193 MiB · warm +7,873 MiB in 2.2 s** — the deltas match, which is the test.
 

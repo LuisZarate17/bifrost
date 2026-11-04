@@ -10,7 +10,7 @@ every probe run that one loop**, so the probes measure what ships, and Hugin wil
 
 Hugin needs the same turn Mimir has — the same tickets, the same Stop, the same rules for what runs
 without asking — and a second copy in a terminal would drift from the first. The probes already had
-a copy of their own, kept in step by hand ([STAGE-I.md](../../stages/STAGE-I.md), I1).
+a copy of their own, kept in step by hand ([STAGE-I.md](../stages/STAGE-I.md), I1).
 
 ## What changed
 

@@ -44,7 +44,7 @@ Verify the GPU is actually being used, don't assume.
 > **Result: `qwen3-vl:8b-instruct-q4_K_M`.** Ran the full 2×2 rather than the pair below. Both 4B
 > models read the code correctly and still called a file that doesn't compile "fine"; quantization
 > changed time-to-first-token by under 2% and fixed no accuracy failure. Harness at
-> `evals/bench.mjs`, write-up at [docs/A2-results.md](../docs/results/A2-results.md). The packet below is
+> `evals/bench.mjs`, write-up at [docs/A2-results.md](../results/A2-results.md). The packet below is
 > kept as the brief that went in.
 
 This is the most important chunk in Stage A. **Don't just pull one model.**
@@ -84,7 +84,7 @@ strong OCR, GUI grounding). A misread stack trace is worse than a slow answer.
 
 > Built as `crates/odin-cli/` using `windows-capture` 2.0.1. Writes a 1920×1080 `out.png`, verified
 > against fullscreen hardware-decoded video (no black frame — genuinely WGC, not GDI).
-> See [docs/A3-results.md](../docs/results/A3-results.md).
+> See [docs/A3-results.md](../results/A3-results.md).
 >
 > **The MSVC build tools were missing** and had to be installed first — A1 recorded the toolchain
 > as verified but only ever tested Ollama, and nothing had reached the link step. If repeating on
@@ -108,7 +108,7 @@ compiler is complaining about when it complains.
 
 > Built into `crates/odin-cli/`. The binary is `odin`; it captures the screen and
 > streams a real answer. Prompt in `crates/odin-cli/prompt.txt`, `--model` flag to swap models.
-> See [docs/A4-results.md](../docs/results/A4-results.md).
+> See [docs/A4-results.md](../results/A4-results.md).
 >
 > **Gotchas found:** Smart App Control blocks Rust proc-macro DLLs (symptom: `can't find crate
 > for <x>_derive` with the DLL present) — `cargo clean -p` that crate and rebuild. And `reqwest`

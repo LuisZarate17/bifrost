@@ -541,11 +541,3 @@ server up.
 Fixed by `npm run app` (`tauri build --debug --no-bundle`), plus suppressing the console so the app
 survives the terminal that launched it, plus Desktop and Start Menu shortcuts so it can be opened
 at all. Verified: runs with no dev server, survives closing VS Code and every terminal.
-
-## C2 — the picker disclosure
-
-Not a bug, but worth a decision:
-
-- [ ] Zoom lists **"Heimdall"** by name in its share picker, with a black thumbnail. Contents never
-      leak; the window's *existence* does. Left as-is deliberately — renaming is obscurity, and the
-      app only runs when you open it. Revisit only if a picker leaks more than the name.

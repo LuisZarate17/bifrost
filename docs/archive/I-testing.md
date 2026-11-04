@@ -5,7 +5,7 @@ changes. Everything here needs a person. What a script can check is checked by o
 chunk's results doc says what that covered. What is left is whether the real keys, tray, shortcuts
 and windows do what they say.
 
-The plan is [STAGE-I.md](../stages/STAGE-I.md); where it stands is [I-status.md](I-status.md); what
+The plan is [STAGE-I.md](stages/STAGE-I.md); where it stands is [I-status.md](I-status.md); what
 each chunk measured is in `docs/results/I*-results.md`. Grows a section per chunk that adds
 something you can press.
 
@@ -36,7 +36,6 @@ are still open.*
       as Heimdall did. The mouse's front thumb button does the same.
 - [x] **The tray.** Hover the tray icon, then right-click it. **Expect:** the tooltip says
       **Vidar**, the menu has **Quit Vidar**, and Off / Warming / Ready work as before.
-      (`Win+Shift+S`) or share the screen in a call. **Expect:** the popup is not in it.
 - [x] **It reads the moved config.** In Mimir, pick `qwen3-vl:4b-instruct-q4_K_M`, then press
       `Ctrl+Alt+W` without restarting Vidar. **Expect:** the answer comes from the 4b
       (`target\debug\bifrost status` shows it loaded). Then pick back the model you had.
