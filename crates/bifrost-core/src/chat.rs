@@ -138,11 +138,7 @@ pub struct ToolFunction {
 }
 
 impl Tool {
-    pub fn function(
-        name: impl Into<String>,
-        description: impl Into<String>,
-        parameters: serde_json::Value,
-    ) -> Self {
+    pub fn function(name: impl Into<String>, description: impl Into<String>, parameters: serde_json::Value) -> Self {
         Self {
             kind: "function".to_string(),
             function: ToolFunction {
@@ -299,12 +295,7 @@ fn request_body(
 /// context**, so asking at a different value than you warmed at silently tears
 /// the runner down and reloads (measured 2026-09-19 at ~3s each way). Pass
 /// `config::DEFAULT_NUM_CTX` unless you have a reason not to.
-pub fn chat(
-    model: &str,
-    messages: &[Message],
-    tools: &[Tool],
-    options: Options,
-) -> Result<ChatReply, String> {
+pub fn chat(model: &str, messages: &[Message], tools: &[Tool], options: Options) -> Result<ChatReply, String> {
     let body = request_body(model, messages, tools, options, false)?;
 
     let client = reqwest::blocking::Client::builder()
@@ -319,9 +310,7 @@ pub fn chat(
         .map_err(|e| format!("POST /api/chat: {e}"))?;
 
     let status = response.status();
-    let text = response
-        .text()
-        .map_err(|e| format!("reading /api/chat body: {e}"))?;
+    let text = response.text().map_err(|e| format!("reading /api/chat body: {e}"))?;
 
     if !status.is_success() {
         // Ollama reports a model that cannot take tools here rather than by
@@ -329,8 +318,7 @@ pub fn chat(
         return Err(format!("/api/chat returned {status}: {}", text.trim()));
     }
 
-    let raw: RawReply =
-        serde_json::from_str(&text).map_err(|e| format!("parsing /api/chat reply: {e}"))?;
+    let raw: RawReply = serde_json::from_str(&text).map_err(|e| format!("parsing /api/chat reply: {e}"))?;
 
     Ok(ChatReply {
         message: raw.message,
@@ -397,17 +385,16 @@ fn layout(model: &str) -> Option<Layout> {
 /// error that looks like the model's own unreadable call is: the runner dying,
 /// running out of memory or timing out still ends the turn
 /// ([`is_tool_parse_error`]).
-pub fn chat_tools(
-    model: &str,
-    messages: &[Message],
-    tools: &[Tool],
-    options: Options,
-) -> Result<ChatReply, String> {
+pub fn chat_tools(model: &str, messages: &[Message], tools: &[Tool], options: Options) -> Result<ChatReply, String> {
     let reply = match chat(model, messages, tools, options) {
         Err(e) if is_chatml_error(&e) || is_xml_error(&e) || (!tools.is_empty() && is_tool_parse_error(&e)) => {
-            after_failure(e, !tools.is_empty(), layout(model), |l| recover(model, messages, tools, options, l))
+            after_failure(e, !tools.is_empty(), layout(model), |l| {
+                recover(model, messages, tools, options, l)
+            })
         }
-        Ok(reply) if reply.tool_calls().is_empty() && !tools.is_empty() && reply.message.content.contains("<function=") => {
+        Ok(reply)
+            if reply.tool_calls().is_empty() && !tools.is_empty() && reply.message.content.contains("<function=") =>
+        {
             match layout(model) {
                 Some(Layout::Qwen3Coder) => Ok(passed_through(reply, tools)),
                 _ => Ok(reply),
@@ -555,7 +542,9 @@ const TOOL_CALL_PARSE_ERRORS: [&str; 8] = [
 /// raw='…', err=…`: from `raw='` to the last `', err=`, or to the end if that is not
 /// there. What is left is Ollama's own words.
 fn without_echoed_call(err: &str) -> String {
-    let Some(start) = err.find("raw='") else { return err.to_string() };
+    let Some(start) = err.find("raw='") else {
+        return err.to_string();
+    };
     match err[start..].rfind("', err=") {
         Some(end) => format!("{}{}", &err[..start], &err[start + end + 2..]),
         None => err[..start].to_string(),
@@ -749,12 +738,16 @@ pub(crate) fn recover(
         .send()
         .map_err(|e| format!("POST /api/generate (tool-call recovery): {e}"))?;
     let status = response.status();
-    let text = response.text().map_err(|e| format!("reading /api/generate body: {e}"))?;
+    let text = response
+        .text()
+        .map_err(|e| format!("reading /api/generate body: {e}"))?;
     if !status.is_success() {
-        return Err(format!("tool-call recovery: /api/generate returned {status}: {}", text.trim()));
+        return Err(format!(
+            "tool-call recovery: /api/generate returned {status}: {}",
+            text.trim()
+        ));
     }
-    let raw: RawGenerate =
-        serde_json::from_str(&text).map_err(|e| format!("parsing /api/generate reply: {e}"))?;
+    let raw: RawGenerate = serde_json::from_str(&text).map_err(|e| format!("parsing /api/generate reply: {e}"))?;
 
     let (content, mut calls, failures) = match layout {
         Layout::Chatml => crate::toolcall::extract_calls(&raw.response, tools),
@@ -889,19 +882,19 @@ pub fn stream(
             continue;
         }
 
-        let v: serde_json::Value =
-            serde_json::from_str(line).map_err(|e| format!("bad JSON from Ollama: {e}"))?;
+        let v: serde_json::Value = serde_json::from_str(line).map_err(|e| format!("bad JSON from Ollama: {e}"))?;
 
         // `/api/chat` puts the text under `message.content`; `/api/generate` used
         // `response`. Reading the wrong one streams nothing, silently.
         if let Some(fragment) = v["message"]["content"].as_str()
-            && !fragment.is_empty() {
-                if ttft.is_none() {
-                    ttft = Some(started.elapsed());
-                }
-                text.push_str(fragment);
-                on(StreamChunk::Token(fragment))?;
+            && !fragment.is_empty()
+        {
+            if ttft.is_none() {
+                ttft = Some(started.elapsed());
             }
+            text.push_str(fragment);
+            on(StreamChunk::Token(fragment))?;
+        }
 
         // A thinking model's reasoning arrives under `message.thinking`, ahead of its
         // answer. Kept for the reply, not handed to `on`: it is not the answer.
@@ -1014,7 +1007,10 @@ mod tests {
             for stream in [false, true] {
                 let body = request_body("m", &messages, &[], Options::new(8192).thinking(Some(think)), stream).unwrap();
                 assert_eq!(body["think"], want, "{think:?}, stream {stream}");
-                assert_eq!((body["stream"].as_bool(), body["options"]["num_ctx"].as_u64()), (Some(stream), Some(8192)));
+                assert_eq!(
+                    (body["stream"].as_bool(), body["options"]["num_ctx"].as_u64()),
+                    (Some(stream), Some(8192))
+                );
             }
         }
     }
@@ -1029,7 +1025,10 @@ mod tests {
         // A model that does not think sends none, and none is not written back.
         let none: Message = serde_json::from_str(r#"{"role":"assistant","content":"4"}"#).unwrap();
         assert_eq!(none.thinking, None);
-        assert_eq!(serde_json::to_string(&none).unwrap(), r#"{"role":"assistant","content":"4"}"#);
+        assert_eq!(
+            serde_json::to_string(&none).unwrap(),
+            r#"{"role":"assistant","content":"4"}"#
+        );
         // In history it goes back as it came.
         let sent = serde_json::to_value(&raw.message).unwrap();
         assert_eq!(sent["thinking"], "2 and 2 make 4.");
@@ -1038,7 +1037,8 @@ mod tests {
     #[test]
     fn thinking_survives_a_call_read_out_of_plain_text() {
         let tools = crate::tools::available(false, None);
-        let content = "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>";
+        let content =
+            "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>";
         let said = |content: &str, thinking: &str| ChatReply {
             message: Message {
                 role: "assistant".into(),
@@ -1054,18 +1054,23 @@ mod tests {
         assert_eq!(read.message.thinking.as_deref(), Some("The user wants a.rs."));
         // A reply with nothing to read comes back as it was, thinking and all.
         let plain = passed_through(said("No call here.", "hm"), &tools);
-        assert_eq!((plain.message.content.as_str(), plain.message.thinking.as_deref()), ("No call here.", Some("hm")));
+        assert_eq!(
+            (plain.message.content.as_str(), plain.message.thinking.as_deref()),
+            ("No call here.", Some("hm"))
+        );
     }
 
     #[test]
     fn the_xml_matcher_accepts_the_measured_h4_error_and_nothing_else() {
         // Verbatim from H4 (docs/archive/results/H4-results.md): b05/b06's long edits
         // to toolcall.rs, which contains the literal text `</tool_call>`.
-        let h4 = r#"/api/chat returned 500 Internal Server Error: {"error":"XML syntax error on line 45: unexpected EOF"}"#;
+        let h4 =
+            r#"/api/chat returned 500 Internal Server Error: {"error":"XML syntax error on line 45: unexpected EOF"}"#;
         assert!(is_xml_error(h4));
         assert!(!is_chatml_error(h4));
 
-        let json_err = "/api/chat returned 500 Internal Server Error: invalid character '{' after object key:value pair";
+        let json_err =
+            "/api/chat returned 500 Internal Server Error: invalid character '{' after object key:value pair";
         assert!(is_chatml_error(json_err));
         assert!(!is_xml_error(json_err));
 
@@ -1075,8 +1080,12 @@ mod tests {
     #[test]
     fn a_bare_eof_is_an_xml_error_but_an_eof_inside_another_message_is_not() {
         // Verbatim from H4a's first run, b05 run 1.
-        assert!(is_xml_error(r#"/api/chat returned 500 Internal Server Error: {"error":"EOF"}"#));
-        assert!(!is_chatml_error(r#"/api/chat returned 500 Internal Server Error: {"error":"EOF"}"#));
+        assert!(is_xml_error(
+            r#"/api/chat returned 500 Internal Server Error: {"error":"EOF"}"#
+        ));
+        assert!(!is_chatml_error(
+            r#"/api/chat returned 500 Internal Server Error: {"error":"EOF"}"#
+        ));
         assert!(!is_xml_error(
             r#"/api/chat returned 500 Internal Server Error: {"error":"POST predict: Post \"http://127.0.0.1:50000/completion\": EOF"}"#
         ));
@@ -1140,14 +1149,25 @@ mod tests {
 
         // A body that is not JSON is the message as it stands.
         let plain = "/api/chat returned 500 Internal Server Error: invalid tool call";
-        assert_eq!(settle(plain.to_string(), true, None).unwrap().tool_calls()[0].function.arguments["error"], "invalid tool call");
+        assert_eq!(
+            settle(plain.to_string(), true, None).unwrap().tool_calls()[0]
+                .function
+                .arguments["error"],
+            "invalid tool call"
+        );
     }
 
     #[test]
     fn what_a_failed_request_comes_to_after_the_layouts_retry() {
-        let parse = r#"/api/chat returned 500 Internal Server Error: {"error":"XML syntax error on line 3: unexpected EOF"}"#;
-        let machine = r#"/api/chat returned 500 Internal Server Error: {"error":"POST predict: Post \"http://x\": EOF"}"#;
-        let retried = ChatReply { fed_back: false, recovered: true, ..fed_back(parse) };
+        let parse =
+            r#"/api/chat returned 500 Internal Server Error: {"error":"XML syntax error on line 3: unexpected EOF"}"#;
+        let machine =
+            r#"/api/chat returned 500 Internal Server Error: {"error":"POST predict: Post \"http://x\": EOF"}"#;
+        let retried = ChatReply {
+            fed_back: false,
+            recovered: true,
+            ..fed_back(parse)
+        };
 
         // Not a Qwen model, no retry: fed back with tools offered, an error without.
         assert!(settle(parse.to_string(), true, None).unwrap().fed_back);
@@ -1159,22 +1179,35 @@ mod tests {
         assert!(ok.recovered && !ok.fed_back);
         // The retry failed because the machine did: that error ends the turn.
         let died = "POST /api/generate (tool-call recovery): connection refused".to_string();
-        assert_eq!(settle(parse.to_string(), true, Some(Err(died.clone()))).unwrap_err(), died);
+        assert_eq!(
+            settle(parse.to_string(), true, Some(Err(died.clone()))).unwrap_err(),
+            died
+        );
         // The retry failed on a parse error of its own: fed back with the first message.
-        let again = r#"tool-call recovery: /api/generate returned 500 Internal Server Error: {"error":"invalid tool call"}"#;
+        let again =
+            r#"tool-call recovery: /api/generate returned 500 Internal Server Error: {"error":"invalid tool call"}"#;
         let fed = settle(parse.to_string(), true, Some(Err(again.to_string()))).unwrap();
         assert!(fed.fed_back);
-        assert_eq!(fed.tool_calls()[0].function.arguments["error"], "XML syntax error on line 3: unexpected EOF");
+        assert_eq!(
+            fed.tool_calls()[0].function.arguments["error"],
+            "XML syntax error on line 3: unexpected EOF"
+        );
         // A bare EOF whose retry failed stays the retry's error, as before.
         let bare = r#"/api/chat returned 500 Internal Server Error: {"error":"EOF"}"#;
-        assert_eq!(settle(bare.to_string(), true, Some(Err(died.clone()))).unwrap_err(), died);
+        assert_eq!(
+            settle(bare.to_string(), true, Some(Err(died.clone()))).unwrap_err(),
+            died
+        );
         assert_eq!(settle(bare.to_string(), true, None).unwrap_err(), bare);
         // A bare EOF whose retry failed with a parse error: the retry's words go back to the model.
         let fed = settle(bare.to_string(), true, Some(Err(again.to_string()))).unwrap();
         assert!(fed.fed_back);
         assert_eq!(fed.tool_calls()[0].function.arguments["error"], "invalid tool call");
         // With no tools offered it is still an error.
-        assert_eq!(settle(bare.to_string(), false, Some(Err(again.to_string()))).unwrap_err(), again);
+        assert_eq!(
+            settle(bare.to_string(), false, Some(Err(again.to_string()))).unwrap_err(),
+            again
+        );
     }
 
     /// Which retry is tried, from the model's layout and the error's wording: the model's
@@ -1183,7 +1216,8 @@ mod tests {
     #[test]
     fn the_retry_follows_the_models_layout_and_then_the_errors_wording() {
         let in500 = |body: &str| format!("/api/chat returned 500 Internal Server Error: {body}");
-        let xml_entity = in500(r#"{"error":"XML syntax error on line 12: invalid character entity &foo; (no semicolon)"}"#);
+        let xml_entity =
+            in500(r#"{"error":"XML syntax error on line 12: invalid character entity &foo; (no semicolon)"}"#);
         let xml_eof = in500(r#"{"error":"XML syntax error on line 45: unexpected EOF"}"#);
         let xml_element = in500(r#"{"error":"expected element type <function> but have <tool_call>"}"#);
         let bare = in500(r#"{"error":"EOF"}"#);
@@ -1225,11 +1259,17 @@ mod tests {
     #[test]
     fn what_chat_tools_does_after_a_failed_request_is_the_retry_for_the_models_layout_then_feeding_back() {
         let entity = r#"/api/chat returned 500 Internal Server Error: {"error":"XML syntax error on line 12: invalid character entity &x;"}"#;
-        let read = || ChatReply { recovered: true, ..fed_back("") };
+        let read = || ChatReply {
+            recovered: true,
+            ..fed_back("")
+        };
         let tried = std::cell::RefCell::new(Vec::new());
         let retry = |l: Layout| {
             tried.borrow_mut().push(l);
-            Ok(ChatReply { fed_back: false, ..read() })
+            Ok(ChatReply {
+                fed_back: false,
+                ..read()
+            })
         };
 
         // qwen3-coder: the XML retry runs, and its reply stands.
@@ -1244,19 +1284,34 @@ mod tests {
 
         // qwen3-coder whose retry then fails on the machine: that error ends the turn.
         let died = "POST /api/generate (tool-call recovery): connection refused".to_string();
-        let ended = after_failure(entity.to_string(), true, Some(Layout::Qwen3Coder), |_| Err(died.clone()));
+        let ended = after_failure(
+            entity.to_string(),
+            true,
+            Some(Layout::Qwen3Coder),
+            |_| Err(died.clone()),
+        );
         assert_eq!(ended.unwrap_err(), died);
 
         // No tools offered: the error as it came, with or without a layout to retry.
-        assert_eq!(after_failure(entity.to_string(), false, None, retry).unwrap_err(), entity);
+        assert_eq!(
+            after_failure(entity.to_string(), false, None, retry).unwrap_err(),
+            entity
+        );
     }
 
     /// A parse error echoes the model's own call, and a call may say anything.
     #[test]
     fn code_in_the_echoed_call_is_not_taken_for_a_machine_failing() {
         for said in [
-            "timed out", "connection refused", "connection reset", "out of memory", "CUDA error",
-            "POST predict", "wsarecv", "runner process has terminated", "deadline exceeded",
+            "timed out",
+            "connection refused",
+            "connection reset",
+            "out of memory",
+            "CUDA error",
+            "POST predict",
+            "wsarecv",
+            "runner process has terminated",
+            "deadline exceeded",
         ] {
             let err = format!(
                 r#"/api/chat returned 500 Internal Server Error: {{"error":"error parsing tool call: raw='{{\"name\":\"edit_file\",\"arguments\":{{\"new_text\":\"// {said}\"}}}}', err=invalid character 'x' looking for beginning of value"}}"#
@@ -1264,7 +1319,8 @@ mod tests {
             assert!(is_tool_parse_error(&err), "{said}: {err}");
         }
         // Without the terminator the echo runs to the end, and Ollama's prefix still says what it is.
-        let cut = r#"/api/chat returned 500 Internal Server Error: {"error":"error parsing tool call: raw='out of memory"#;
+        let cut =
+            r#"/api/chat returned 500 Internal Server Error: {"error":"error parsing tool call: raw='out of memory"#;
         assert!(is_tool_parse_error(cut));
         // A real machine failure after an echo is still one.
         let real = r#"/api/chat returned 500 Internal Server Error: {"error":"error parsing tool call: raw='x', err=POST predict: EOF"}"#;
@@ -1274,9 +1330,14 @@ mod tests {
     #[test]
     fn what_goes_back_to_the_model_is_capped_with_the_cut_said() {
         let whole = "x".repeat(10_000);
-        let err = format!(r#"/api/chat returned 500 Internal Server Error: {{"error":"error parsing tool call: raw='{whole}', err=invalid character"}}"#);
+        let err = format!(
+            r#"/api/chat returned 500 Internal Server Error: {{"error":"error parsing tool call: raw='{whole}', err=invalid character"}}"#
+        );
         let reply = settle(err, true, None).unwrap();
-        let sent = reply.tool_calls()[0].function.arguments["error"].as_str().unwrap().to_string();
+        let sent = reply.tool_calls()[0].function.arguments["error"]
+            .as_str()
+            .unwrap()
+            .to_string();
         assert!(sent.starts_with("error parsing tool call: raw='xxx"), "{sent:.60}");
         assert!(sent.len() < MAX_FED_BACK + 40, "{}", sent.len());
         assert!(sent.ends_with(" more bytes cut]"), "{sent}");
@@ -1289,12 +1350,32 @@ mod tests {
     #[test]
     fn a_tag_left_dangling_at_the_end_of_a_reply_is_cut_and_one_that_is_talked_about_is_kept() {
         let cases = [
-            ("The file is a.rs.\n<tool_call>", "The file is a.rs.", "an opener with nothing after"),
-            ("The file is a.rs.\n\n<tool_call>\n", "The file is a.rs.", "and a blank line before it"),
-            ("Done.\n</function>\n</tool_call>", "Done.", "closers whose call is gone"),
+            (
+                "The file is a.rs.\n<tool_call>",
+                "The file is a.rs.",
+                "an opener with nothing after",
+            ),
+            (
+                "The file is a.rs.\n\n<tool_call>\n",
+                "The file is a.rs.",
+                "and a blank line before it",
+            ),
+            (
+                "Done.\n</function>\n</tool_call>",
+                "Done.",
+                "closers whose call is gone",
+            ),
             ("<tool_call>", "", "nothing but the opener"),
-            ("Each call is wrapped in <tool_call> and </tool_call>", "Each call is wrapped in <tool_call> and </tool_call>", "R-17: talked about"),
-            ("The opening tag is\n`<tool_call>`", "The opening tag is\n`<tool_call>`", "quoted as code"),
+            (
+                "Each call is wrapped in <tool_call> and </tool_call>",
+                "Each call is wrapped in <tool_call> and </tool_call>",
+                "R-17: talked about",
+            ),
+            (
+                "The opening tag is\n`<tool_call>`",
+                "The opening tag is\n`<tool_call>`",
+                "quoted as code",
+            ),
             (
                 "Like this:\n<tool_call>\n<function=read_file>\n</function>\n</tool_call>",
                 "Like this:\n<tool_call>\n<function=read_file>\n</function>\n</tool_call>",
@@ -1324,11 +1405,18 @@ mod tests {
     #[ignore = "needs Ollama running with qwen3-coder:30b"]
     fn the_raw_render_matches_what_ollama_builds_natively() {
         let model = "qwen3-coder:30b";
-        let options = Options { num_ctx: 32768, temperature: Some(0.0), think: None };
+        let options = Options {
+            num_ctx: 32768,
+            temperature: Some(0.0),
+            think: None,
+        };
 
         let call = |path: &str| ToolCall {
             id: None,
-            function: FunctionCall { name: "read_file".into(), arguments: serde_json::json!({ "path": path }) },
+            function: FunctionCall {
+                name: "read_file".into(),
+                arguments: serde_json::json!({ "path": path }),
+            },
         };
         let ranged_call = |path: &str, start: u32, end: u32| ToolCall {
             id: None,
@@ -1401,8 +1489,18 @@ mod tests {
             };
             let recovered = recover(model, &messages, &tools, options, Layout::Qwen3Coder).expect("raw recover");
 
-            let names = |r: &ChatReply| r.tool_calls().iter().map(|c| c.function.name.clone()).collect::<Vec<_>>();
-            let args = |r: &ChatReply| r.tool_calls().iter().map(|c| c.function.arguments.clone()).collect::<Vec<_>>();
+            let names = |r: &ChatReply| {
+                r.tool_calls()
+                    .iter()
+                    .map(|c| c.function.name.clone())
+                    .collect::<Vec<_>>()
+            };
+            let args = |r: &ChatReply| {
+                r.tool_calls()
+                    .iter()
+                    .map(|c| c.function.arguments.clone())
+                    .collect::<Vec<_>>()
+            };
 
             println!(
                 "conversation {i}: prompt tokens native {} / raw {}; calls native {:?} / raw {:?}",
@@ -1443,13 +1541,24 @@ mod tests {
     #[ignore = "needs Ollama running with qwen3-coder:30b"]
     fn the_raw_render_matches_what_ollama_builds_natively_for_stage_h_tools_and_awkward_values() {
         let model = "qwen3-coder:30b";
-        let options = Options { num_ctx: 32768, temperature: Some(0.0), think: None };
+        let options = Options {
+            num_ctx: 32768,
+            temperature: Some(0.0),
+            think: None,
+        };
         let tools = crate::tools::available(true, Some("cargo check"));
-        assert_eq!(tools.last().unwrap().function.name, "run_check", "the set under test includes run_check");
+        assert_eq!(
+            tools.last().unwrap().function.name,
+            "run_check",
+            "the set under test includes run_check"
+        );
 
         let call = |name: &str, args: serde_json::Value| ToolCall {
             id: None,
-            function: FunctionCall { name: name.into(), arguments: args },
+            function: FunctionCall {
+                name: name.into(),
+                arguments: args,
+            },
         };
         let assistant = |content: &str, calls: Vec<ToolCall>| Message {
             role: "assistant".into(),
@@ -1467,14 +1576,20 @@ mod tests {
             - Mímir – naïve café ☕ — keep <function=x> literal.\n";
 
         let conversations: Vec<(&str, Vec<Message>)> = vec![
-            ("1 plain question, full tool set incl. run_check", vec![Message::user("What does this project do?")]),
+            (
+                "1 plain question, full tool set incl. run_check",
+                vec![Message::user("What does this project do?")],
+            ),
             (
                 "2 update_plan, then run_check with no arguments",
                 vec![
                     Message::user("Rename greet to welcome and make sure it builds."),
                     assistant(
                         "",
-                        vec![call("update_plan", serde_json::json!({ "plan": "[~] find greet\n[ ] rename it\n[ ] run the check" }))],
+                        vec![call(
+                            "update_plan",
+                            serde_json::json!({ "plan": "[~] find greet\n[ ] rename it\n[ ] run the check" }),
+                        )],
                     ),
                     Message::tool_result("update_plan", "Plan updated."),
                     assistant("Running the check.", vec![call("run_check", serde_json::json!({}))]),
@@ -1493,7 +1608,10 @@ mod tests {
                         "",
                         vec![
                             call("delete_file", serde_json::json!({ "path": "old/unused.rs" })),
-                            call("move_file", serde_json::json!({ "path": "notes.txt", "to": "docs/archive/notes.txt" })),
+                            call(
+                                "move_file",
+                                serde_json::json!({ "path": "notes.txt", "to": "docs/archive/notes.txt" }),
+                            ),
                             call(
                                 "create_file",
                                 serde_json::json!({ "path": "src/net/http/mod.rs", "content": "\n//! HTTP.\npub fn get() {}\n\n" }),
@@ -1531,7 +1649,10 @@ mod tests {
                     Message::user("Lines 10 to 12 of a.rs?"),
                     assistant(
                         "",
-                        vec![call("read_file", serde_json::json!({ "path": "a.rs", "start_line": "10", "end_line": "12" }))],
+                        vec![call(
+                            "read_file",
+                            serde_json::json!({ "path": "a.rs", "start_line": "10", "end_line": "12" }),
+                        )],
                     ),
                     Message::tool_result("read_file", "[lines 10–12 of 40]\na\nb\nc\n"),
                     Message::user("The next three."),
@@ -1554,7 +1675,10 @@ mod tests {
                     Message::user("Where is the Windows path built?"),
                     assistant(
                         "",
-                        vec![call("search", serde_json::json!({ "text": "r\"C:\\\\Users\" & \"<b>\"", "pattern": "**/*.rs" }))],
+                        vec![call(
+                            "search",
+                            serde_json::json!({ "text": "r\"C:\\\\Users\" & \"<b>\"", "pattern": "**/*.rs" }),
+                        )],
                     ),
                     Message::tool_result("search", "src/a.rs:3: let p = r\"C:\\Users\";"),
                     Message::user("Explain it."),
@@ -1569,7 +1693,12 @@ mod tests {
             let counts = |r: &Result<ChatReply, String>| r.as_ref().map(|r| r.prompt_eval_count).map_err(|e| e.clone());
             let names = |r: &Result<ChatReply, String>| {
                 r.as_ref()
-                    .map(|r| r.tool_calls().iter().map(|c| c.function.name.clone()).collect::<Vec<_>>())
+                    .map(|r| {
+                        r.tool_calls()
+                            .iter()
+                            .map(|c| c.function.name.clone())
+                            .collect::<Vec<_>>()
+                    })
                     .map_err(|e| e.clone())
             };
             println!(
@@ -1584,7 +1713,11 @@ mod tests {
                 (n, r) => mismatches.push(format!("{name}: native {n:?} / raw {r:?}")),
             }
         }
-        assert!(mismatches.is_empty(), "render differs from Ollama's own prompt:\n{}", mismatches.join("\n"));
+        assert!(
+            mismatches.is_empty(),
+            "render differs from Ollama's own prompt:\n{}",
+            mismatches.join("\n")
+        );
     }
 
     #[cfg(test)]

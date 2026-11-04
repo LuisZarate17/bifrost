@@ -132,7 +132,10 @@ impl Conversation {
     /// A new conversation that belongs to `app` (Hugin's is `"hugin"`), so Mimir's
     /// sidebar does not list it.
     pub fn for_app(app: &str) -> Self {
-        Self { app: Some(app.to_string()), ..Self::new() }
+        Self {
+            app: Some(app.to_string()),
+            ..Self::new()
+        }
     }
 
     /// A title taken from the first thing asked, when none was set by hand.
@@ -258,14 +261,12 @@ pub fn load(id: &str) -> Result<Conversation, String> {
 /// whole conversation, which is affordable because they are tens of kilobytes —
 /// and is the reason images are stored by name rather than inline.
 pub fn save(conversation: &Conversation) -> Result<(), String> {
-    let p = path_for(&conversation.id)
-        .ok_or_else(|| format!("bad conversation id: {}", conversation.id))?;
+    let p = path_for(&conversation.id).ok_or_else(|| format!("bad conversation id: {}", conversation.id))?;
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d).map_err(|e| format!("creating {}: {e}", d.display()))?;
     }
 
-    let json = serde_json::to_string_pretty(conversation)
-        .map_err(|e| format!("serializing conversation: {e}"))?;
+    let json = serde_json::to_string_pretty(conversation).map_err(|e| format!("serializing conversation: {e}"))?;
 
     let tmp = p.with_extension("json.tmp");
     std::fs::write(&tmp, json).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
@@ -301,11 +302,7 @@ fn attachment_path(name: &str) -> Option<PathBuf> {
     // Same reasoning as `path_for`: names are generated here, so a separator
     // should be impossible — which is why it is worth refusing rather than
     // trusting. Exactly one dot, for the extension.
-    if name.is_empty()
-        || name.contains(['/', '\\', ':'])
-        || name.starts_with('.')
-        || name.matches('.').count() != 1
-    {
+    if name.is_empty() || name.contains(['/', '\\', ':']) || name.starts_with('.') || name.matches('.').count() != 1 {
         return None;
     }
     Some(attachments_dir()?.join(name))
@@ -444,7 +441,8 @@ mod tests {
     fn title_comes_from_the_first_question() {
         let mut c = Conversation::new();
         assert_eq!(c.display_title(), "New conversation");
-        c.messages.push(StoredMessage::user("Why does this borrow fail?\nmore detail"));
+        c.messages
+            .push(StoredMessage::user("Why does this borrow fail?\nmore detail"));
         assert_eq!(c.display_title(), "Why does this borrow fail?");
         c.title = "Borrow checker".into();
         assert_eq!(c.display_title(), "Borrow checker");
@@ -472,10 +470,8 @@ mod tests {
 
     #[test]
     fn an_old_file_belongs_to_mimir_and_says_nothing_of_it() {
-        let c: Conversation = serde_json::from_str(
-            r#"{"id":"a","title":"t","created_at":"x","updated_at":"y"}"#,
-        )
-        .unwrap();
+        let c: Conversation =
+            serde_json::from_str(r#"{"id":"a","title":"t","created_at":"x","updated_at":"y"}"#).unwrap();
         assert_eq!(c.app, None);
         assert!(!serde_json::to_string(&c).unwrap().contains("app"));
         let h = Conversation::for_app("hugin");
@@ -485,8 +481,11 @@ mod tests {
     #[test]
     fn each_list_holds_only_its_own_apps_conversations() {
         let dir = scratch("lists");
-        let (mut mimir, mut hugin, mut other) =
-            (Conversation::new(), Conversation::for_app("hugin"), Conversation::for_app("other"));
+        let (mut mimir, mut hugin, mut other) = (
+            Conversation::new(),
+            Conversation::for_app("hugin"),
+            Conversation::for_app("other"),
+        );
         mimir.title = "mine".into();
         hugin.title = "hers".into();
         other.title = "theirs".into();

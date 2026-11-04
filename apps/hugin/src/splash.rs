@@ -18,21 +18,22 @@ use bifrost_core::colors::palette;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush, DeleteDC,
-    DeleteObject, DrawTextW, EndPaint, HDC, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, FillRect, GetMonitorInfoW, InvalidateRect, MonitorFromPoint, SelectObject,
-    SetBkMode, SetTextColor, MONITORINFO, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush, DT_END_ELLIPSIS,
+    DT_NOPREFIX, DT_SINGLELINE, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, GetMonitorInfoW, HDC,
+    InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, PAINTSTRUCT, SRCCOPY, SelectObject,
+    SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::{
-    GetDpiForMonitor, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, MDT_EFFECTIVE_DPI,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI, SetProcessDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, DrawIconEx,
-    EnumWindows, GetClassNameW, GetCursorPos, GetMessageW, GetWindowThreadProcessId, IsWindowVisible, KillTimer,
-    LoadImageW, PostQuitMessage, RegisterClassW, SetLayeredWindowAttributes, SetTimer, ShowWindow, TranslateMessage,
-    ASFW_ANY, DI_NORMAL, HICON, IMAGE_ICON, LR_LOADFROMFILE, LWA_ALPHA, MA_NOACTIVATE,
-    MSG, SW_SHOWNOACTIVATE, WM_DESTROY, WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    ASFW_ANY, AllowSetForegroundWindow, CreateWindowExW, DI_NORMAL, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    DrawIconEx, EnumWindows, GetClassNameW, GetCursorPos, GetMessageW, GetWindowThreadProcessId, HICON, IMAGE_ICON,
+    IsWindowVisible, KillTimer, LR_LOADFROMFILE, LWA_ALPHA, LoadImageW, MA_NOACTIVATE, MSG, PostQuitMessage,
+    RegisterClassW, SW_SHOWNOACTIVATE, SetLayeredWindowAttributes, SetTimer, ShowWindow, TranslateMessage, WM_DESTROY,
+    WM_ERASEBKGND, WM_MOUSEACTIVATE, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
 use crate::launch::Started;
@@ -102,11 +103,36 @@ pub fn layout(dpi: u32) -> Layout {
     let text_left = s(PAD + ICON + GAP);
     let track_top = height - s(PAD) - s(TRACK_HEIGHT);
     Layout {
-        card: Rc { left: 0, top: 0, right: width, bottom: height },
-        icon: Rc { left: s(PAD), top: s(PAD), right: s(PAD + ICON), bottom: s(PAD + ICON) },
-        title: Rc { left: text_left, top: s(PAD), right: width - s(PAD), bottom: s(PAD + 26) },
-        folder: Rc { left: text_left, top: s(PAD + 28), right: width - s(PAD), bottom: s(PAD + 48) },
-        track: Rc { left: s(PAD), top: track_top, right: width - s(PAD), bottom: track_top + s(TRACK_HEIGHT) },
+        card: Rc {
+            left: 0,
+            top: 0,
+            right: width,
+            bottom: height,
+        },
+        icon: Rc {
+            left: s(PAD),
+            top: s(PAD),
+            right: s(PAD + ICON),
+            bottom: s(PAD + ICON),
+        },
+        title: Rc {
+            left: text_left,
+            top: s(PAD),
+            right: width - s(PAD),
+            bottom: s(PAD + 26),
+        },
+        folder: Rc {
+            left: text_left,
+            top: s(PAD + 28),
+            right: width - s(PAD),
+            bottom: s(PAD + 48),
+        },
+        track: Rc {
+            left: s(PAD),
+            top: track_top,
+            right: width - s(PAD),
+            bottom: track_top + s(TRACK_HEIGHT),
+        },
         border: s(1).max(1),
     }
 }
@@ -168,9 +194,8 @@ pub struct Seen {
 /// terminal class, or (in the console fallback, `pid` not 0) belongs to the process started.
 /// `noted` holds the terminal windows that existed before the start.
 pub fn terminal_appeared(noted: &[isize], now: &[Seen], pid: u32) -> bool {
-    now.iter().any(|w| {
-        w.visible && !noted.contains(&w.hwnd) && (w.terminal_class || (pid != 0 && w.pid == pid))
-    })
+    now.iter()
+        .any(|w| w.visible && !noted.contains(&w.hwnd) && (w.terminal_class || (pid != 0 && w.pid == pid)))
 }
 
 // ---- Win32 ----
@@ -211,7 +236,10 @@ fn windows(classes: &[&str]) -> Vec<Seen> {
         });
         1
     }
-    let mut walk = Walk { classes, found: Vec::new() };
+    let mut walk = Walk {
+        classes,
+        found: Vec::new(),
+    };
     // SAFETY: `each` only uses `param` as the `Walk` it is, and `walk` outlives the call.
     unsafe { EnumWindows(Some(each), &mut walk as *mut Walk as LPARAM) };
     walk.found
@@ -259,7 +287,12 @@ thread_local! {
 unsafe fn draw(hdc: HDC, state: &State) {
     let l = &state.layout;
     let fill = |rc: &Rc, color: u32| {
-        let rect = RECT { left: rc.left, top: rc.top, right: rc.right, bottom: rc.bottom };
+        let rect = RECT {
+            left: rc.left,
+            top: rc.top,
+            right: rc.right,
+            bottom: rc.bottom,
+        };
         // SAFETY: a brush made and deleted here, a rectangle on the stack.
         unsafe {
             let brush = CreateSolidBrush(color);
@@ -278,11 +311,28 @@ unsafe fn draw(hdc: HDC, state: &State) {
 
     if let Some(icon) = state.icon {
         // SAFETY: `icon` is an icon handle owned by `State` until the window is destroyed.
-        unsafe { DrawIconEx(hdc, l.icon.left, l.icon.top, icon, l.icon.width(), l.icon.width(), 0, std::ptr::null_mut(), DI_NORMAL) };
+        unsafe {
+            DrawIconEx(
+                hdc,
+                l.icon.left,
+                l.icon.top,
+                icon,
+                l.icon.width(),
+                l.icon.width(),
+                0,
+                std::ptr::null_mut(),
+                DI_NORMAL,
+            )
+        };
     }
 
     let text = |rc: &Rc, text: &[u16], face: &str, points: i32, weight: i32, color: u32| {
-        let mut rect = RECT { left: rc.left, top: rc.top, right: rc.right, bottom: rc.bottom };
+        let mut rect = RECT {
+            left: rc.left,
+            top: rc.top,
+            right: rc.right,
+            bottom: rc.bottom,
+        };
         let face = wide(face);
         let height = -(points * state.dpi as i32 / 72);
         // SAFETY: the font is selected only while the text is drawn, then put back and deleted;
@@ -310,7 +360,12 @@ unsafe fn draw(hdc: HDC, state: &State) {
     let (from, to) = sweep(state.began.elapsed().as_millis() as u64, l.track.width());
     if to > from {
         fill(
-            &Rc { left: l.track.left + from, top: l.track.top, right: l.track.left + to, bottom: l.track.bottom },
+            &Rc {
+                left: l.track.left + from,
+                top: l.track.top,
+                right: l.track.left + to,
+                bottom: l.track.bottom,
+            },
             state.colors.bar,
         );
     }
@@ -351,7 +406,9 @@ fn tick(hwnd: HWND) {
             if state.seen_at.is_none() && terminal_appeared(&state.noted, &windows(state.classes), state.pid) {
                 state.seen_at = Some(now);
             }
-            let settled = state.seen_at.is_some_and(|t| now.duration_since(t) >= Duration::from_millis(PAINT_GRACE_MS));
+            let settled = state
+                .seen_at
+                .is_some_and(|t| now.duration_since(t) >= Duration::from_millis(PAINT_GRACE_MS));
             if settled || since >= state.limit {
                 let reached = alpha(since.as_millis() as u64, None);
                 state.out = Some((now, reached));
@@ -367,7 +424,9 @@ fn tick(hwnd: HWND) {
             // SAFETY: a layered window of ours.
             unsafe { SetLayeredWindowAttributes(hwnd, 0, level, LWA_ALPHA) };
         }
-        state.out.is_some_and(|(t, _)| now.duration_since(t).as_millis() as u64 >= FADE_OUT_MS)
+        state
+            .out
+            .is_some_and(|(t, _)| now.duration_since(t).as_millis() as u64 >= FADE_OUT_MS)
     });
     if done {
         // SAFETY: our own window; WM_DESTROY ends the message loop.
@@ -425,7 +484,13 @@ fn monitor_under_mouse() -> (RECT, u32) {
 
 /// Create the card, centred on the monitor the mouse is on and not yet visible. `None` if
 /// Windows would not make it; the launch goes on without a splash.
-fn create(folder: &str, icon_path: &Path, classes: &'static [&'static str], noted: Vec<isize>, pid: u32) -> Option<HWND> {
+fn create(
+    folder: &str,
+    icon_path: &Path,
+    classes: &'static [&'static str],
+    noted: Vec<isize>,
+    pid: u32,
+) -> Option<HWND> {
     let (work, dpi) = monitor_under_mouse();
     let layout = layout(dpi);
     let (width, height) = (layout.card.right, layout.card.bottom);
@@ -436,7 +501,16 @@ fn create(folder: &str, icon_path: &Path, classes: &'static [&'static str], note
     let icon = {
         let path = wide(&icon_path.to_string_lossy());
         // SAFETY: a NUL-terminated path; the icon is loaded at the size it is drawn.
-        let handle = unsafe { LoadImageW(std::ptr::null_mut(), path.as_ptr(), IMAGE_ICON, layout.icon.width(), layout.icon.width(), LR_LOADFROMFILE) };
+        let handle = unsafe {
+            LoadImageW(
+                std::ptr::null_mut(),
+                path.as_ptr(),
+                IMAGE_ICON,
+                layout.icon.width(),
+                layout.icon.width(),
+                LR_LOADFROMFILE,
+            )
+        };
         (!handle.is_null()).then_some(handle)
     };
     let state = State {
@@ -514,18 +588,18 @@ fn create(folder: &str, icon_path: &Path, classes: &'static [&'static str], note
 /// once the splash is gone, with what `start` returned.
 ///
 /// If `start` fails the splash is closed first, so that it is not up behind the error message.
-pub fn run(
-    folder: &str,
-    icon_path: &Path,
-    start: impl FnOnce() -> Result<Started, String>,
-) -> Result<Started, String> {
+pub fn run(folder: &str, icon_path: &Path, start: impl FnOnce() -> Result<Started, String>) -> Result<Started, String> {
     // SAFETY: setting this process's DPI awareness, before any window exists; failing (already
     // set) is harmless.
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
 
     // The terminal windows already open are noted before starting, so that only a new one counts.
     let classes: &'static [&'static str] = &[TERMINAL_CLASS, CONSOLE_CLASS];
-    let noted: Vec<isize> = windows(classes).into_iter().filter(|w| w.terminal_class).map(|w| w.hwnd).collect();
+    let noted: Vec<isize> = windows(classes)
+        .into_iter()
+        .filter(|w| w.terminal_class)
+        .map(|w| w.hwnd)
+        .collect();
 
     // The card is made before anything is started and watches for Windows Terminal; if `start`
     // turns out to have used the plain console, it is told below to watch for that instead.

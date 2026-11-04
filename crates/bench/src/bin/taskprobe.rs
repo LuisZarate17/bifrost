@@ -91,14 +91,22 @@ const PROBE_ROUNDS: usize = 20;
 /// Taking the sentence out asserts it was there, as findprobe does for its own:
 /// a description that changed would otherwise leave the "old" read half new.
 fn whole_reads(mut offered: Vec<Tool>) -> Vec<Tool> {
-    let read = offered.iter_mut().find(|t| t.function.name == "read_file").expect("read_file is always offered");
+    let read = offered
+        .iter_mut()
+        .find(|t| t.function.name == "read_file")
+        .expect("read_file is always offered");
     let sentence = format!(" {}", tools::READ_RANGE_SENTENCE);
     assert!(
         read.function.description.contains(&sentence),
         "the range sentence changed; update tools::READ_RANGE_SENTENCE or the way it is stripped"
     );
     read.function.description = read.function.description.replace(&sentence, "");
-    if let Some(props) = read.function.parameters.get_mut("properties").and_then(|p| p.as_object_mut()) {
+    if let Some(props) = read
+        .function
+        .parameters
+        .get_mut("properties")
+        .and_then(|p| p.as_object_mut())
+    {
         props.remove("start_line");
         props.remove("end_line");
     }
@@ -114,7 +122,10 @@ fn whole_reads(mut offered: Vec<Tool>) -> Vec<Tool> {
 /// model is only not told.)
 fn without_ops(mut offered: Vec<Tool>) -> Vec<Tool> {
     offered.retain(|t| !matches!(t.function.name.as_str(), "delete_file" | "move_file"));
-    let create = offered.iter_mut().find(|t| t.function.name == "create_file").expect("create_file is offered");
+    let create = offered
+        .iter_mut()
+        .find(|t| t.function.name == "create_file")
+        .expect("create_file is offered");
     assert!(
         create.function.description.contains(tools::CREATE_FOLDERS),
         "the folder sentence changed; update tools::CREATE_FOLDERS or the way it is swapped back"
@@ -296,7 +307,11 @@ fn tasks() -> Vec<Task> {
             file: "src/edit.rs",
             module: "edit",
             commit: PIN,
-            removal: Some(Removal { start: 529, end: 547, indent: 0 }),
+            removal: Some(Removal {
+                start: 529,
+                end: 547,
+                indent: 0,
+            }),
             prompt: "In crates/odin-core/src/edit.rs, the function `fn tidy_deletion(before: &str, \
                      after: &str, ended_with_newline: bool) -> String` currently has a body of \
                      `todo!()`. Implement it.\n\n\
@@ -320,7 +335,11 @@ fn tasks() -> Vec<Task> {
             file: "src/edit.rs",
             module: "edit",
             commit: PIN,
-            removal: Some(Removal { start: 262, end: 290, indent: 4 }),
+            removal: Some(Removal {
+                start: 262,
+                end: 290,
+                indent: 4,
+            }),
             prompt: "In crates/odin-core/src/edit.rs, inside `impl Text`, the method `fn \
                      parse(bytes: &[u8]) -> Result<Self, String>` currently has a body of `todo!()`. \
                      Implement it. (`Text { body: String, crlf: bool, bom: bool }`, `const BOM: \
@@ -344,7 +363,11 @@ fn tasks() -> Vec<Task> {
             file: "src/edit.rs",
             module: "edit",
             commit: PIN,
-            removal: Some(Removal { start: 150, end: 196, indent: 4 }),
+            removal: Some(Removal {
+                start: 150,
+                end: 196,
+                indent: 4,
+            }),
             prompt: "In crates/odin-core/src/edit.rs, inside `impl Workspace`, the method `fn \
                      contain_with(&self, real: &Path, requested: &str, app_data: Option<&Path>) -> \
                      Result<(), String>` currently has a body of `todo!()`. Implement it. (`real` is \
@@ -375,7 +398,11 @@ fn tasks() -> Vec<Task> {
             file: "src/edit.rs",
             module: "edit",
             commit: PIN,
-            removal: Some(Removal { start: 705, end: 737, indent: 0 }),
+            removal: Some(Removal {
+                start: 705,
+                end: 737,
+                indent: 0,
+            }),
             prompt: "In crates/odin-core/src/edit.rs, the function `pub fn undo(id: &str, backups: \
                      &Path) -> Result<String, String>` currently has a body of `todo!()`. Implement \
                      it. (A private `struct Record { path: PathBuf, display: String, create: bool, \
@@ -403,7 +430,11 @@ fn tasks() -> Vec<Task> {
             file: "src/toolcall.rs",
             module: "toolcall",
             commit: PIN,
-            removal: Some(Removal { start: 89, end: 139, indent: 0 }),
+            removal: Some(Removal {
+                start: 89,
+                end: 139,
+                indent: 0,
+            }),
             prompt: "In crates/odin-core/src/toolcall.rs, the function `pub fn \
                      render_chatml(messages: &[odin_core::chat::Message], tools: \
                      &[odin_core::chat::Tool]) -> String` currently has a body of `todo!()`. \
@@ -437,7 +468,11 @@ fn tasks() -> Vec<Task> {
             file: "src/toolcall.rs",
             module: "toolcall",
             commit: PIN,
-            removal: Some(Removal { start: 148, end: 171, indent: 0 }),
+            removal: Some(Removal {
+                start: 148,
+                end: 171,
+                indent: 0,
+            }),
             prompt: "In crates/odin-core/src/toolcall.rs, the function `pub fn \
                      extract_calls(content: &str, tools: &[odin_core::chat::Tool]) -> (String, \
                      Vec<odin_core::chat::ToolCall>, Vec<String>)` currently has a body of `todo!()`. \
@@ -456,7 +491,11 @@ fn tasks() -> Vec<Task> {
             file: "src/toolcall.rs",
             module: "toolcall",
             commit: PIN,
-            removal: Some(Removal { start: 276, end: 344, indent: 0 }),
+            removal: Some(Removal {
+                start: 276,
+                end: 344,
+                indent: 0,
+            }),
             prompt: "In crates/odin-core/src/toolcall.rs, the function `fn repair(block: &str, tools: \
                      &[odin_core::chat::Tool]) -> Result<odin_core::chat::ToolCall, String>` currently \
                      has a body of `todo!()`. Implement it. (Helper functions `fn skip_ws(s: &[u8], i: \
@@ -493,7 +532,11 @@ fn tasks() -> Vec<Task> {
             file: "src/toolcall.rs",
             module: "toolcall",
             commit: PIN,
-            removal: Some(Removal { start: 239, end: 272, indent: 0 }),
+            removal: Some(Removal {
+                start: 239,
+                end: 272,
+                indent: 0,
+            }),
             prompt: "In crates/odin-core/src/toolcall.rs, the function `fn \
                      unescape_tolerant(raw: &str) -> String` currently has a body of `todo!()`. \
                      Implement it.\n\n\
@@ -515,7 +558,11 @@ fn tasks() -> Vec<Task> {
             file: "src/tools.rs",
             module: "tools",
             commit: PIN,
-            removal: Some(Removal { start: 373, end: 390, indent: 0 }),
+            removal: Some(Removal {
+                start: 373,
+                end: 390,
+                indent: 0,
+            }),
             prompt: "In crates/odin-core/src/tools.rs, the function `pub fn \
                      prior_failures(history: &[odin_core::chat::Message], call: \
                      &odin_core::chat::ToolCall) -> usize` currently has a body of `todo!()`. \
@@ -533,7 +580,11 @@ fn tasks() -> Vec<Task> {
             file: "src/tools.rs",
             module: "tools",
             commit: PIN,
-            removal: Some(Removal { start: 267, end: 299, indent: 0 }),
+            removal: Some(Removal {
+                start: 267,
+                end: 299,
+                indent: 0,
+            }),
             prompt: "In crates/odin-core/src/tools.rs, the function `pub fn \
                      interpret(call: &odin_core::chat::ToolCall) -> Result<Request, String>` \
                      currently has a body of `todo!()`. Implement it. (The `Request` enum already \
@@ -568,7 +619,11 @@ fn tasks() -> Vec<Task> {
             file: "src/tools.rs",
             module: "tools",
             commit: PIN,
-            removal: Some(Removal { start: 402, end: 429, indent: 0 }),
+            removal: Some(Removal {
+                start: 402,
+                end: 429,
+                indent: 0,
+            }),
             prompt: "In crates/odin-core/src/tools.rs, the function `pub fn \
                      build_files_changed(history: &[odin_core::chat::Message]) -> Vec<String>` \
                      currently has a body of `todo!()`. Implement it. (`fn arg(call: &ToolCall, key: \
@@ -591,7 +646,11 @@ fn tasks() -> Vec<Task> {
             file: "src/store.rs",
             module: "store",
             commit: PIN,
-            removal: Some(Removal { start: 130, end: 147, indent: 4 }),
+            removal: Some(Removal {
+                start: 130,
+                end: 147,
+                indent: 4,
+            }),
             prompt: "In crates/odin-core/src/store.rs, inside `impl Conversation`, the method `pub \
                      fn display_title(&self) -> String` currently has a body of `todo!()`. Implement \
                      it. (`Conversation` has a `title: String` field and a `messages: Vec<Message>` \
@@ -628,7 +687,11 @@ fn cut_tests(text: &str) -> String {
             kept
         }
         None => {
-            if text.is_empty() || text.ends_with('\n') { text.to_string() } else { format!("{text}\n") }
+            if text.is_empty() || text.ends_with('\n') {
+                text.to_string()
+            } else {
+                format!("{text}\n")
+            }
         }
     }
 }
@@ -638,7 +701,9 @@ fn cut_tests(text: &str) -> String {
 /// silently score the wrong code.
 fn apply_removal(text: &str, r: &Removal) -> Result<String, String> {
     let lines: Vec<&str> = text.lines().collect();
-    let before = *lines.get(r.start.checked_sub(2).ok_or("removal range starts too early")?).ok_or("removal start out of range")?;
+    let before = *lines
+        .get(r.start.checked_sub(2).ok_or("removal range starts too early")?)
+        .ok_or("removal start out of range")?;
     let after = *lines.get(r.end).ok_or("removal end out of range")?;
     if !before.trim_end().ends_with('{') {
         return Err(format!(
@@ -704,7 +769,10 @@ impl Worktree {
         if !out.status.success() {
             return Err(String::from_utf8_lossy(&out.stderr).into_owned());
         }
-        Ok(Self { path: at.to_path_buf(), keep })
+        Ok(Self {
+            path: at.to_path_buf(),
+            keep,
+        })
     }
 }
 
@@ -713,7 +781,10 @@ impl Drop for Worktree {
         if self.keep {
             return;
         }
-        let _ = Command::new("git").args(["worktree", "remove", "--force"]).arg(&self.path).status();
+        let _ = Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&self.path)
+            .status();
         let _ = Command::new("git").args(["worktree", "prune"]).status();
     }
 }
@@ -753,7 +824,11 @@ fn judge_tests(output: &str) -> TestOutcome {
     if let Some(at) = output.find("test result: ok. ") {
         let rest = &output[at + "test result: ok. ".len()..];
         let n: usize = rest.split(' ').next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        return if n > 0 { TestOutcome::Pass(n) } else { TestOutcome::ZeroRan };
+        return if n > 0 {
+            TestOutcome::Pass(n)
+        } else {
+            TestOutcome::ZeroRan
+        };
     }
     if output.contains("test result: FAILED") {
         let names: Vec<&str> = output
@@ -766,7 +841,10 @@ fn judge_tests(output: &str) -> TestOutcome {
             names.join(", ")
         });
     }
-    let first = output.lines().find(|l| l.trim_start().starts_with("error")).unwrap_or("no `test result:` line");
+    let first = output
+        .lines()
+        .find(|l| l.trim_start().starts_with("error"))
+        .unwrap_or("no `test result:` line");
     TestOutcome::NoCompile(first.to_string())
 }
 
@@ -794,9 +872,14 @@ impl Verdict {
 /// run finished by itself and its output can be judged.
 fn unfinished(o: &check::Outcome) -> Option<String> {
     match &o.ended {
-        check::Ended::TimedOut => Some(format!("the scoring test run timed out after {:.0}s — environment", o.elapsed.as_secs_f64())),
+        check::Ended::TimedOut => Some(format!(
+            "the scoring test run timed out after {:.0}s — environment",
+            o.elapsed.as_secs_f64()
+        )),
         check::Ended::Stopped => Some("the scoring test run was stopped — environment".to_string()),
-        check::Ended::DiskFull => Some("the scoring test run was stopped for a nearly full disk — environment".to_string()),
+        check::Ended::DiskFull => {
+            Some("the scoring test run was stopped for a nearly full disk — environment".to_string())
+        }
         check::Ended::Exited(None) => Some("the scoring test run ended with no exit code — environment".to_string()),
         check::Ended::Exited(Some(_)) => None,
     }
@@ -807,7 +890,10 @@ fn unfinished(o: &check::Outcome) -> Option<String> {
 /// the environment's failure. A PASS stays a PASS — it got there anyway.
 fn book_with_check_timeouts(verdict: Verdict, why: String, check_timeouts: usize) -> (Verdict, String) {
     if verdict == Verdict::Fail && check_timeouts > 0 {
-        (Verdict::Error, format!("the model's check timed out — environment ({why})"))
+        (
+            Verdict::Error,
+            format!("the model's check timed out — environment ({why})"),
+        )
     } else {
         (verdict, why)
     }
@@ -816,9 +902,20 @@ fn book_with_check_timeouts(verdict: Verdict, why: String, check_timeouts: usize
 /// Run the scoring test command in `worktree`, retrying past a Smart App
 /// Control block up to twice more by touching a source file.
 fn score(worktree: &Path, module: &str, target_dir: &Path, appdata: &Path) -> (Verdict, String) {
-    let argv = vec!["cargo".to_string(), "test".to_string(), "-p".to_string(), "odin-core".to_string(), "--lib".to_string(), "--".to_string(), format!("{module}::tests::")];
+    let argv = vec![
+        "cargo".to_string(),
+        "test".to_string(),
+        "-p".to_string(),
+        "odin-core".to_string(),
+        "--lib".to_string(),
+        "--".to_string(),
+        format!("{module}::tests::"),
+    ];
     let env = vec![
-        ("CARGO_TARGET_DIR".to_string(), target_dir.to_string_lossy().into_owned()),
+        (
+            "CARGO_TARGET_DIR".to_string(),
+            target_dir.to_string_lossy().into_owned(),
+        ),
         ("CARGO_NET_OFFLINE".to_string(), "true".to_string()),
         ("APPDATA".to_string(), appdata.to_string_lossy().into_owned()),
         ("CARGO_TERM_COLOR".to_string(), "never".to_string()),
@@ -1050,11 +1147,19 @@ fn run(
         let _ = std::fs::write(&full_path, &stripped);
     }
 
-    let argv = vec!["cargo".to_string(), "check".to_string(), "-p".to_string(), "odin-core".to_string()];
+    let argv = vec![
+        "cargo".to_string(),
+        "check".to_string(),
+        "-p".to_string(),
+        "odin-core".to_string(),
+    ];
     let cargo = Check {
         argv,
         env: vec![
-            ("CARGO_TARGET_DIR".to_string(), target_dir.to_string_lossy().into_owned()),
+            (
+                "CARGO_TARGET_DIR".to_string(),
+                target_dir.to_string_lossy().into_owned(),
+            ),
             ("CARGO_NET_OFFLINE".to_string(), "true".to_string()),
         ],
     };
@@ -1063,8 +1168,10 @@ fn run(
     let offered = if ops { offered } else { without_ops(offered) };
     // `--ops off` is H8's list, which had no task list.
     let offered = if plan && ops { offered } else { without_plan(offered) };
-    let mut messages =
-        vec![Message::system(tools::system_prompt(&ws, true)), Message::user(task.prompt)];
+    let mut messages = vec![
+        Message::system(tools::system_prompt(&ws, true)),
+        Message::user(task.prompt),
+    ];
     // Reads stay in the worktree. It sits on the same disk as the repo it came
     // from, whose files hold every reference solution — and its `.git` file
     // names where that repo is.
@@ -1072,8 +1179,24 @@ fn run(
     // A task that stubs out a safety function (b03's `contain_with`) stubs the
     // worktree's copy only: the tools the model calls run on the bifrost-core this
     // probe was built with, whose rules are intact.
-    let setup = Setup { ws: &ws, backups: &backups, check: Some(&cargo), confine_reads: true, compact, commands: None, unattended: false };
-    let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, PROBE_ROUNDS, &setup);
+    let setup = Setup {
+        ws: &ws,
+        backups: &backups,
+        check: Some(&cargo),
+        confine_reads: true,
+        compact,
+        commands: None,
+        unattended: false,
+    };
+    let r = probe::run_loop(
+        model,
+        &mut messages,
+        &offered,
+        opts,
+        Transport::Recover,
+        PROBE_ROUNDS,
+        &setup,
+    );
 
     let files = Command::new("git")
         .args(["status", "--porcelain"])
@@ -1223,7 +1346,11 @@ fn file_lines(patch: &scratch::Patch) -> Vec<String> {
         "renamed" => "R",
         _ => "M",
     };
-    patch.files.iter().map(|c| format!("{} {}", letter(c.status), c.path)).collect()
+    patch
+        .files
+        .iter()
+        .map(|c| format!("{} {}", letter(c.status), c.path))
+        .collect()
 }
 
 /// A task run the way `hugin -p` runs one. The worktree is the task folder, with the starting
@@ -1245,7 +1372,11 @@ fn run_propose(
 ) -> Outcome {
     let started = Instant::now();
     let start = start_commit(task);
-    let (wt_path, backups, appdata) = (scratch_dir.join("wt"), scratch_dir.join("backups"), scratch_dir.join("appdata"));
+    let (wt_path, backups, appdata) = (
+        scratch_dir.join("wt"),
+        scratch_dir.join("backups"),
+        scratch_dir.join("appdata"),
+    );
     let path = format!("{CRATE}/{}", task.file);
 
     let tree = match Worktree::add(&wt_path, &start, keep) {
@@ -1268,11 +1399,19 @@ fn run_propose(
         Err(e) => return Outcome::early(started, e),
     };
 
-    let argv = vec!["cargo".to_string(), "check".to_string(), "-p".to_string(), "odin-core".to_string()];
+    let argv = vec![
+        "cargo".to_string(),
+        "check".to_string(),
+        "-p".to_string(),
+        "odin-core".to_string(),
+    ];
     let cargo = Check {
         argv,
         env: vec![
-            ("CARGO_TARGET_DIR".to_string(), target_dir.to_string_lossy().into_owned()),
+            (
+                "CARGO_TARGET_DIR".to_string(),
+                target_dir.to_string_lossy().into_owned(),
+            ),
             ("CARGO_NET_OFFLINE".to_string(), "true".to_string()),
         ],
     };
@@ -1280,8 +1419,10 @@ fn run_propose(
     let offered = if parts { offered } else { whole_reads(offered) };
     let offered = if ops { offered } else { without_ops(offered) };
     let offered = if plan && ops { offered } else { without_plan(offered) };
-    let mut messages =
-        vec![Message::system(tools::system_prompt(&ws, true)), Message::user(task.prompt)];
+    let mut messages = vec![
+        Message::system(tools::system_prompt(&ws, true)),
+        Message::user(task.prompt),
+    ];
     // Unattended, as `hugin -p` is: the rule answers each card, and a read outside the copy is
     // turned away by it (`confine_reads` is the interactive run's way of saying the same).
     let setup = Setup {
@@ -1293,7 +1434,15 @@ fn run_propose(
         commands: None,
         unattended: true,
     };
-    let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, unattended::ROUNDS, &setup);
+    let r = probe::run_loop(
+        model,
+        &mut messages,
+        &offered,
+        opts,
+        Transport::Recover,
+        unattended::ROUNDS,
+        &setup,
+    );
 
     // What the run did, and whether the task folder is still as it was.
     let patch = copy.finish();
@@ -1405,7 +1554,15 @@ fn show_bytes(treeish: &str, path: &str) -> Result<Vec<u8>, String> {
 /// What a commit changed from its parent: `(status letter, path)` for each file.
 fn changed_by(commit: &str) -> Result<Vec<(char, String)>, String> {
     let out = Command::new("git")
-        .args(["diff-tree", "-r", "-z", "--no-renames", "--name-status", &format!("{commit}^"), commit])
+        .args([
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--name-status",
+            &format!("{commit}^"),
+            commit,
+        ])
         .output()
         .map_err(|e| format!("could not run git: {e}"))?;
     if !out.status.success() {
@@ -1434,8 +1591,12 @@ struct ProposeCheck {
 fn propose_self_check(task: &Task, scratch_root: &Path, target_dir: &Path, keep: bool) -> Result<ProposeCheck, String> {
     let path = format!("{CRATE}/{}", task.file);
     let appdata = scratch_root.join(format!("appdata-{}", task.id));
-    let tree = Worktree::add(&scratch_root.join(format!("prop-{}", task.id)), &start_commit(task), keep)
-        .map_err(|e| format!("could not check out: {e}"))?;
+    let tree = Worktree::add(
+        &scratch_root.join(format!("prop-{}", task.id)),
+        &start_commit(task),
+        keep,
+    )
+    .map_err(|e| format!("could not check out: {e}"))?;
     start_state(&tree.path, task)?;
     let before = folder_state(&tree.path)?;
     let mut copy = Scratch::of_in(&Git::new(), &scratch_root.join(format!("work-{}", task.id)), &tree.path)?;
@@ -1452,7 +1613,11 @@ fn propose_self_check(task: &Task, scratch_root: &Path, target_dir: &Path, keep:
                 let _ = std::fs::remove_file(&to);
                 continue;
             }
-            let bytes = if name == path { cut_tests(&solution_text).into_bytes() } else { show_bytes(task.commit, &name)? };
+            let bytes = if name == path {
+                cut_tests(&solution_text).into_bytes()
+            } else {
+                show_bytes(task.commit, &name)?
+            };
             wrote_scored_file |= name == path;
             if let Some(parent) = to.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -1461,7 +1626,8 @@ fn propose_self_check(task: &Task, scratch_root: &Path, target_dir: &Path, keep:
         }
     }
     if !wrote_scored_file {
-        std::fs::write(in_copy.join(&path), cut_tests(&solution_text)).map_err(|e| format!("could not write the scored file: {e}"))?;
+        std::fs::write(in_copy.join(&path), cut_tests(&solution_text))
+            .map_err(|e| format!("could not write the scored file: {e}"))?;
     }
 
     let patch = copy.finish()?;
@@ -1473,7 +1639,12 @@ fn propose_self_check(task: &Task, scratch_root: &Path, target_dir: &Path, keep:
     } else {
         scratch::apply(&tree.path, &file, true).and_then(|_| scratch::apply(&tree.path, &file, false))
     };
-    let mut check = ProposeCheck { untouched, applies: applied.is_ok(), verdict: Verdict::Error, note: String::new() };
+    let mut check = ProposeCheck {
+        untouched,
+        applies: applied.is_ok(),
+        verdict: Verdict::Error,
+        note: String::new(),
+    };
     match applied {
         Err(e) => check.note = format!("did not apply: {e}"),
         Ok(()) => {
@@ -1524,7 +1695,10 @@ fn selfcheck_propose(tasks: &[Task], scratch_root: &Path, target_dir: &Path, kee
         }
     }
     println!();
-    println!("{good}/{} tasks round-trip through the copy, the patch and the apply.", tasks.len());
+    println!(
+        "{good}/{} tasks round-trip through the copy, the patch and the apply.",
+        tasks.len()
+    );
     if all_ok {
         println!("every task is OK in propose mode.");
     } else {
@@ -1558,8 +1732,13 @@ fn paired_report(runs: &[Paired]) -> Vec<String> {
         // [both pass, only interactive, only propose, neither]
         let mut counts = [0usize; 4];
         let (mut i_pass, mut p_pass) = (0, 0);
-        for i in runs.iter().filter(|r| r.setting == setting && r.mode == Mode::Interactive) {
-            let Some(p) = runs.iter().find(|p| p.mode == Mode::Propose && p.setting == setting && p.task == i.task && p.run == i.run)
+        for i in runs
+            .iter()
+            .filter(|r| r.setting == setting && r.mode == Mode::Interactive)
+        {
+            let Some(p) = runs
+                .iter()
+                .find(|p| p.mode == Mode::Propose && p.setting == setting && p.task == i.task && p.run == i.run)
             else {
                 continue;
             };
@@ -1600,7 +1779,10 @@ fn paired_report(runs: &[Paired]) -> Vec<String> {
 // ── main ────────────────────────────────────────────────────────────────────
 
 fn arg(args: &[String], key: &str) -> Option<String> {
-    args.iter().position(|a| a == key).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == key)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn main() {
@@ -1679,8 +1861,10 @@ fn main() {
         }
     };
 
-    let tasks: Vec<Task> =
-        tasks().into_iter().filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o))).collect();
+    let tasks: Vec<Task> = tasks()
+        .into_iter()
+        .filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o)))
+        .collect();
 
     let scratch_root = std::env::temp_dir().join(format!("bifrost-taskprobe-{}", std::process::id()));
     // The repo's own target dir: warming a fresh one would rebuild every
@@ -1703,15 +1887,36 @@ fn main() {
     println!("H3 — task probe");
     println!("model:  {model}");
     println!("think:  {}", think.map_or("unset (the model's own)", Think::name));
-    println!("mode:   {}", modes.iter().map(|m| m.name()).collect::<Vec<_>>().join(" and "));
+    println!(
+        "mode:   {}",
+        modes.iter().map(|m| m.name()).collect::<Vec<_>>().join(" and ")
+    );
     println!("ctx:    {}", cfg.num_ctx);
     println!("compact: {}", if compact { "on" } else { "off" });
     println!(
         "plan:   {}",
-        if plan && ops { "on (update_plan offered)" } else { "off (no task list)" }
+        if plan && ops {
+            "on (update_plan offered)"
+        } else {
+            "off (no task list)"
+        }
     );
-    println!("ops:    {}", if ops { "on (delete_file and move_file offered)" } else { "off (the tools as at H8)" });
-    println!("read:   {}", if parts { "parts (start_line and end_line offered)" } else { "whole (the read before H8)" });
+    println!(
+        "ops:    {}",
+        if ops {
+            "on (delete_file and move_file offered)"
+        } else {
+            "off (the tools as at H8)"
+        }
+    );
+    println!(
+        "read:   {}",
+        if parts {
+            "parts (start_line and end_line offered)"
+        } else {
+            "whole (the read before H8)"
+        }
+    );
     println!(
         "tasks:  {} · {} real commits · {} removals",
         tasks.len(),
@@ -1719,7 +1924,10 @@ fn main() {
         tasks.iter().filter(|t| t.kind == Kind::Removal).count()
     );
     println!("runs:   {runs} at the app's own settings, plus 1 at temperature 0");
-    println!("bound:  {PROBE_ROUNDS} rounds (the app stops at {})\n", tools::MAX_ROUNDS);
+    println!(
+        "bound:  {PROBE_ROUNDS} rounds (the app stops at {})\n",
+        tools::MAX_ROUNDS
+    );
 
     // Started if it is not running, as the apps and the CLI do: an hour-long
     // run should not fail at the first request because nothing had needed
@@ -1748,14 +1956,20 @@ fn main() {
     let mut rows = Vec::new();
     let mut json = Vec::new();
     // Every pass is one mode over one setting, the interactive ones first.
-    let passes: Vec<(Mode, &str, Options, usize)> =
-        modes.iter().flat_map(|m| settings.iter().map(move |(l, o, n)| (*m, *l, *o, *n))).collect();
+    let passes: Vec<(Mode, &str, Options, usize)> = modes
+        .iter()
+        .flat_map(|m| settings.iter().map(move |(l, o, n)| (*m, *l, *o, *n)))
+        .collect();
     let mut paired = Vec::new();
     let (mut noapply_total, mut touched_total) = (0usize, 0usize);
 
     for (mode, setting, opts, n) in &passes {
         // What a pass is called where it is shown: the setting, and the mode when it is not H3's.
-        let label = &if *mode == Mode::Propose { format!("{setting} {}", mode.name()) } else { setting.to_string() };
+        let label = &if *mode == Mode::Propose {
+            format!("{setting} {}", mode.name())
+        } else {
+            setting.to_string()
+        };
         let (mut pass, mut late, mut fail, mut error) = (0, 0, 0, 0);
         let (mut kind_a, mut kind_b) = ((0usize, 0usize), (0usize, 0usize));
         let (mut secs, mut rounds, mut checks) = (0.0, 0usize, 0usize);
@@ -1769,7 +1983,8 @@ fn main() {
         for task in &tasks {
             let mut line = String::new();
             for i in 0..*n {
-                let scratch = scratch_root.join(format!("{}-{}-{}-{i}", mode.name(), setting.replace('=', ""), task.id));
+                let scratch =
+                    scratch_root.join(format!("{}-{}-{}-{i}", mode.name(), setting.replace('=', ""), task.id));
                 let flags = (compact, parts, ops, plan);
                 let o = match mode {
                     Mode::Interactive => run(&model, task, *opts, &scratch, &target_dir, keep, flags),
@@ -1815,7 +2030,11 @@ fn main() {
                 plans += o.plans;
                 autos += o.autos;
                 cut_runs += (o.truncated > 0) as usize;
-                let shown = if o.verdict == Verdict::Pass && o.late { "LATE" } else { o.verdict.label() };
+                let shown = if o.verdict == Verdict::Pass && o.late {
+                    "LATE"
+                } else {
+                    o.verdict.label()
+                };
                 line.push_str(&format!("{shown:<5} "));
                 if o.verdict != Verdict::Pass {
                     println!("    {} run {}: {} — {}", task.id, i + 1, o.verdict.label(), o.why);
@@ -1870,16 +2089,24 @@ fn main() {
     }
 
     println!("─── {model} ───");
-    println!("| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | plans/run | autos/run | checks/run | asks/run | time/run | max prompt | cut runs | ranged reads | deletes | moves | delete→create |", tools::MAX_ROUNDS);
+    println!(
+        "| setting | pass (≤{} rounds) | pass later | fail | error | rounds/run | plans/run | autos/run | checks/run | asks/run | time/run | max prompt | cut runs | ranged reads | deletes | moves | delete→create |",
+        tools::MAX_ROUNDS
+    );
     println!("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|");
     for r in &rows {
         println!("{r}");
     }
     if modes.contains(&Mode::Propose) {
-        println!("\npropose mode: {noapply_total} NOAPPLY (a patch that did not apply) · {touched_total} touched the task folder");
+        println!(
+            "\npropose mode: {noapply_total} NOAPPLY (a patch that did not apply) · {touched_total} touched the task folder"
+        );
     }
     if modes.len() > 1 {
-        println!("\npaired, run for run (passes within the app's {} rounds):", tools::MAX_ROUNDS);
+        println!(
+            "\npaired, run for run (passes within the app's {} rounds):",
+            tools::MAX_ROUNDS
+        );
         for line in paired_report(&paired) {
             println!("{line}");
         }
@@ -1919,9 +2146,17 @@ mod tests {
     /// R-10: only a run that finished with an exit code may be judged by its output.
     #[test]
     fn a_scoring_run_that_never_finished_is_not_judged() {
-        assert!(unfinished(&ended(check::Ended::TimedOut)).unwrap().contains("timed out"));
+        assert!(
+            unfinished(&ended(check::Ended::TimedOut))
+                .unwrap()
+                .contains("timed out")
+        );
         assert!(unfinished(&ended(check::Ended::Stopped)).unwrap().contains("stopped"));
-        assert!(unfinished(&ended(check::Ended::Exited(None))).unwrap().contains("no exit code"));
+        assert!(
+            unfinished(&ended(check::Ended::Exited(None)))
+                .unwrap()
+                .contains("no exit code")
+        );
         assert!(unfinished(&ended(check::Ended::Exited(Some(0)))).is_none());
         assert!(unfinished(&ended(check::Ended::Exited(Some(101)))).is_none());
     }
@@ -1968,7 +2203,17 @@ mod tests {
         let names = |v: &[Tool]| v.iter().map(|t| t.function.name.clone()).collect::<Vec<_>>();
         assert!(names(&on).contains(&"delete_file".to_string()) && names(&on).contains(&"move_file".to_string()));
         let off = without_ops(without_plan(on));
-        assert_eq!(names(&off), ["read_file", "list_files", "search", "edit_file", "create_file", "run_check"]);
+        assert_eq!(
+            names(&off),
+            [
+                "read_file",
+                "list_files",
+                "search",
+                "edit_file",
+                "create_file",
+                "run_check"
+            ]
+        );
         let create = off.iter().find(|t| t.function.name == "create_file").unwrap();
         assert_eq!(
             create.function.description,
@@ -1998,11 +2243,23 @@ mod tests {
         let off = without_plan(on.clone());
         assert_eq!(
             names(&off),
-            ["read_file", "list_files", "search", "edit_file", "create_file", "delete_file", "move_file", "run_check"]
+            [
+                "read_file",
+                "list_files",
+                "search",
+                "edit_file",
+                "create_file",
+                "delete_file",
+                "move_file",
+                "run_check"
+            ]
         );
         // Nothing else was touched: the other tools are the same, byte for byte.
         let kept: Vec<_> = on.iter().filter(|t| t.function.name != "update_plan").collect();
-        assert_eq!(serde_json::to_value(&kept).unwrap(), serde_json::to_value(&off).unwrap());
+        assert_eq!(
+            serde_json::to_value(&kept).unwrap(),
+            serde_json::to_value(&off).unwrap()
+        );
     }
 
     /// **The model cannot read its way to the answer.** A worktree's `.git`
@@ -2012,7 +2269,10 @@ mod tests {
     /// needs a card and the probe's whether to allow it: this is the second.
     #[test]
     fn reads_are_confined_to_the_worktree() {
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let base = std::env::temp_dir().join(format!("bifrost-taskprobe-confine-{}-{n}", std::process::id()));
         let tree = base.join("tree");
         std::fs::create_dir_all(tree.join("src")).unwrap();
@@ -2048,7 +2308,8 @@ mod tests {
 
     #[test]
     fn restore_appends_the_solutions_tests_to_the_models_own_code() {
-        let solution = "fn a() {\n    2\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() { assert_eq!(a(), 2); }\n}\n";
+        let solution =
+            "fn a() {\n    2\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() { assert_eq!(a(), 2); }\n}\n";
         let model = "fn a() {\n    2\n}\n";
         assert_eq!(
             restore(Some(model), solution),
@@ -2065,14 +2326,30 @@ mod tests {
     #[test]
     fn apply_removal_replaces_the_bodys_interior_with_todo() {
         let text = "fn f(x: i32) -> i32 {\n    let y = x + 1;\n    y\n}\n";
-        let out = apply_removal(text, &Removal { start: 2, end: 3, indent: 0 }).unwrap();
+        let out = apply_removal(
+            text,
+            &Removal {
+                start: 2,
+                end: 3,
+                indent: 0,
+            },
+        )
+        .unwrap();
         assert_eq!(out, "fn f(x: i32) -> i32 {\n    todo!()\n}\n");
     }
 
     #[test]
     fn apply_removal_respects_indentation_for_a_method() {
         let text = "impl X {\n    fn f(&self) -> i32 {\n        1\n    }\n}\n";
-        let out = apply_removal(text, &Removal { start: 3, end: 3, indent: 4 }).unwrap();
+        let out = apply_removal(
+            text,
+            &Removal {
+                start: 3,
+                end: 3,
+                indent: 4,
+            },
+        )
+        .unwrap();
         assert_eq!(out, "impl X {\n    fn f(&self) -> i32 {\n        todo!()\n    }\n}\n");
     }
 
@@ -2080,8 +2357,28 @@ mod tests {
     fn a_wrong_range_is_refused_rather_than_silently_scoring_the_wrong_code() {
         let text = "fn f() -> i32 {\n    1\n}\n";
         // Off by one: the true body is line 2, not line 1.
-        assert!(apply_removal(text, &Removal { start: 1, end: 2, indent: 0 }).is_err());
-        assert!(apply_removal(text, &Removal { start: 2, end: 2, indent: 4 }).is_err());
+        assert!(
+            apply_removal(
+                text,
+                &Removal {
+                    start: 1,
+                    end: 2,
+                    indent: 0
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            apply_removal(
+                text,
+                &Removal {
+                    start: 2,
+                    end: 2,
+                    indent: 4
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -2136,7 +2433,13 @@ mod tests {
     // ── propose mode ────────────────────────────────────────────────────────
 
     fn paired(setting: &str, task: &'static str, run: usize, mode: Mode, pass: bool) -> Paired {
-        Paired { setting: setting.into(), task, run, mode, pass }
+        Paired {
+            setting: setting.into(),
+            task,
+            run,
+            mode,
+            pass,
+        }
     }
 
     /// **The pairs are the same setting, task and run number**, and a run with no partner is
@@ -2177,7 +2480,13 @@ mod tests {
 
     #[test]
     fn a_patchs_files_read_as_git_status_has_them() {
-        let change = |path: &str, status: &'static str| scratch::Change { path: path.into(), from: None, status, added: None, deleted: None };
+        let change = |path: &str, status: &'static str| scratch::Change {
+            path: path.into(),
+            from: None,
+            status,
+            added: None,
+            deleted: None,
+        };
         let patch = scratch::Patch {
             bytes: Vec::new(),
             files: vec![
@@ -2203,7 +2512,10 @@ mod tests {
     /// tests, and a removal's function as `todo!()`; a file the parent does not have stays absent.
     #[test]
     fn the_starting_state_strips_the_scored_file_in_place() {
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let dir = std::env::temp_dir().join(format!("bifrost-taskprobe-start-{}-{n}", std::process::id()));
         let task = Task {
             id: "t",
@@ -2212,17 +2524,32 @@ mod tests {
             module: "x",
             prompt: "",
             commit: PIN,
-            removal: Some(Removal { start: 2, end: 2, indent: 0 }),
+            removal: Some(Removal {
+                start: 2,
+                end: 2,
+                indent: 0,
+            }),
         };
         let file = dir.join(CRATE).join(task.file);
         std::fs::create_dir_all(file.parent().unwrap()).unwrap();
         std::fs::write(&file, "fn f() -> i32 {\n    1\n}\n\n#[cfg(test)]\nmod tests {}\n").unwrap();
         start_state(&dir, &task).unwrap();
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "fn f() -> i32 {\n    todo!()\n}\n\n");
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "fn f() -> i32 {\n    todo!()\n}\n\n"
+        );
 
-        let new_file = Task { removal: None, kind: Kind::RealCommit, file: "src/absent.rs", ..task };
+        let new_file = Task {
+            removal: None,
+            kind: Kind::RealCommit,
+            file: "src/absent.rs",
+            ..task
+        };
         start_state(&dir, &new_file).unwrap();
-        assert!(!dir.join(CRATE).join("src/absent.rs").exists(), "a file the parent lacks stays absent");
+        assert!(
+            !dir.join(CRATE).join("src/absent.rs").exists(),
+            "a file the parent lacks stays absent"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

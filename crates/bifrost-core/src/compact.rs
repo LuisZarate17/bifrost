@@ -103,11 +103,18 @@ impl Budget {
         let chars_per_token = match calibration {
             Some((chars, tokens)) if chars > 0 && tokens > 0 => {
                 let ratio = chars as f64 / tokens as f64;
-                if ratio > MAX_CHARS_PER_TOKEN { DEFAULT_CHARS_PER_TOKEN } else { ratio.max(MIN_CHARS_PER_TOKEN) }
+                if ratio > MAX_CHARS_PER_TOKEN {
+                    DEFAULT_CHARS_PER_TOKEN
+                } else {
+                    ratio.max(MIN_CHARS_PER_TOKEN)
+                }
             }
             _ => DEFAULT_CHARS_PER_TOKEN,
         };
-        Self { num_ctx, chars_per_token }
+        Self {
+            num_ctx,
+            chars_per_token,
+        }
     }
 
     /// The most tokens the request may be estimated at.
@@ -154,7 +161,9 @@ fn message_chars(m: &Message) -> u64 {
 /// arguments of every call, and the tool schemas — sent every round, about 3 KB.
 /// Images are not counted; a picture costs tokens by its size, not its base64.
 pub fn prompt_chars(messages: &[Message], tools: &[Tool]) -> u64 {
-    let schemas = serde_json::to_string(tools).map(|s| s.chars().count() as u64).unwrap_or(0);
+    let schemas = serde_json::to_string(tools)
+        .map(|s| s.chars().count() as u64)
+        .unwrap_or(0);
     messages.iter().map(message_chars).sum::<u64>() + schemas
 }
 
@@ -211,10 +220,10 @@ fn has_thinking(m: &Message) -> bool {
 
 fn has_long_argument(m: &Message) -> bool {
     m.tool_calls.as_deref().unwrap_or(&[]).iter().any(|c| {
-        c.function
-            .arguments
-            .as_object()
-            .is_some_and(|o| o.values().any(|v| v.as_str().is_some_and(|s| s.chars().count() > ARG_LIMIT)))
+        c.function.arguments.as_object().is_some_and(|o| {
+            o.values()
+                .any(|v| v.as_str().is_some_and(|s| s.chars().count() > ARG_LIMIT))
+        })
     })
 }
 
@@ -272,7 +281,9 @@ pub fn compact(messages: &[Message], tools: &[Tool], budget: &Budget) -> Compact
         };
         let newest_of_its_file = |i: usize, m: &Message| {
             m.role == "tool"
-                && paired_call(messages, i).and_then(read_key).is_some_and(|k| newest_read.get(&k) == Some(&i))
+                && paired_call(messages, i)
+                    .and_then(read_key)
+                    .is_some_and(|k| newest_read.get(&k) == Some(&i))
         };
 
         // Two passes, oldest first in each. The first leaves alone the newest read
@@ -299,7 +310,11 @@ pub fn compact(messages: &[Message], tools: &[Tool], budget: &Budget) -> Compact
     }
 
     let estimated_tokens = budget.tokens(total);
-    Compaction { set_aside: set, fits: estimated_tokens <= budget.hard_tokens(), estimated_tokens }
+    Compaction {
+        set_aside: set,
+        fits: estimated_tokens <= budget.hard_tokens(),
+        estimated_tokens,
+    }
 }
 
 /// What a long argument becomes once it has been sent: its length, and a short
@@ -338,7 +353,9 @@ pub fn same_argument(kept: &serde_json::Value, sent: &serde_json::Value) -> bool
 /// [`STUB_MARKER`], after the `error: ` that a stubbed failure keeps.
 fn is_stub(content: &str) -> bool {
     let c = content.trim_start();
-    c.strip_prefix(FAILED_PREFIX).map_or(c, str::trim_start).starts_with(STUB_MARKER)
+    c.strip_prefix(FAILED_PREFIX)
+        .map_or(c, str::trim_start)
+        .starts_with(STUB_MARKER)
 }
 
 /// How a failed tool result begins ([`tools`]'s contract), and so how its stub does.
@@ -358,7 +375,9 @@ const FAILED_PREFIX: &str = "error:";
 pub fn set_aside(message: &mut Message, call: Option<&ToolCall>) {
     if message.role == "tool" {
         let lines = message.content.lines().count();
-        let name = call.map(|c| c.function.name.clone()).or_else(|| message.tool_name.clone());
+        let name = call
+            .map(|c| c.function.name.clone())
+            .or_else(|| message.tool_name.clone());
         let path = call.and_then(|c| c.function.arguments["path"].as_str().map(str::to_string));
         let range = call
             .filter(|c| c.function.name == "read_file")
@@ -372,8 +391,16 @@ pub fn set_aside(message: &mut Message, call: Option<&ToolCall>) {
             (Some(n), None) => format!("the earlier result of {n}"),
             _ => "an earlier result".to_string(),
         };
-        let again = if name.as_deref() == Some("read_file") { "Read it again" } else { "Run it again" };
-        let failed = if message.content.trim_start().starts_with(FAILED_PREFIX) { "error: " } else { "" };
+        let again = if name.as_deref() == Some("read_file") {
+            "Read it again"
+        } else {
+            "Run it again"
+        };
+        let failed = if message.content.trim_start().starts_with(FAILED_PREFIX) {
+            "error: "
+        } else {
+            ""
+        };
         message.content = format!(
             "{failed}{STUB_MARKER} the model's context: {what} ({lines} line{}). {again} if you still need it.]",
             if lines == 1 { "" } else { "s" }
@@ -401,7 +428,13 @@ mod tests {
     use serde_json::json;
 
     fn call(name: &str, args: serde_json::Value) -> ToolCall {
-        ToolCall { id: None, function: FunctionCall { name: name.to_string(), arguments: args } }
+        ToolCall {
+            id: None,
+            function: FunctionCall {
+                name: name.to_string(),
+                arguments: args,
+            },
+        }
     }
 
     fn asks(name: &str, args: serde_json::Value) -> Message {
@@ -417,7 +450,10 @@ mod tests {
 
     /// A read and its result: two messages, as the app puts them in the convo.
     fn read(path: &str, chars: usize) -> [Message; 2] {
-        [asks("read_file", json!({ "path": path })), Message::tool_result("read_file", "x".repeat(chars))]
+        [
+            asks("read_file", json!({ "path": path })),
+            Message::tool_result("read_file", "x".repeat(chars)),
+        ]
     }
 
     /// Characters a token costs by default: 2.5, so 1000 characters is 400 tokens.
@@ -428,7 +464,10 @@ mod tests {
 
     /// A search and its result. Unlike a read, nothing protects an old one.
     fn found(chars: usize) -> [Message; 2] {
-        [asks("search", json!({ "text": "x" })), Message::tool_result("search", "x".repeat(chars))]
+        [
+            asks("search", json!({ "text": "x" })),
+            Message::tool_result("search", "x".repeat(chars)),
+        ]
     }
 
     /// A system prompt, a request, then a read of each path given — or, for the
@@ -449,7 +488,11 @@ mod tests {
         let mut thought = plain.clone();
         // Index 2 is the assistant message that asked for the read.
         thought[2].thinking = Some("é".repeat(4000));
-        assert_eq!(message_chars(&thought[2]), message_chars(&plain[2]) + 4000, "characters, not bytes");
+        assert_eq!(
+            message_chars(&thought[2]),
+            message_chars(&plain[2]) + 4000,
+            "characters, not bytes"
+        );
         assert_eq!(prompt_chars(&thought, &[]), prompt_chars(&plain, &[]) + 4000);
         let budget = Budget::new(32768, None);
         assert!(compact(&thought, &[], &budget).estimated_tokens > compact(&plain, &[], &budget).estimated_tokens);
@@ -471,7 +514,10 @@ mod tests {
         m.extend(reasoned("a.rs", 6000, 500));
         m.extend(reasoned("b.rs", 1000, 500));
         let budget = tight(2000);
-        assert!(budget.tokens(prompt_chars(&m, &[])) > budget.hard_tokens(), "the turn has to start over the limit");
+        assert!(
+            budget.tokens(prompt_chars(&m, &[])) > budget.hard_tokens(),
+            "the turn has to start over the limit"
+        );
 
         let c = compact(&m, &[], &budget);
         // Index 2 is the first assistant message; index 4, the newest, is not touched.
@@ -485,7 +531,10 @@ mod tests {
         assert_eq!(m[2].thinking, None);
         assert_eq!(m[4].thinking.as_deref().map(str::len), Some(1000));
         assert_eq!(budget.tokens(prompt_chars(&m, &[])), c.estimated_tokens);
-        assert!(compact(&m, &[], &budget).set_aside.is_empty(), "compacting again sets nothing more aside");
+        assert!(
+            compact(&m, &[], &budget).set_aside.is_empty(),
+            "compacting again sets nothing more aside"
+        );
     }
 
     /// The oldest reasoning goes first, only as much as is needed, and **before any tool
@@ -588,7 +637,10 @@ mod tests {
     #[test]
     fn a_long_create_file_argument_is_set_aside_with_its_result_kept() {
         let mut m = vec![Message::system("sys"), Message::user("write it")];
-        m.push(asks("create_file", json!({ "path": "n.rs", "content": "y".repeat(8000) })));
+        m.push(asks(
+            "create_file",
+            json!({ "path": "n.rs", "content": "y".repeat(8000) }),
+        ));
         m.push(Message::tool_result("create_file", "Created n.rs (200 lines)."));
         m.extend(read("a.rs", 5000));
         let c = compact(&m, &[], &tight(2000));
@@ -610,7 +662,10 @@ mod tests {
         let mut m = vec![
             Message::user("change it"),
             asks("edit_file", edit.function.arguments.clone()),
-            Message::tool_result("edit_file", format!("error: old_text was not found. Closest text: {}", "z".repeat(2000))),
+            Message::tool_result(
+                "edit_file",
+                format!("error: old_text was not found. Closest text: {}", "z".repeat(2000)),
+            ),
         ];
         assert_eq!(tools::prior_failures(&m, &edit), 1);
         let call = paired_call(&m, 2).cloned();
@@ -618,7 +673,11 @@ mod tests {
         set_aside(&mut m[1], None);
         assert!(m[2].content.starts_with("error: [Set aside"), "{}", m[2].content);
         assert!(is_stub(&m[2].content));
-        assert_eq!(tools::prior_failures(&m, &edit), 1, "a stubbed failure stopped counting");
+        assert_eq!(
+            tools::prior_failures(&m, &edit),
+            1,
+            "a stubbed failure stopped counting"
+        );
     }
 
     /// **A retry with one character changed is not the call that failed (R-21).**
@@ -632,7 +691,10 @@ mod tests {
         retry.replace_range(1500..1501, "y");
         let stub = serde_json::Value::String(argument_stub(&first));
         assert!(same_argument(&stub, &json!(first)));
-        assert!(!same_argument(&stub, &json!(retry)), "a same-length retry counted as the same call");
+        assert!(
+            !same_argument(&stub, &json!(retry)),
+            "a same-length retry counted as the same call"
+        );
     }
 
     #[test]
@@ -684,7 +746,10 @@ mod tests {
     #[test]
     fn a_ranged_stub_names_the_lines() {
         let mut m = Message::tool_result("read_file", "a\nb\nc\n");
-        let ask = call("read_file", json!({ "path": "src/x.rs", "start_line": "120", "end_line": 180 }));
+        let ask = call(
+            "read_file",
+            json!({ "path": "src/x.rs", "start_line": "120", "end_line": 180 }),
+        );
         set_aside(&mut m, Some(&ask));
         assert_eq!(
             m.content,
@@ -692,14 +757,20 @@ mod tests {
              Read it again if you still need it.]"
         );
         let mut m = Message::tool_result("read_file", "a\n");
-        set_aside(&mut m, Some(&call("read_file", json!({ "path": "src/x.rs", "start_line": 120 }))));
+        set_aside(
+            &mut m,
+            Some(&call("read_file", json!({ "path": "src/x.rs", "start_line": 120 }))),
+        );
         assert!(m.content.contains("src/x.rs from line 120 (1 line)"), "{}", m.content);
     }
 
     /// A read of some lines of a file, and its result.
     fn ranged(path: &str, start: serde_json::Value, end: u32, chars: usize) -> [Message; 2] {
         [
-            asks("read_file", json!({ "path": path, "start_line": start, "end_line": end })),
+            asks(
+                "read_file",
+                json!({ "path": path, "start_line": start, "end_line": end }),
+            ),
             Message::tool_result("read_file", "x".repeat(chars)),
         ]
     }

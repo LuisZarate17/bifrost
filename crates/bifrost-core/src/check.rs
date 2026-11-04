@@ -139,7 +139,11 @@ pub fn label(argv: &[String]) -> String {
 
 /// How long this command may run: tests get longer than a check.
 pub fn timeout_for(argv: &[String]) -> Duration {
-    if argv.iter().any(|a| a == "test") { TEST_TIMEOUT } else { CHECK_TIMEOUT }
+    if argv.iter().any(|a| a == "test") {
+        TEST_TIMEOUT
+    } else {
+        CHECK_TIMEOUT
+    }
 }
 
 // ── the shell a command runs in ─────────────────────────────────────────────
@@ -219,8 +223,7 @@ pub fn bash_path() -> Option<PathBuf> {
 /// last thing failed, so `cargo build` failing with 101 would read as 1, and the model
 /// would be told a number cargo never said. A cmdlet that fails still ends it with 1.
 fn powershell_script(command: &str) -> String {
-    const START: &str =
-        "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; $global:LASTEXITCODE=0";
+    const START: &str = "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; $global:LASTEXITCODE=0";
     const END: &str =
         "$bifrostOk=$?; if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE } elseif (-not $bifrostOk) { exit 1 }";
     format!("{START}\n{command}\n{END}")
@@ -256,7 +259,15 @@ fn shell_command(shell: Shell, command: &str) -> Result<Command, String> {
                 ));
             }
             let mut cmd = Command::new("powershell.exe");
-            cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]).arg(run);
+            cmd.args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+            ])
+            .arg(run);
             Ok(cmd)
         }
         Shell::Cmd => {
@@ -293,9 +304,8 @@ fn base64(bytes: &[u8]) -> String {
     const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
-        let n = (chunk[0] as u32) << 16
-            | (*chunk.get(1).unwrap_or(&0) as u32) << 8
-            | *chunk.get(2).unwrap_or(&0) as u32;
+        let n =
+            (chunk[0] as u32) << 16 | (*chunk.get(1).unwrap_or(&0) as u32) << 8 | *chunk.get(2).unwrap_or(&0) as u32;
         for i in 0..4 {
             if i <= chunk.len() {
                 out.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
@@ -362,13 +372,19 @@ pub const UNFINISHED_NOTE: &str = "A test program ended without reporting its re
 /// Whether `argv` is `cargo test` (or `cargo t`), whose output says when a test program began
 /// and when it reported. A run that only builds or lists the tests has no results to count.
 fn counts_test_runs(argv: &[String]) -> bool {
-    let Some((program, args)) = argv.split_first() else { return false };
-    let is_cargo = Path::new(program).file_stem().is_some_and(|stem| stem.eq_ignore_ascii_case("cargo"));
+    let Some((program, args)) = argv.split_first() else {
+        return false;
+    };
+    let is_cargo = Path::new(program)
+        .file_stem()
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("cargo"));
     // The subcommand is the first word that is not a flag or a `+toolchain`.
     let subcommand = args.iter().find(|a| !a.starts_with('-') && !a.starts_with('+'));
     is_cargo
         && matches!(subcommand.map(String::as_str), Some("test" | "t"))
-        && !args.iter().any(|a| matches!(a.as_str(), "--no-run" | "--list" | "--help" | "-h"))
+        && !args
+            .iter()
+            .any(|a| matches!(a.as_str(), "--no-run" | "--list" | "--help" | "-h"))
 }
 
 /// Run `argv` in `root` until it ends, times out, or `cancelled()` says stop.
@@ -390,7 +406,10 @@ pub fn run(
     let (program, args) = argv.split_first().ok_or("no command was given")?;
     let mut cmd = Command::new(program);
     cmd.args(args);
-    let io = Io { count_tests: counts_test_runs(argv), ..Io::default() };
+    let io = Io {
+        count_tests: counts_test_runs(argv),
+        ..Io::default()
+    };
     run_prepared(cmd, root, &label(argv), program, timeout, env, io, cancelled)
 }
 
@@ -412,7 +431,12 @@ pub fn run_with_input(
     let (program, args) = argv.split_first().ok_or("no command was given")?;
     let mut cmd = Command::new(program);
     cmd.args(args);
-    let io = Io { input: Some(input), head: keep, tail: 0, count_tests: false };
+    let io = Io {
+        input: Some(input),
+        head: keep,
+        tail: 0,
+        count_tests: false,
+    };
     run_prepared(cmd, root, &label(argv), program, timeout, env, io, cancelled)
 }
 
@@ -427,7 +451,12 @@ struct Io<'a> {
 
 impl Default for Io<'_> {
     fn default() -> Self {
-        Io { input: None, head: HEAD, tail: TAIL, count_tests: false }
+        Io {
+            input: None,
+            head: HEAD,
+            tail: TAIL,
+            count_tests: false,
+        }
     }
 }
 
@@ -471,7 +500,11 @@ fn run_prepared(
     let writer2 = writer.try_clone().map_err(|e| format!("could not make a pipe: {e}"))?;
 
     cmd.current_dir(&dir)
-        .stdin(if io.input.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if io.input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(writer)
         .stderr(writer2)
         // Colour codes are noise to a model and cost tokens.
@@ -494,7 +527,9 @@ fn run_prepared(
     let job = Job::new();
     #[cfg(windows)]
     if job.is_none() {
-        return Err(format!("could not put `{shown}` under its memory limits, so it was not run"));
+        return Err(format!(
+            "could not put `{shown}` under its memory limits, so it was not run"
+        ));
     }
 
     let started = Instant::now();
@@ -541,7 +576,9 @@ fn run_prepared(
         });
     }
 
-    let captured = Arc::new(Mutex::new(Capture::new(io.head, io.tail).counting_tests(io.count_tests)));
+    let captured = Arc::new(Mutex::new(
+        Capture::new(io.head, io.tail).counting_tests(io.count_tests),
+    ));
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     {
         let captured = Arc::clone(&captured);
@@ -595,12 +632,28 @@ fn run_prepared(
     let mut capture = captured.lock().expect("capture lock");
     let output = capture.render();
     let passed = ended == Ended::Exited(Some(0));
-    let blocked = if passed { None } else { blocked_by_smart_app_control(&dir, &output) };
+    let blocked = if passed {
+        None
+    } else {
+        blocked_by_smart_app_control(&dir, &output)
+    };
     // Only a run that ended by itself with a good exit code can have stopped early without
     // saying so, and only a stream read to its end can be counted: a test program whose result
     // line is still on its way is not one that never reported.
-    let unfinished_tests = if passed && complete { capture.unfinished_tests() } else { 0 };
-    Ok(Outcome { ended, elapsed, output, bytes: capture.total, complete, blocked, unfinished_tests })
+    let unfinished_tests = if passed && complete {
+        capture.unfinished_tests()
+    } else {
+        0
+    };
+    Ok(Outcome {
+        ended,
+        elapsed,
+        output,
+        bytes: capture.total,
+        complete,
+        blocked,
+        unfinished_tests,
+    })
 }
 
 /// `\\?\C:\x` → `C:\x`, and `\\?\UNC\server\share\x` → `\\server\share\x`.
@@ -626,9 +679,9 @@ struct Job(windows::Win32::Foundation::HANDLE);
 impl Job {
     fn new() -> Option<Self> {
         use windows::Win32::System::JobObjects::{
-            CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
-            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+            CreateJobObjectW, JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
         };
         // SAFETY: a new, unnamed job with default security; the handle is owned
         // by the returned value and closed in Drop. The information passed is a
@@ -657,9 +710,7 @@ impl Job {
         use windows::Win32::System::JobObjects::AssignProcessToJobObject;
         // SAFETY: both handles are live — the job's is owned by self, and the
         // child's by `child`, which outlives this call.
-        unsafe {
-            AssignProcessToJobObject(self.0, windows::Win32::Foundation::HANDLE(child.as_raw_handle())).is_ok()
-        }
+        unsafe { AssignProcessToJobObject(self.0, windows::Win32::Foundation::HANDLE(child.as_raw_handle())).is_ok() }
     }
 
     fn kill(&self) {
@@ -747,7 +798,9 @@ fn confine(job: Job, child: &mut std::process::Child, shown: &str) -> Result<Opt
         return Ok(None);
     }
     kill_tree(child, None);
-    Err(format!("could not put `{shown}` under its memory limits, so it was not run"))
+    Err(format!(
+        "could not put `{shown}` under its memory limits, so it was not run"
+    ))
 }
 
 /// Kill the command **and everything it started.** `Child::kill` ends only the
@@ -824,7 +877,9 @@ impl TestRuns {
 /// `running 12 tests` or `running 1 test`: the line libtest, and rustdoc's doc-test runner,
 /// write before the first test.
 fn is_libtest_header(line: &str) -> bool {
-    let Some(rest) = line.strip_prefix("running ") else { return false };
+    let Some(rest) = line.strip_prefix("running ") else {
+        return false;
+    };
     let count = rest.strip_suffix(" tests").or_else(|| rest.strip_suffix(" test"));
     count.is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
@@ -848,7 +903,14 @@ impl Default for Capture {
 
 impl Capture {
     fn new(head_cap: usize, tail_cap: usize) -> Self {
-        Capture { head: Vec::new(), tail: Default::default(), total: 0, head_cap, tail_cap, runs: None }
+        Capture {
+            head: Vec::new(),
+            tail: Default::default(),
+            total: 0,
+            head_cap,
+            tail_cap,
+            runs: None,
+        }
     }
 
     /// Count the test programs in what is pushed, if `on`.
@@ -1040,7 +1102,9 @@ pub fn blocked_by_smart_app_control(dir: &Path, output: &str) -> Option<String> 
     }
     let lock = cargo_lock(dir)?;
     for line in output.lines().filter(|l| l.contains("E0463")) {
-        let Some(start) = line.find("can't find crate for `") else { continue };
+        let Some(start) = line.find("can't find crate for `") else {
+            continue;
+        };
         let rest = &line[start + "can't find crate for `".len()..];
         let Some(end) = rest.find('`') else { continue };
         let krate = &rest[..end];
@@ -1058,7 +1122,8 @@ pub fn blocked_by_smart_app_control(dir: &Path, output: &str) -> Option<String> 
 
 /// The `Cargo.lock` that governs `dir`: its own, or its workspace's, above it.
 fn cargo_lock(dir: &Path) -> Option<String> {
-    dir.ancestors().find_map(|d| std::fs::read_to_string(d.join("Cargo.lock")).ok())
+    dir.ancestors()
+        .find_map(|d| std::fs::read_to_string(d.join("Cargo.lock")).ok())
 }
 
 #[cfg(test)]
@@ -1115,15 +1180,24 @@ mod tests {
     fn a_cargo_project_offers_check_then_test() {
         let f = Folder::new("cargo");
         f.write("Cargo.toml", "[package]\nname = \"x\"\n");
-        assert_eq!(candidates(&f.ws()), vec![cmd(&["cargo", "check"]), cmd(&["cargo", "test"])]);
+        assert_eq!(
+            candidates(&f.ws()),
+            vec![cmd(&["cargo", "check"]), cmd(&["cargo", "test"])]
+        );
     }
 
     #[test]
     fn npm_scripts_are_offered_only_when_they_exist() {
         let f = Folder::new("npm");
-        f.write("package.json", r#"{"scripts":{"test":"vitest run","build":"vite build"}}"#);
+        f.write(
+            "package.json",
+            r#"{"scripts":{"test":"vitest run","build":"vite build"}}"#,
+        );
         let npm = if cfg!(windows) { "npm.cmd" } else { "npm" };
-        assert_eq!(candidates(&f.ws()), vec![cmd(&[npm, "test"]), cmd(&[npm, "run", "build"])]);
+        assert_eq!(
+            candidates(&f.ws()),
+            vec![cmd(&[npm, "test"]), cmd(&[npm, "run", "build"])]
+        );
     }
 
     #[test]
@@ -1175,7 +1249,11 @@ mod tests {
         let argv = cmd(&["findstr", "^"]);
         let out = run_with_input(&f.0, &argv, input.as_bytes(), 1024 * 1024, CHECK_TIMEOUT, &[], never).unwrap();
         assert!(out.passed());
-        assert!(out.output.len() > HEAD + TAIL && !out.output.contains("bytes cut"), "{}", out.output.len());
+        assert!(
+            out.output.len() > HEAD + TAIL && !out.output.contains("bytes cut"),
+            "{}",
+            out.output.len()
+        );
         assert_eq!(out.output.lines().count(), 500);
     }
 
@@ -1192,7 +1270,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.ended, Ended::Exited(Some(3)));
-        assert!(out.output.contains("to-stdout") && out.output.contains("to-stderr"), "{:?}", out.output);
+        assert!(
+            out.output.contains("to-stdout") && out.output.contains("to-stderr"),
+            "{:?}",
+            out.output
+        );
     }
 
     #[cfg(windows)]
@@ -1223,7 +1305,11 @@ mod tests {
         .unwrap();
         assert_eq!(out.ended, Ended::TimedOut);
         assert!(out.complete, "the killed command's children kept the output open");
-        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
     }
 
     /// **Stop kills the tree.** `cmd` starts `ping` as a child; killing only
@@ -1294,8 +1380,10 @@ mod tests {
     /// E0463 names a real dependency.
     fn locked(tag: &str, packages: &[&str]) -> Folder {
         let f = Folder::new(tag);
-        let body: String =
-            packages.iter().map(|p| format!("[[package]]\nname = \"{p}\"\nversion = \"1.0.0\"\n\n")).collect();
+        let body: String = packages
+            .iter()
+            .map(|p| format!("[[package]]\nname = \"{p}\"\nversion = \"1.0.0\"\n\n"))
+            .collect();
         f.write("Cargo.lock", &format!("version = 4\n\n{body}"));
         f
     }
@@ -1303,7 +1391,12 @@ mod tests {
     #[test]
     fn what_the_model_is_told_never_reads_as_a_failed_call() {
         let check = cmd(&["cargo", "check"]);
-        for ended in [Ended::Exited(Some(0)), Ended::Exited(Some(101)), Ended::TimedOut, Ended::Stopped] {
+        for ended in [
+            Ended::Exited(Some(0)),
+            Ended::Exited(Some(101)),
+            Ended::TimedOut,
+            Ended::Stopped,
+        ] {
             let said = for_model(&check, &outcome(ended, "error[E0425]: cannot find function `greet`"));
             assert!(!said.starts_with("error:"), "{said}");
         }
@@ -1313,7 +1406,10 @@ mod tests {
     fn a_failed_build_says_so_and_carries_the_error() {
         let said = for_model(
             &cmd(&["cargo", "check"]),
-            &outcome(Ended::Exited(Some(101)), "error[E0425]: cannot find function `greet` in this scope"),
+            &outcome(
+                Ended::Exited(Some(101)),
+                "error[E0425]: cannot find function `greet` in this scope",
+            ),
         );
         assert!(said.starts_with("`cargo check` failed (exit 101"), "{said}");
         assert!(said.contains("cannot find function `greet`"));
@@ -1321,9 +1417,15 @@ mod tests {
 
     #[test]
     fn a_blocked_run_tells_the_model_not_to_touch_the_code() {
-        let o = Outcome { blocked: Some("`tauri`, a library".into()), ..outcome(Ended::Exited(Some(101)), "") };
+        let o = Outcome {
+            blocked: Some("`tauri`, a library".into()),
+            ..outcome(Ended::Exited(Some(101)), "")
+        };
         let said = for_model(&cmd(&["cargo", "check"]), &o);
-        assert!(said.contains("Smart App Control") && said.contains("do not change any files"), "{said}");
+        assert!(
+            said.contains("Smart App Control") && said.contains("do not change any files"),
+            "{said}"
+        );
     }
 
     /// Both blocks seen on this machine: a proc-macro with the tell-tale name,
@@ -1364,7 +1466,11 @@ mod tests {
         let f = locked("passing", &["tauri"]);
         let out = run(
             &f.0,
-            &cmd(&["cmd", "/c", "echo error[E0463]: can't find crate for `tauri` (os error 4551)"]),
+            &cmd(&[
+                "cmd",
+                "/c",
+                "echo error[E0463]: can't find crate for `tauri` (os error 4551)",
+            ]),
             CHECK_TIMEOUT,
             &[],
             never,
@@ -1383,8 +1489,14 @@ mod tests {
     fn what_a_check_leaves_running_is_ended_when_it_finishes() {
         let f = Folder::new("linger");
         let started = Instant::now();
-        let out = run(&f.0, &cmd(&["cmd", "/c", "start /b ping -n 30 127.0.0.1 >nul"]), CHECK_TIMEOUT, &[], never)
-            .unwrap();
+        let out = run(
+            &f.0,
+            &cmd(&["cmd", "/c", "start /b ping -n 30 127.0.0.1 >nul"]),
+            CHECK_TIMEOUT,
+            &[],
+            never,
+        )
+        .unwrap();
         assert!(out.passed());
         assert!(out.complete, "the background ping outlived the check");
         assert!(started.elapsed() < DRAIN, "took {:?}", started.elapsed());
@@ -1411,7 +1523,11 @@ mod tests {
         v[tail_start - 1..tail_start + 2].copy_from_slice("\u{2500}".as_bytes());
         c.push(&v);
         let text = c.render();
-        assert!(text.contains("bytes cut") && !text.contains('\u{fffd}'), "{}", text.matches('\u{fffd}').count());
+        assert!(
+            text.contains("bytes cut") && !text.contains('\u{fffd}'),
+            "{}",
+            text.matches('\u{fffd}').count()
+        );
         // The one byte of the head's split character and the two of the tail's were
         // cut too, and are in the count.
         assert!(text.contains(&format!("[… {} bytes cut …]", total - HEAD - TAIL + 3)));
@@ -1450,7 +1566,10 @@ mod tests {
 
     #[test]
     fn a_network_share_becomes_a_path_cmd_can_use() {
-        assert_eq!(plain(Path::new(r"\\?\UNC\server\share\proj")), PathBuf::from(r"\\server\share\proj"));
+        assert_eq!(
+            plain(Path::new(r"\\?\UNC\server\share\proj")),
+            PathBuf::from(r"\\server\share\proj")
+        );
         assert_eq!(plain(Path::new(r"\\?\C:\work\proj")), PathBuf::from(r"C:\work\proj"));
         assert_eq!(plain(Path::new(r"C:\work\proj")), PathBuf::from(r"C:\work\proj"));
     }
@@ -1648,7 +1767,11 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
         let mut runs = TestRuns::default();
         runs.push(CARGO_NORMAL.as_bytes());
         runs.unfinished();
-        assert_eq!((runs.began, runs.reported), (4, 4), "the library, the binary, the integration test, the doc-tests");
+        assert_eq!(
+            (runs.began, runs.reported),
+            (4, 4),
+            "the library, the binary, the integration test, the doc-tests"
+        );
         // One byte at a time, and with Windows line ends: the same.
         let mut slow = TestRuns::default();
         CARGO_NORMAL.as_bytes().iter().for_each(|b| slow.push(&[*b]));
@@ -1684,7 +1807,10 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
             ("a filter that matches no test", CARGO_FILTERED),
             ("-q", CARGO_QUIET),
             ("nothing at all", ""),
-            ("a program with a main of its own", "     Running tests\\custom.rs (target\\debug\\deps\\custom-1.exe)\nall checks done\n"),
+            (
+                "a program with a main of its own",
+                "     Running tests\\custom.rs (target\\debug\\deps\\custom-1.exe)\nall checks done\n",
+            ),
         ];
         for (what, output) in cases {
             assert_eq!(unfinished_in(output), 0, "{what}");
@@ -1701,7 +1827,10 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
         capture.push(filler.as_bytes());
         let kept = capture.render();
         assert!(kept.contains("bytes cut"), "most of it was cut");
-        assert!(!kept.contains("zz_exits") && !kept.contains("running 3 tests"), "and what was cut held the early exit");
+        assert!(
+            !kept.contains("zz_exits") && !kept.contains("running 3 tests"),
+            "and what was cut held the early exit"
+        );
         assert_eq!(capture.unfinished_tests(), 1);
         // A command that is not `cargo test` is not counted at all.
         let mut other = Capture::default();
@@ -1746,19 +1875,30 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
     /// Exit code 0 is not a pass when a test program was cut short, and the model is told why.
     #[test]
     fn a_test_run_that_exited_0_but_stopped_early_has_not_passed_and_the_model_is_told_why() {
-        let early = Outcome { unfinished_tests: 1, ..outcome(Ended::Exited(Some(0)), "running 3 tests\n") };
+        let early = Outcome {
+            unfinished_tests: 1,
+            ..outcome(Ended::Exited(Some(0)), "running 3 tests\n")
+        };
         assert!(!early.passed());
         let said = for_model(&cmd(&["cargo", "test", "-p", "hugin"]), &early);
         assert!(
-            said.starts_with("`cargo test -p hugin` failed (exit 0, 1.5 s). A test program ended without reporting its result"),
+            said.starts_with(
+                "`cargo test -p hugin` failed (exit 0, 1.5 s). A test program ended without reporting its result"
+            ),
             "{said}"
         );
-        assert!(said.contains("std::process::exit") && said.ends_with("running 3 tests") && !said.starts_with("error:"), "{said}");
+        assert!(
+            said.contains("std::process::exit") && said.ends_with("running 3 tests") && !said.starts_with("error:"),
+            "{said}"
+        );
         assert!(said.contains("This counts as a failure."), "{said}");
         // A pass is still a pass, and a failure that is a failure for other reasons says what it did.
         assert!(outcome(Ended::Exited(Some(0)), "").passed());
         assert!(for_model(&cmd(&["cargo", "test"]), &outcome(Ended::Exited(Some(0)), "")).contains("passed (exit 0"));
-        assert!(for_model(&cmd(&["cargo", "test"]), &outcome(Ended::Exited(Some(101)), "")).starts_with("`cargo test` failed (exit 101"));
+        assert!(
+            for_model(&cmd(&["cargo", "test"]), &outcome(Ended::Exited(Some(101)), ""))
+                .starts_with("`cargo test` failed (exit 101")
+        );
     }
 
     /// The whole way through the runner, on output a command writes: what `type` prints is what
@@ -1772,10 +1912,27 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
         let print = |file: &str, count_tests: bool, then: &str| {
             let mut c = Command::new("cmd");
             c.args(["/c", &format!("type {file}{then}")]);
-            run_prepared(c, &f.0, "type", "cmd", CHECK_TIMEOUT, &[], Io { count_tests, ..Io::default() }, never).unwrap()
+            run_prepared(
+                c,
+                &f.0,
+                "type",
+                "cmd",
+                CHECK_TIMEOUT,
+                &[],
+                Io {
+                    count_tests,
+                    ..Io::default()
+                },
+                never,
+            )
+            .unwrap()
         };
         let early = print("early.txt", true, "");
-        assert_eq!((early.ended.clone(), early.unfinished_tests, early.passed()), (Ended::Exited(Some(0)), 1, false), "{early:?}");
+        assert_eq!(
+            (early.ended.clone(), early.unfinished_tests, early.passed()),
+            (Ended::Exited(Some(0)), 1, false),
+            "{early:?}"
+        );
         assert!(early.complete && for_model(&cmd(&["cargo", "test"]), &early).contains("failed (exit 0"));
         // The programs that did report, and the same text when the command is not `cargo test`.
         assert!(print("normal.txt", true, "").passed());
@@ -1844,13 +2001,35 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
         let cmd = shell_command(Shell::PowerShell, command).unwrap();
         assert_eq!(cmd.get_program(), "powershell.exe");
         let args = args_of(&cmd);
-        assert_eq!(args[..6], ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]);
+        assert_eq!(
+            args[..6],
+            [
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command"
+            ]
+        );
         assert_eq!(args.len(), 7);
-        let (head, tail) = ("& ([scriptblock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('", "'))))");
-        let encoded = args[6].strip_prefix(head).and_then(|r| r.strip_suffix(tail)).expect("the decoding wrapper");
-        let units: Vec<u16> = unbase64(encoded).chunks(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+        let (head, tail) = (
+            "& ([scriptblock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('",
+            "'))))",
+        );
+        let encoded = args[6]
+            .strip_prefix(head)
+            .and_then(|r| r.strip_suffix(tail))
+            .expect("the decoding wrapper");
+        let units: Vec<u16> = unbase64(encoded)
+            .chunks(2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+            .collect();
         assert_eq!(String::from_utf16(&units).unwrap(), powershell_script(command));
-        assert!(powershell_script(command).contains(&format!("\n{command}\n")), "the command itself, untouched");
+        assert!(
+            powershell_script(command).contains(&format!("\n{command}\n")),
+            "the command itself, untouched"
+        );
     }
 
     /// cmd gets `/d /s /c "<command>"` with the command untouched — including its
@@ -1876,29 +2055,47 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
     fn bash_is_never_the_wsl_launcher() {
         if let Some(p) = bash_path() {
             let lower = p.to_string_lossy().to_lowercase();
-            assert!(!lower.contains("system32") && lower.ends_with(r"bin\bash.exe"), "{lower}");
+            assert!(
+                !lower.contains("system32") && lower.ends_with(r"bin\bash.exe"),
+                "{lower}"
+            );
         }
     }
 
     #[test]
     fn what_a_command_is_told_never_reads_as_a_failed_call() {
-        for ended in [Ended::Exited(Some(0)), Ended::Exited(Some(1)), Ended::Exited(None), Ended::TimedOut, Ended::Stopped] {
+        for ended in [
+            Ended::Exited(Some(0)),
+            Ended::Exited(Some(1)),
+            Ended::Exited(None),
+            Ended::TimedOut,
+            Ended::Stopped,
+        ] {
             let said = for_command(Shell::Cmd, "dir", &outcome(ended, "error: nothing"));
             assert!(!said.starts_with("error:"), "{said}");
         }
-        let o = Outcome { blocked: Some("a program".into()), ..outcome(Ended::Exited(Some(1)), "") };
+        let o = Outcome {
+            blocked: Some("a program".into()),
+            ..outcome(Ended::Exited(Some(1)), "")
+        };
         assert!(!for_command(Shell::Cmd, "dir", &o).starts_with("error:"));
     }
 
     #[test]
     fn for_command_words_each_ending() {
         let say = |ended, output: &str| for_command(Shell::Bash, "git log", &outcome(ended, output));
-        assert_eq!(say(Ended::Exited(Some(0)), "abc\n"), "`git log` exited 0 (1.5 s). Output:\n\nabc");
+        assert_eq!(
+            say(Ended::Exited(Some(0)), "abc\n"),
+            "`git log` exited 0 (1.5 s). Output:\n\nabc"
+        );
         assert_eq!(say(Ended::Exited(Some(0)), ""), "`git log` exited 0 (1.5 s).");
         assert!(say(Ended::Exited(Some(2)), "x").starts_with("`git log` exited 2 (1.5 s)."));
         assert!(say(Ended::TimedOut, "").contains("past its time limit"));
         assert!(say(Ended::Stopped, "").contains("stopped by the user"));
-        let o = Outcome { blocked: Some("a program".into()), ..outcome(Ended::Exited(Some(1)), "") };
+        let o = Outcome {
+            blocked: Some("a program".into()),
+            ..outcome(Ended::Exited(Some(1)), "")
+        };
         assert!(for_command(Shell::Bash, "git log", &o).contains("Smart App Control"));
     }
 
@@ -1923,8 +2120,20 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
     #[test]
     fn a_powershell_error_comes_back_as_plain_text() {
         let f = Folder::new("ps-error");
-        let out = run_shell(&f.0, Shell::PowerShell, "Get-Item no-such-file-here", CHECK_TIMEOUT, &[], never).unwrap();
-        assert!(!out.output.contains("CLIXML") && !out.output.contains("<Objs"), "{}", out.output);
+        let out = run_shell(
+            &f.0,
+            Shell::PowerShell,
+            "Get-Item no-such-file-here",
+            CHECK_TIMEOUT,
+            &[],
+            never,
+        )
+        .unwrap();
+        assert!(
+            !out.output.contains("CLIXML") && !out.output.contains("<Objs"),
+            "{}",
+            out.output
+        );
         assert!(out.output.contains("no-such-file-here"), "{}", out.output);
     }
 
@@ -1933,10 +2142,18 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
     /// line (review I3, finding 5).
     #[test]
     fn a_command_a_shell_cannot_run_as_written_is_refused() {
-        assert!(shell_command(Shell::Cmd, "echo one\necho two").unwrap_err().contains("one line"));
+        assert!(
+            shell_command(Shell::Cmd, "echo one\necho two")
+                .unwrap_err()
+                .contains("one line")
+        );
         assert!(shell_command(Shell::Cmd, "echo one && echo two").is_ok());
         let long = "Write-Output x; ".repeat(1_500);
-        assert!(shell_command(Shell::PowerShell, &long).unwrap_err().contains("too long"));
+        assert!(
+            shell_command(Shell::PowerShell, &long)
+                .unwrap_err()
+                .contains("too long")
+        );
         assert!(shell_command(Shell::Bash, &long).is_ok() || bash_path().is_none());
     }
 
@@ -1947,7 +2164,11 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
     #[test]
     fn powershell_passes_a_programs_exit_code_through() {
         let f = Folder::new("ps-exit");
-        let code = |command: &str| run_shell(&f.0, Shell::PowerShell, command, CHECK_TIMEOUT, &[], never).unwrap().ended;
+        let code = |command: &str| {
+            run_shell(&f.0, Shell::PowerShell, command, CHECK_TIMEOUT, &[], never)
+                .unwrap()
+                .ended
+        };
         assert_eq!(code("cmd /c exit 7"), Ended::Exited(Some(7)));
         assert_eq!(code("Get-Item no-such-file-here"), Ended::Exited(Some(1)));
         assert_eq!(code("Write-Output fine"), Ended::Exited(Some(0)));
@@ -1979,7 +2200,11 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
             .unwrap();
             assert_eq!(out.ended, Ended::Stopped, "{shell:?}");
             assert!(out.complete, "{shell:?}: a child outlived the stop");
-            assert!(started.elapsed() < Duration::from_secs(10), "{shell:?}: {:?}", started.elapsed());
+            assert!(
+                started.elapsed() < Duration::from_secs(10),
+                "{shell:?}: {:?}",
+                started.elapsed()
+            );
         }
     }
 
@@ -2012,7 +2237,11 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
                     $jobs | Wait-Job | Receive-Job";
         let out = run_shell(&f.0, Shell::PowerShell, grab, CHECK_TIMEOUT, &[], never).unwrap();
         // Whole lines: an error quotes the script, and the script says `got 7` too.
-        assert!(out.output.lines().filter(|l| l.trim() == "got 7").count() < 4, "{}", out.output);
+        assert!(
+            out.output.lines().filter(|l| l.trim() == "got 7").count() < 4,
+            "{}",
+            out.output
+        );
     }
 
     /// **A run's disk floor is [`DISK_FLOOR`], or half of what its drive started with when
@@ -2032,7 +2261,10 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
     #[test]
     fn a_running_child_is_put_in_the_job() {
         let mut cmd = Command::new("ping");
-        cmd.args(["-n", "30", "127.0.0.1"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.args(["-n", "30", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         no_window(&mut cmd);
         let mut child = cmd.spawn().unwrap();
         let job = confine(Job::new().unwrap(), &mut child, "ping").unwrap();
@@ -2046,7 +2278,10 @@ error: could not compile `sample` (bin "sample" test) due to 1 previous error
     #[test]
     fn a_child_that_exited_before_the_job_took_it_does_not_fail_the_run() {
         let mut cmd = Command::new("cmd");
-        cmd.args(["/c", "exit", "0"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        cmd.args(["/c", "exit", "0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         no_window(&mut cmd);
         let mut child = cmd.spawn().unwrap();
         child.wait().unwrap();

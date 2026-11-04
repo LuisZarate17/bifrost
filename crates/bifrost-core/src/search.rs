@@ -66,7 +66,9 @@ const SKIPPED: [&str; 3] = [".git", "target", "node_modules"];
 
 /// A listing as a person reads it: the pattern, or what no pattern means.
 pub fn describe_list(pattern: Option<&str>) -> String {
-    pattern.map(str::to_string).unwrap_or_else(|| "the whole project".to_string())
+    pattern
+        .map(str::to_string)
+        .unwrap_or_else(|| "the whole project".to_string())
 }
 
 /// A search as a person reads it.
@@ -116,7 +118,10 @@ struct Pattern {
 
 impl Pattern {
     fn parse(root: &Path, raw: &str) -> Result<Self, String> {
-        let p = raw.trim().trim_matches(|c| c == '"' || c == '\'' || c == '`').replace('\\', "/");
+        let p = raw
+            .trim()
+            .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+            .replace('\\', "/");
         // Anywhere in it, not only as a whole part: a glob can spell a parent
         // inside an alternation — `{..,x}/**` has no part that *is* `..`. The
         // walk never leaves the folder whatever the pattern says, but a pattern
@@ -134,14 +139,21 @@ impl Pattern {
         let p = if p.is_empty() { "**" } else { p };
         // A folder's name means everything in it.
         let wild = p.contains(['*', '?', '[', '{']);
-        let p = if !wild && root.join(p).is_dir() { format!("{p}/**") } else { p.to_string() };
+        let p = if !wild && root.join(p).is_dir() {
+            format!("{p}/**")
+        } else {
+            p.to_string()
+        };
         let matcher = GlobBuilder::new(&p)
             .case_insensitive(true)
             .literal_separator(true)
             .build()
             .map_err(|e| format!("{raw} is not a pattern that can be read: {e}"))?
             .compile_matcher();
-        Ok(Self { by_name: !p.contains('/'), matcher })
+        Ok(Self {
+            by_name: !p.contains('/'),
+            matcher,
+        })
     }
 
     fn matches(&self, rel: &str) -> bool {
@@ -207,7 +219,9 @@ fn walk(
         if files > MAX_FILES {
             return Some(Cut::TooManyFiles);
         }
-        let Ok(rel) = entry.path().strip_prefix(&root) else { continue };
+        let Ok(rel) = entry.path().strip_prefix(&root) else {
+            continue;
+        };
         let rel = rel.to_string_lossy().replace('\\', "/");
         read += each(&rel, entry.path());
         if read > MAX_BYTES_READ {
@@ -221,7 +235,9 @@ fn walk(
 /// the nearest one above it that has a `.git` (a folder, or the file a git
 /// worktree has). `None` when it is not inside a repository at all.
 fn repo_root(root: &Path) -> Option<PathBuf> {
-    root.ancestors().find(|dir| dir.join(".git").symlink_metadata().is_ok()).map(Path::to_path_buf)
+    root.ancestors()
+        .find(|dir| dir.join(".git").symlink_metadata().is_ok())
+        .map(Path::to_path_buf)
 }
 
 /// The one walker both [`walk`] and [`visible`] use, so that what a read may
@@ -281,7 +297,13 @@ fn hidden_from_above(repo: &Path, root: &Path, app_data: &Option<PathBuf>) -> bo
 /// `root` and everything inside it, and reads ignore files as [`walker`] describes.
 /// `parents` is the `ignore` crate's own climb above `top`, wanted only outside a
 /// repository.
-fn configured(top: &Path, root: &Path, parents: bool, app_data: Option<PathBuf>, only: Option<PathBuf>) -> ignore::WalkBuilder {
+fn configured(
+    top: &Path,
+    root: &Path,
+    parents: bool,
+    app_data: Option<PathBuf>,
+    only: Option<PathBuf>,
+) -> ignore::WalkBuilder {
     let root = root.to_path_buf();
     let mut walker = ignore::WalkBuilder::new(top);
     walker
@@ -387,13 +409,17 @@ pub fn secret_name(path: &Path) -> bool {
     const PREFIXES: [&str; 6] = [".env.", "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "service-account"];
     // `env` catches `prod.env`; `tfstate` and `tfvars` hold Terraform's secrets in the clear.
     const EXTENSIONS: [&str; 15] = [
-        "pem", "key", "pfx", "p12", "p8", "ppk", "kdbx", "jks", "keystore", "env", "tfstate", "tfvars",
-        "gpg", "pgp", "asc",
+        "pem", "key", "pfx", "p12", "p8", "ppk", "kdbx", "jks", "keystore", "env", "tfstate", "tfvars", "gpg", "pgp",
+        "asc",
     ];
     // Names that are only secret in their own folder: `config` is everywhere,
     // `.kube/config` holds cluster credentials.
-    const IN_FOLDER: [(&str, &str); 4] =
-        [(".kube", "config"), (".aws", "config"), (".docker", "config.json"), (".azure", "accesstokens.json")];
+    const IN_FOLDER: [(&str, &str); 4] = [
+        (".kube", "config"),
+        (".aws", "config"),
+        (".docker", "config.json"),
+        (".azure", "accesstokens.json"),
+    ];
     let parent = path
         .parent()
         .and_then(Path::file_name)
@@ -525,7 +551,11 @@ fn search_in(
         let body = String::from_utf8_lossy(&bytes);
         let mut here = false;
         for (i, line) in body.lines().enumerate() {
-            let hit = if exact { line.contains(&needle) } else { line.to_lowercase().contains(&needle) };
+            let hit = if exact {
+                line.contains(&needle)
+            } else {
+                line.to_lowercase().contains(&needle)
+            };
             if !hit {
                 continue;
             }
@@ -668,7 +698,10 @@ fn map_in(ws: &Workspace, budget_chars: usize, app_data: Option<&Path>, cancelle
 fn header_comment(head: &str) -> Option<String> {
     head.lines().take(3).find_map(|line| {
         let t = line.trim();
-        let text = if let Some(r) = t.strip_prefix("//!").or_else(|| t.strip_prefix("///")).or_else(|| t.strip_prefix("//"))
+        let text = if let Some(r) = t
+            .strip_prefix("//!")
+            .or_else(|| t.strip_prefix("///"))
+            .or_else(|| t.strip_prefix("//"))
         {
             r
         } else if let Some(r) = t.strip_prefix("/*") {
@@ -743,7 +776,12 @@ mod tests {
     }
 
     fn listed(ws: &Workspace, pattern: Option<&str>) -> Vec<String> {
-        list_in(ws, pattern, None, &never).unwrap().lines().skip(1).map(str::to_string).collect()
+        list_in(ws, pattern, None, &never)
+            .unwrap()
+            .lines()
+            .skip(1)
+            .map(str::to_string)
+            .collect()
     }
 
     // ── what is walked ──
@@ -768,7 +806,11 @@ mod tests {
         s.write(".git", "gitdir: C:/repo/.git/worktrees/x\n");
         s.write("src/main.rs", "x\n");
         assert_eq!(listed(&s.ws(), None), ["src/main.rs"]);
-        assert!(search_in(&s.ws(), "gitdir", None, None, &never).unwrap().starts_with("No matches"));
+        assert!(
+            search_in(&s.ws(), "gitdir", None, None, &never)
+                .unwrap()
+                .starts_with("No matches")
+        );
     }
 
     /// Through the `\\?\` root `Workspace::open` gives, a nested `.gitignore`
@@ -793,14 +835,22 @@ mod tests {
         std::fs::write(outside.join("secret.rs"), "let secret = 1;\n").unwrap();
         s.write("src/main.rs", "fn main() {}\n");
         let link = s.dir.join("project").join("link");
-        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&outside).output();
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output();
         if !matches!(made, Ok(ref o) if o.status.success()) {
             eprintln!("could not create a junction here; skipping");
             return;
         }
         let ws = s.ws();
         assert_eq!(listed(&ws, None), ["src/main.rs"]);
-        assert!(search_in(&ws, "secret", None, None, &never).unwrap().starts_with("No matches"));
+        assert!(
+            search_in(&ws, "secret", None, None, &never)
+                .unwrap()
+                .starts_with("No matches")
+        );
     }
 
     #[test]
@@ -850,7 +900,11 @@ mod tests {
         assert_eq!(listed(&ws, Some("*.rs")), ["src/main.rs", "src/net/client.rs"]);
         assert_eq!(listed(&ws, Some("src/*.rs")), ["src/main.rs"]);
         assert_eq!(listed(&ws, Some("src/**/*.rs")), ["src/main.rs", "src/net/client.rs"]);
-        assert_eq!(listed(&ws, Some("readme.MD")), ["README.md"], "case does not matter on Windows");
+        assert_eq!(
+            listed(&ws, Some("readme.MD")),
+            ["README.md"],
+            "case does not matter on Windows"
+        );
     }
 
     #[test]
@@ -868,7 +922,10 @@ mod tests {
     fn nothing_found_says_so() {
         let s = Sandbox::new("none");
         s.write("a.txt", "x\n");
-        assert_eq!(list_in(&s.ws(), Some("*.rs"), None, &never).unwrap(), "No files match *.rs.");
+        assert_eq!(
+            list_in(&s.ws(), Some("*.rs"), None, &never).unwrap(),
+            "No files match *.rs."
+        );
     }
 
     // ── search ──
@@ -896,7 +953,10 @@ mod tests {
     #[test]
     fn search_keeps_to_its_pattern_and_gives_line_numbers() {
         let s = Sandbox::new("scoped");
-        s.write("src/config.rs", "pub const PORT: u16 = 8080;\n\npub fn port() -> u16 {\n    PORT\n}\n");
+        s.write(
+            "src/config.rs",
+            "pub const PORT: u16 = 8080;\n\npub fn port() -> u16 {\n    PORT\n}\n",
+        );
         s.write("README.md", "Listens on PORT 8080.\n");
         let out = search_in(&s.ws(), "PORT", Some("*.rs"), None, &never).unwrap();
         assert_eq!(
@@ -919,8 +979,16 @@ mod tests {
     fn binary_and_huge_files_are_not_searched() {
         let s = Sandbox::new("binary");
         let p = s.dir.join("project");
-        std::fs::write(p.join("image.png"), [0x89, b'P', b'N', b'G', 0, 0, b'n', b'e', b'e', b'd', b'l', b'e']).unwrap();
-        std::fs::write(p.join("big.txt"), format!("needle\n{}", "x".repeat(MAX_FILE_BYTES as usize))).unwrap();
+        std::fs::write(
+            p.join("image.png"),
+            [0x89, b'P', b'N', b'G', 0, 0, b'n', b'e', b'e', b'd', b'l', b'e'],
+        )
+        .unwrap();
+        std::fs::write(
+            p.join("big.txt"),
+            format!("needle\n{}", "x".repeat(MAX_FILE_BYTES as usize)),
+        )
+        .unwrap();
         s.write("small.txt", "needle\n");
         let out = search_in(&s.ws(), "needle", None, None, &never).unwrap();
         assert!(out.starts_with("1 match "), "{out}");
@@ -943,7 +1011,11 @@ mod tests {
         s.write("min.js", &format!("var needle={};\n", "x".repeat(5000)));
         let out = search_in(&s.ws(), "needle", None, None, &never).unwrap();
         let line = out.lines().nth(1).unwrap();
-        assert!(line.chars().count() < LINE_CAP + 30 && line.ends_with('…'), "{}", line.len());
+        assert!(
+            line.chars().count() < LINE_CAP + 30 && line.ends_with('…'),
+            "{}",
+            line.len()
+        );
     }
 
     #[test]
@@ -1036,7 +1108,11 @@ mod tests {
         std::fs::write(outside.join("secret.rs"), "x\n").unwrap();
         s.write("src/main.rs", "x\n");
         let link = s.dir.join("project").join("link");
-        let made = std::process::Command::new("cmd").args(["/C", "mklink", "/J"]).arg(&link).arg(&outside).output();
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output();
         if !matches!(made, Ok(ref o) if o.status.success()) {
             eprintln!("could not create a junction here; skipping");
             return;
@@ -1044,28 +1120,83 @@ mod tests {
         let ws = s.ws();
         // Through the link as written, and as it canonicalises.
         assert!(!visible(&ws, &ws.root().join("link").join("secret.rs")));
-        assert!(!visible(&ws, &std::fs::canonicalize(outside.join("secret.rs")).unwrap()));
+        assert!(!visible(
+            &ws,
+            &std::fs::canonicalize(outside.join("secret.rs")).unwrap()
+        ));
     }
 
     #[test]
     fn secret_names_are_recognised_by_the_name_alone() {
         for yes in [
-            ".env", ".ENV", ".env.local", ".env.production", ".netrc", "_netrc", ".npmrc", ".pypirc",
-            ".pgpass", ".git-credentials", "credentials", "credentials.json", "secrets.json",
-            "secrets.yaml", "secrets.yml", "secrets.toml", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
+            ".env",
+            ".ENV",
+            ".env.local",
+            ".env.production",
+            ".netrc",
+            "_netrc",
+            ".npmrc",
+            ".pypirc",
+            ".pgpass",
+            ".git-credentials",
+            "credentials",
+            "credentials.json",
+            "secrets.json",
+            "secrets.yaml",
+            "secrets.yml",
+            "secrets.toml",
+            "id_rsa",
+            "id_ed25519",
+            "id_ecdsa",
+            "id_dsa",
             // A public key is harmless, but the prefix rule catches it; one question is cheap.
-            "id_rsa.pub", "ID_RSA", "server.pem", "TLS.KEY", "cert.pfx", "a.p12", "putty.ppk",
-            "vault.kdbx", "app.jks", "debug.keystore", "prod.env", "Local.ENV", "terraform.tfstate",
-            "prod.tfvars", "key.gpg", "key.asc", ".envrc", ".htpasswd", ".dockercfg", ".bash_history",
-            ".my.cnf", ".boto", ".s3cfg", "terraform.tfstate.backup", "msg.pgp", "AuthKey_X.p8",
-            "service-account.json", "service-account-prod.json",
+            "id_rsa.pub",
+            "ID_RSA",
+            "server.pem",
+            "TLS.KEY",
+            "cert.pfx",
+            "a.p12",
+            "putty.ppk",
+            "vault.kdbx",
+            "app.jks",
+            "debug.keystore",
+            "prod.env",
+            "Local.ENV",
+            "terraform.tfstate",
+            "prod.tfvars",
+            "key.gpg",
+            "key.asc",
+            ".envrc",
+            ".htpasswd",
+            ".dockercfg",
+            ".bash_history",
+            ".my.cnf",
+            ".boto",
+            ".s3cfg",
+            "terraform.tfstate.backup",
+            "msg.pgp",
+            "AuthKey_X.p8",
+            "service-account.json",
+            "service-account-prod.json",
         ] {
             assert!(secret_name(Path::new(yes)), "{yes}");
         }
         for no in [
-            "credentials.rs", "credentials_test.go", "secrets.rs", "environment.rs", "env.rs", "envrc",
-            "keyboard.rs", "monkey.txt", "key", "README.md", "config.toml", "pem", "config",
-            "config.json", "backup.tfstate.rs",
+            "credentials.rs",
+            "credentials_test.go",
+            "secrets.rs",
+            "environment.rs",
+            "env.rs",
+            "envrc",
+            "keyboard.rs",
+            "monkey.txt",
+            "key",
+            "README.md",
+            "config.toml",
+            "pem",
+            "config",
+            "config.json",
+            "backup.tfstate.rs",
         ] {
             assert!(!secret_name(Path::new(no)), "{no}");
         }
@@ -1073,10 +1204,18 @@ mod tests {
         assert!(secret_name(Path::new(r"C:\proj\config\.env")));
         assert!(!secret_name(Path::new(r"C:\proj\.env\notes.txt")));
         // …except for a few files that are only secret in their own folder.
-        for yes in [r"C:\proj\.kube\config", r"C:\proj\.AWS\config", r"C:\proj\.docker\config.json"] {
+        for yes in [
+            r"C:\proj\.kube\config",
+            r"C:\proj\.AWS\config",
+            r"C:\proj\.docker\config.json",
+        ] {
             assert!(secret_name(Path::new(yes)), "{yes}");
         }
-        for no in [r"C:\proj\src\config", r"C:\proj\.kube\notes.txt", r"C:\proj\app\config.json"] {
+        for no in [
+            r"C:\proj\src\config",
+            r"C:\proj\.kube\notes.txt",
+            r"C:\proj\app\config.json",
+        ] {
             assert!(!secret_name(Path::new(no)), "{no}");
         }
     }
@@ -1089,15 +1228,24 @@ mod tests {
         s.write("src/main.rs", "let needle = 1;\n");
         let out = search_in(&s.ws(), "needle", None, None, &never).unwrap();
         assert!(out.starts_with("1 match for \"needle\" in 1 file:"), "{out}");
-        assert!(out.contains("src/main.rs:1:") && !out.contains("in-env") && !out.contains("in-pem"), "{out}");
-        assert!(out.contains("2 file(s) whose names look like they hold secrets were not searched"), "{out}");
+        assert!(
+            out.contains("src/main.rs:1:") && !out.contains("in-env") && !out.contains("in-pem"),
+            "{out}"
+        );
+        assert!(
+            out.contains("2 file(s) whose names look like they hold secrets were not searched"),
+            "{out}"
+        );
         assert!(out.contains("read_file one to ask the user"), "{out}");
 
         // With nothing else to find, the note is still there.
         let only = Sandbox::new("secret-only");
         only.write(".env", "TOKEN=needle\n");
         let out = search_in(&only.ws(), "needle", None, None, &never).unwrap();
-        assert!(out.starts_with("No matches") && out.contains("1 file(s) whose names"), "{out}");
+        assert!(
+            out.starts_with("No matches") && out.contains("1 file(s) whose names"),
+            "{out}"
+        );
 
         // A pattern that leaves the secret out of the walk leaves the note out too.
         let out = search_in(&s.ws(), "needle", Some("*.rs"), None, &never).unwrap();
@@ -1134,36 +1282,64 @@ mod tests {
 
     fn mapped(s: &Sandbox, budget: usize) -> Vec<String> {
         let out = map_in(&s.ws(), budget, None, &never);
-        if out.is_empty() { Vec::new() } else { out.lines().map(str::to_string).collect() }
+        if out.is_empty() {
+            Vec::new()
+        } else {
+            out.lines().map(str::to_string).collect()
+        }
     }
 
     #[test]
     fn each_kind_of_header_comment_is_found() {
         let s = Sandbox::new("map-kinds");
-        s.write("a.rs", "//! inner doc
+        s.write(
+            "a.rs",
+            "//! inner doc
 fn a() {}
-");
-        s.write("b.rs", "/// outer doc
+",
+        );
+        s.write(
+            "b.rs",
+            "/// outer doc
 fn b() {}
-");
-        s.write("c.ts", "// plain
+",
+        );
+        s.write(
+            "c.ts",
+            "// plain
 export {};
-");
-        s.write("d.css", "/* block */
+",
+        );
+        s.write(
+            "d.css",
+            "/* block */
 body {}
-");
-        s.write("e.js", "/** doc block */
+",
+        );
+        s.write(
+            "e.js",
+            "/** doc block */
 let e;
-");
-        s.write("f.py", "# hash
+",
+        );
+        s.write(
+            "f.py",
+            "# hash
 x = 1
-");
-        s.write("g.toml", "# a manifest
+",
+        );
+        s.write(
+            "g.toml",
+            "# a manifest
 [package]
-");
-        s.write("h.sh", "#!/bin/sh
+",
+        );
+        s.write(
+            "h.sh",
+            "#!/bin/sh
 # runs it
-");
+",
+        );
         assert_eq!(
             mapped(&s, 10_000),
             [
@@ -1182,63 +1358,106 @@ x = 1
     #[test]
     fn shebangs_and_rust_attributes_are_not_headers() {
         let s = Sandbox::new("map-attrs");
-        s.write("a.rs", "#![allow(dead_code)]
+        s.write(
+            "a.rs",
+            "#![allow(dead_code)]
 #[derive(Debug)]
 // the real one
 struct A;
-");
-        s.write("b.rs", "#![allow(dead_code)]
+",
+        );
+        s.write(
+            "b.rs",
+            "#![allow(dead_code)]
 #[derive(Debug)]
 struct B;
-");
+",
+        );
         assert_eq!(mapped(&s, 10_000), ["a.rs — the real one", "b.rs"]);
     }
 
     #[test]
     fn a_header_after_the_third_line_is_not_taken() {
         let s = Sandbox::new("map-late");
-        s.write("late.rs", "use a;
+        s.write(
+            "late.rs",
+            "use a;
 use b;
 use c;
 use d;
 // too late
-");
-        s.write("third.rs", "use a;
+",
+        );
+        s.write(
+            "third.rs",
+            "use a;
 use b;
 // just in time
-");
+",
+        );
         assert_eq!(mapped(&s, 10_000), ["late.rs", "third.rs — just in time"]);
     }
 
     #[test]
     fn a_long_header_is_cut() {
         let s = Sandbox::new("map-long");
-        s.write("a.rs", &format!("//! {}
-", "x".repeat(500)));
+        s.write(
+            "a.rs",
+            &format!(
+                "//! {}
+",
+                "x".repeat(500)
+            ),
+        );
         let lines = mapped(&s, 10_000);
-        assert_eq!(lines[0].chars().count(), "a.rs — ".chars().count() + MAP_COMMENT_CAP + 1, "{}", lines[0]);
+        assert_eq!(
+            lines[0].chars().count(),
+            "a.rs — ".chars().count() + MAP_COMMENT_CAP + 1,
+            "{}",
+            lines[0]
+        );
         assert!(lines[0].ends_with('…'));
     }
 
     #[test]
     fn the_map_leaves_out_what_is_not_code_or_not_allowed() {
         let s = Sandbox::new("map-skip");
-        s.write("src/main.rs", "// kept
-");
-        s.write("README.md", "# prose
-");
+        s.write(
+            "src/main.rs",
+            "// kept
+",
+        );
+        s.write(
+            "README.md",
+            "# prose
+",
+        );
         s.write("logo.png", "x");
-        s.write(".env", "TOKEN=x
-");
-        s.write("secrets.toml", "# key
-");
+        s.write(
+            ".env", "TOKEN=x
+",
+        );
+        s.write(
+            "secrets.toml",
+            "# key
+",
+        );
         s.write("keys/server.pem", "x");
-        s.write(".gitignore", "local.rs
-");
-        s.write("local.rs", "// ignored
-");
-        s.write("target/debug/build.rs", "// build
-");
+        s.write(
+            ".gitignore",
+            "local.rs
+",
+        );
+        s.write(
+            "local.rs",
+            "// ignored
+",
+        );
+        s.write(
+            "target/debug/build.rs",
+            "// build
+",
+        );
         s.write("bin.rs", "// a\0b\n");
         assert_eq!(mapped(&s, 10_000), ["src/main.rs — kept"]);
     }
@@ -1246,8 +1465,11 @@ use b;
     #[test]
     fn a_map_with_nothing_to_list_is_empty() {
         let s = Sandbox::new("map-empty");
-        s.write("notes.txt", "x
-");
+        s.write(
+            "notes.txt",
+            "x
+",
+        );
         assert_eq!(map_in(&s.ws(), 1000, None, &never), "");
     }
 
@@ -1255,13 +1477,22 @@ use b;
     fn a_map_is_sorted_and_says_how_many_files_the_budget_left_out() {
         let s = Sandbox::new("map-budget");
         for name in ["c", "a", "d", "b"] {
-            s.write(&format!("src/{name}.rs"), &format!("//! file {name}
-"));
+            s.write(
+                &format!("src/{name}.rs"),
+                &format!(
+                    "//! file {name}
+"
+                ),
+            );
         }
         // Each line is 21 characters with its newline: room for two.
         let line = "src/a.rs — file a
-".len();
-        assert_eq!(mapped(&s, line * 2), ["src/a.rs — file a", "src/b.rs — file b", "… 2 more files"]);
+"
+        .len();
+        assert_eq!(
+            mapped(&s, line * 2),
+            ["src/a.rs — file a", "src/b.rs — file b", "… 2 more files"]
+        );
         assert_eq!(mapped(&s, line * 4).len(), 4, "everything fits, so no note");
         assert!(!map_in(&s.ws(), line * 4, None, &never).contains("more files"));
     }
@@ -1270,7 +1501,10 @@ use b;
 
     /// Whether `git` is on the PATH; the tests that ask it say so and skip if not.
     fn have_git() -> bool {
-        std::process::Command::new("git").arg("--version").output().is_ok_and(|o| o.status.success())
+        std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
     }
 
     /// A repository with every kind of ignore rule at different levels, the chosen
@@ -1288,7 +1522,12 @@ use b;
         let s = Sandbox::new("git-agrees");
         let repo = s.dir.join("repo");
         std::fs::create_dir_all(&repo).unwrap();
-        let init = std::process::Command::new("git").arg("init").arg("-q").current_dir(&repo).output().unwrap();
+        let init = std::process::Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&repo)
+            .output()
+            .unwrap();
         assert!(init.status.success(), "git init failed");
 
         let put = |rel: &str, text: &str| {
@@ -1351,7 +1590,9 @@ use b;
             let sees = visible(&ws, &real);
             let lists = listing.iter().any(|l| l == rel);
             if sees == ignored || lists == ignored {
-                wrong.push(format!("{rel}: git ignores it = {ignored}, visible = {sees}, listed = {lists}"));
+                wrong.push(format!(
+                    "{rel}: git ignores it = {ignored}, visible = {sees}, listed = {lists}"
+                ));
             }
         }
         // The folder above is not walked beside the chosen one.
@@ -1368,14 +1609,22 @@ use b;
         let s = Sandbox::new("ignored-above");
         let repo = s.dir.join("repo");
         std::fs::create_dir_all(repo.join(".git")).unwrap();
-        std::fs::write(repo.join(".gitignore"), "build/
-").unwrap();
+        std::fs::write(
+            repo.join(".gitignore"),
+            "build/
+",
+        )
+        .unwrap();
         let out = repo.join("build").join("out");
         std::fs::create_dir_all(&out).unwrap();
         std::fs::write(out.join("a.txt"), "hello").unwrap();
         std::fs::write(out.join("b.log"), "hello").unwrap();
-        std::fs::write(out.join(".gitignore"), "*.log
-").unwrap();
+        std::fs::write(
+            out.join(".gitignore"),
+            "*.log
+",
+        )
+        .unwrap();
         let ws = Workspace::open(&out).unwrap();
         let files = list_in(&ws, None, None, &never).unwrap();
         assert!(files.lines().any(|l| l == "a.txt"), "{files}");
@@ -1406,7 +1655,11 @@ use b;
         s.write("local-only.txt", "x\n");
         s.write("secrets/a.txt", "x\n");
         s.write("src/lib.rs", "x\n");
-        let expect: &[&str] = if cfg!(windows) { &[".gitignore", "src/lib.rs"] } else { &[".gitignore", "secrets/a.txt", "src/lib.rs"] };
+        let expect: &[&str] = if cfg!(windows) {
+            &[".gitignore", "src/lib.rs"]
+        } else {
+            &[".gitignore", "secrets/a.txt", "src/lib.rs"]
+        };
         assert_eq!(listed(&s.ws(), None), expect);
     }
 }

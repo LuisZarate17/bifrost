@@ -122,7 +122,11 @@ enum Cmd {
     ClaudeNote,
     /// `--launch`: open Hugin in a terminal window, as the shortcut key does.
     Launch,
-    Run { folder: PathBuf, line: bool, shell: Option<Shell> },
+    Run {
+        folder: PathBuf,
+        line: bool,
+        shell: Option<Shell>,
+    },
 }
 
 fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
@@ -136,8 +140,18 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--help" | "-h" => return Ok(Cmd::Help),
-            "-p" => task = Some(args.next().ok_or("-p needs a task, or - to read it from standard input")?),
-            "--ask" => question = Some(args.next().ok_or("--ask needs a question, or - to read it from standard input")?),
+            "-p" => {
+                task = Some(
+                    args.next()
+                        .ok_or("-p needs a task, or - to read it from standard input")?,
+                )
+            }
+            "--ask" => {
+                question = Some(
+                    args.next()
+                        .ok_or("--ask needs a question, or - to read it from standard input")?,
+                )
+            }
             "--launch" => return Ok(Cmd::Launch),
             "--line" => line = true,
             "--json" => json = true,
@@ -179,9 +193,20 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
         if line || shell.is_some() {
             return Err("--line and --shell are for the interactive Hugin, not --ask".to_string());
         }
-        let question = if question == "-" { ask::Question::Stdin } else { ask::Question::Text(question) };
+        let question = if question == "-" {
+            ask::Question::Stdin
+        } else {
+            ask::Question::Text(question)
+        };
         let time = ask::parse_time(time.as_deref())?;
-        return Ok(Cmd::Ask(ask::Args { question, json, folder, time, model, trace }));
+        return Ok(Cmd::Ask(ask::Args {
+            question,
+            json,
+            folder,
+            time,
+            model,
+            trace,
+        }));
     }
     let Some(task) = task else {
         if check.is_some() || json || time.is_some() || model.is_some() || trace.is_some() {
@@ -192,21 +217,41 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Cmd, String> {
     if line || shell.is_some() {
         return Err("--line and --shell are for the interactive Hugin, not -p".to_string());
     }
-    let task = if task == "-" { print::Task::Stdin } else { print::Task::Text(task) };
+    let task = if task == "-" {
+        print::Task::Stdin
+    } else {
+        print::Task::Text(task)
+    };
     let check = check.map(|command| print::parse_check(&command)).transpose()?;
     let time = print::parse_time(time.as_deref())?;
-    Ok(Cmd::Print(print::Args { task, check, json, folder, time, model, trace }))
+    Ok(Cmd::Print(print::Args {
+        task,
+        check,
+        json,
+        folder,
+        time,
+        model,
+        trace,
+    }))
 }
 
 /// `--model`'s tag: anything Ollama could name, but not nothing.
 fn parse_model(tag: &str) -> Result<String, String> {
     let tag = tag.trim();
-    if tag.is_empty() { Err("--model needs a model tag".to_string()) } else { Ok(tag.to_string()) }
+    if tag.is_empty() {
+        Err("--model needs a model tag".to_string())
+    } else {
+        Ok(tag.to_string())
+    }
 }
 
 /// `--trace`'s file.
 fn parse_trace(file: &str) -> Result<PathBuf, String> {
-    if file.trim().is_empty() { Err("--trace needs a file".to_string()) } else { Ok(PathBuf::from(file)) }
+    if file.trim().is_empty() {
+        Err("--trace needs a file".to_string())
+    } else {
+        Ok(PathBuf::from(file))
+    }
 }
 
 fn parse_shell(name: &str) -> Result<Shell, String> {
@@ -249,17 +294,25 @@ fn interactive(line: bool, stdin_tty: bool, stdout_tty: bool) -> bool {
 fn run(folder: PathBuf, line: bool, shell: Option<Shell>) -> ExitCode {
     // The flag, else the config's (an unknown value there is already the default).
     let asked = shell;
-    let shell = asked.or_else(|| Shell::parse(&config::load().hugin_shell)).unwrap_or(Shell::Bash);
+    let shell = asked
+        .or_else(|| Shell::parse(&config::load().hugin_shell))
+        .unwrap_or(Shell::Bash);
     let shell = if shell.available() {
         shell
     } else if asked.is_some() {
         // Named on the command line: say so rather than run commands somewhere else.
-        eprintln!("hugin: {} is not installed, so commands cannot run in it (try --shell powershell)", shell.label());
+        eprintln!(
+            "hugin: {} is not installed, so commands cannot run in it (try --shell powershell)",
+            shell.label()
+        );
         return ExitCode::from(1);
     } else {
         // The configured one is missing, Git Bash on a machine without Git most likely:
         // PowerShell is always there.
-        eprintln!("hugin: {} is not installed; commands run in Windows PowerShell", shell.label());
+        eprintln!(
+            "hugin: {} is not installed; commands run in Windows PowerShell",
+            shell.label()
+        );
         Shell::PowerShell
     };
     let start = match start::learn(&folder) {
@@ -297,7 +350,14 @@ fn run(folder: PathBuf, line: bool, shell: Option<Shell>) -> ExitCode {
     let mut session = Session::real(model, root, shell);
     // What is read is shown by the terminal only when stdin is one.
     let echo = !io::stdin().is_terminal();
-    line::run(BufReader::new(io::stdin()), io::stdout(), &mut session, header, notices, echo);
+    line::run(
+        BufReader::new(io::stdin()),
+        io::stdout(),
+        &mut session,
+        header,
+        notices,
+        echo,
+    );
     ExitCode::SUCCESS
 }
 
@@ -343,10 +403,26 @@ mod tests_main {
     fn dash_p_takes_a_task_and_the_flags_that_go_with_it() {
         let a = printed(&["-p", "fix the bug"]);
         assert_eq!(a.task, print::Task::Text("fix the bug".into()));
-        assert_eq!((a.check, a.json, a.folder, a.time), (None, false, PathBuf::from("."), Duration::from_secs(540)));
+        assert_eq!(
+            (a.check, a.json, a.folder, a.time),
+            (None, false, PathBuf::from("."), Duration::from_secs(540))
+        );
 
-        let a = printed(&["--folder", "C:\\work", "-p", "x", "--json", "--check", "cargo test -p hugin", "--time", "60"]);
-        assert_eq!(a.check, Some(vec!["cargo".into(), "test".into(), "-p".into(), "hugin".into()]));
+        let a = printed(&[
+            "--folder",
+            "C:\\work",
+            "-p",
+            "x",
+            "--json",
+            "--check",
+            "cargo test -p hugin",
+            "--time",
+            "60",
+        ]);
+        assert_eq!(
+            a.check,
+            Some(vec!["cargo".into(), "test".into(), "-p".into(), "hugin".into()])
+        );
         assert!(a.json);
         assert_eq!((a.folder, a.time), (PathBuf::from("C:\\work"), Duration::from_secs(60)));
         // The `=` forms, and the task from standard input.
@@ -359,7 +435,12 @@ mod tests_main {
     #[test]
     fn dash_p_refuses_what_it_cannot_do_and_says_so() {
         assert!(args(&["-p"]).unwrap_err().contains("needs a task"));
-        for bad in ["cargo test | tee out.txt", "cargo test && cargo clippy", "cargo test > out.txt", "cargo test; ls"] {
+        for bad in [
+            "cargo test | tee out.txt",
+            "cargo test && cargo clippy",
+            "cargo test > out.txt",
+            "cargo test; ls",
+        ] {
             let e = args(&["-p", "x", "--check", bad]).unwrap_err();
             assert!(e.contains("not a shell command line"), "{bad}: {e}");
         }
@@ -385,9 +466,20 @@ mod tests_main {
     fn ask_takes_a_question_and_the_flags_that_go_with_it() {
         let a = asked(&["--ask", "where is the parser?"]);
         assert_eq!(a.question, ask::Question::Text("where is the parser?".into()));
-        assert_eq!((a.json, a.folder, a.time), (false, PathBuf::from("."), Duration::from_secs(300)));
+        assert_eq!(
+            (a.json, a.folder, a.time),
+            (false, PathBuf::from("."), Duration::from_secs(300))
+        );
 
-        let a = asked(&["--folder", "C:\\work", "--ask", "how does it work?", "--json", "--time", "60"]);
+        let a = asked(&[
+            "--folder",
+            "C:\\work",
+            "--ask",
+            "how does it work?",
+            "--json",
+            "--time",
+            "60",
+        ]);
         assert_eq!(a.question, ask::Question::Text("how does it work?".into()));
         assert!(a.json);
         assert_eq!((a.folder, a.time), (PathBuf::from("C:\\work"), Duration::from_secs(60)));
@@ -400,9 +492,21 @@ mod tests_main {
     #[test]
     fn ask_refuses_what_it_cannot_do_and_says_so() {
         assert!(args(&["--ask"]).unwrap_err().contains("needs a question"));
-        assert!(args(&["-p", "x", "--ask", "y"]).unwrap_err().contains("two ways to run Hugin"));
-        assert!(args(&["--ask", "y", "-p", "x"]).unwrap_err().contains("two ways to run Hugin"));
-        assert!(args(&["--ask", "q", "--check", "cargo test"]).unwrap_err().contains("--check goes with -p"));
+        assert!(
+            args(&["-p", "x", "--ask", "y"])
+                .unwrap_err()
+                .contains("two ways to run Hugin")
+        );
+        assert!(
+            args(&["--ask", "y", "-p", "x"])
+                .unwrap_err()
+                .contains("two ways to run Hugin")
+        );
+        assert!(
+            args(&["--ask", "q", "--check", "cargo test"])
+                .unwrap_err()
+                .contains("--check goes with -p")
+        );
         assert!(args(&["--ask", "q", "--line"]).is_err());
         assert!(args(&["--ask", "q", "--shell", "cmd"]).is_err());
         assert!(args(&["--ask", "q", "--time", "0"]).is_err());
@@ -424,12 +528,26 @@ mod tests_main {
         assert_eq!((a.model, a.trace), (None, None));
 
         let a = printed(&["-p", "x", "--model", "devstral:24b", "--trace", "C:\\runs\\a.jsonl"]);
-        assert_eq!((a.model.as_deref(), a.trace), (Some("devstral:24b"), Some(PathBuf::from("C:\\runs\\a.jsonl"))));
+        assert_eq!(
+            (a.model.as_deref(), a.trace),
+            (Some("devstral:24b"), Some(PathBuf::from("C:\\runs\\a.jsonl")))
+        );
         let a = asked(&["--ask", "q", "--model=gpt-oss:20b", "--trace=a.jsonl"]);
-        assert_eq!((a.model.as_deref(), a.trace), (Some("gpt-oss:20b"), Some(PathBuf::from("a.jsonl"))));
+        assert_eq!(
+            (a.model.as_deref(), a.trace),
+            (Some("gpt-oss:20b"), Some(PathBuf::from("a.jsonl")))
+        );
 
-        assert!(args(&["-p", "x", "--model"]).unwrap_err().contains("--model needs a model tag"));
-        assert!(args(&["--ask", "q", "--trace"]).unwrap_err().contains("--trace needs a file"));
+        assert!(
+            args(&["-p", "x", "--model"])
+                .unwrap_err()
+                .contains("--model needs a model tag")
+        );
+        assert!(
+            args(&["--ask", "q", "--trace"])
+                .unwrap_err()
+                .contains("--trace needs a file")
+        );
         assert!(args(&["--ask", "q", "--model", " "]).is_err());
         assert!(args(&["-p", "x", "--trace="]).is_err());
         // Without a task or a question there is nothing for them to go with.

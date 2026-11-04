@@ -94,7 +94,10 @@ impl Transcript {
                 if self.rows.last().is_some_and(|l| !is_blank(l)) {
                     self.rows.push(Line::default());
                 }
-                self.marks.push(Mark { row: self.rows.len(), text: text.clone() });
+                self.marks.push(Mark {
+                    row: self.rows.len(),
+                    text: text.clone(),
+                });
             }
             self.rows.extend(lines);
         }
@@ -133,7 +136,10 @@ mod tests {
     }
 
     fn text(lines: &[Line]) -> Vec<String> {
-        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect()
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect()
     }
 
     fn mono() -> Theme {
@@ -154,13 +160,22 @@ mod tests {
     #[test]
     fn a_blank_row_sets_each_prompt_apart_but_not_the_first_of_all() {
         let t = two_turns();
-        assert_eq!(text(&t.rows), ["› first", "a1", "a2", "a3", "", "› second", "b1", "b2", "b3"]);
+        assert_eq!(
+            text(&t.rows),
+            ["› first", "a1", "a2", "a3", "", "› second", "b1", "b2", "b3"]
+        );
     }
 
     #[test]
     fn a_prompt_after_the_start_screens_own_blank_row_has_no_second_blank() {
         let mut t = Transcript::default();
-        let header = Event::Header { folder: "C:\\w\\demo".into(), branch: None, changed: None, model: "m".into(), shell: String::new() };
+        let header = Event::Header {
+            folder: "C:\\w\\demo".into(),
+            branch: None,
+            changed: None,
+            model: "m".into(),
+            shell: String::new(),
+        };
         t.push(Said::Event(header));
         t.push(said("hi"));
         t.lay(120, &Theme::new(true));
@@ -171,7 +186,13 @@ mod tests {
         assert_eq!(rows[5], "› hi");
         // With one header line (no color) there is no blank of its own, so one is put in.
         let mut t = Transcript::default();
-        let header = Event::Header { folder: "C:\\w\\demo".into(), branch: None, changed: None, model: "m".into(), shell: String::new() };
+        let header = Event::Header {
+            folder: "C:\\w\\demo".into(),
+            branch: None,
+            changed: None,
+            model: "m".into(),
+            shell: String::new(),
+        };
         t.push(Said::Event(header));
         t.push(said("hi"));
         t.lay(120, &mono());
@@ -216,7 +237,10 @@ mod tests {
         let v = t.view(2, 0, &mono(), 20);
         let sticky = text(&[v.sticky.unwrap()]);
         assert_eq!(sticky[0].chars().count(), 20);
-        assert!(sticky[0].starts_with("› one two three") && sticky[0].ends_with('…'), "{sticky:?}");
+        assert!(
+            sticky[0].starts_with("› one two three") && sticky[0].ends_with('…'),
+            "{sticky:?}"
+        );
     }
 
     #[test]

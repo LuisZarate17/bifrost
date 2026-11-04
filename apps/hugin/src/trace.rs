@@ -89,7 +89,10 @@ impl Line {
                 note: round.metrics.note.clone(),
                 ..base
             },
-            Err(e) => Line { error: Some(e.clone()), ..base },
+            Err(e) => Line {
+                error: Some(e.clone()),
+                ..base
+            },
         }
     }
 }
@@ -109,7 +112,12 @@ fn iso(time: SystemTime) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z", rest / 3600, rest % 3600 / 60, rest % 60)
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{millis:03}Z",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
 }
 
 /// The trace file, shared by the requests of a run.
@@ -123,7 +131,10 @@ impl Trace {
     /// Open `path` for appending, creating it. **Never fails**: a file that cannot be opened is
     /// said once, and the trace is then a trace of nothing.
     pub fn open(path: &Path) -> Arc<Self> {
-        let trace = Arc::new(Trace { file: Mutex::new(None), warned: AtomicBool::new(false) });
+        let trace = Arc::new(Trace {
+            file: Mutex::new(None),
+            warned: AtomicBool::new(false),
+        });
         match OpenOptions::new().create(true).append(true).open(path) {
             Ok(file) => *trace.file.lock().unwrap_or_else(|e| e.into_inner()) = Some(file),
             Err(e) => trace.warn(&format!("could not open {}: {e}", path.display())),
@@ -163,5 +174,8 @@ pub fn wired(trace: Option<Arc<Trace>>, model: &str, inner: Wired) -> Wired {
         trace.write(&Line::of(&model, SystemTime::now(), &result));
         result
     };
-    Wired { ask: Box::new(ask), run }
+    Wired {
+        ask: Box::new(ask),
+        run,
+    }
 }

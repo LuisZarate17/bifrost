@@ -56,8 +56,7 @@ const PROBE_ROUNDS: usize = 20;
 
 /// The system-prompt sentence about the finding tools, removed for the variant
 /// that does not have them. Checked, so a change of wording cannot slip past.
-const FIND_SENTENCE: &str =
-    " To find where something is, use search or list_files rather than guessing a path.";
+const FIND_SENTENCE: &str = " To find where something is, use search or list_files rather than guessing a path.";
 
 /// The only tools findprobe offers: what a find question needs. The edit, create,
 /// delete and move tools were offered once, and models used them — in
@@ -245,7 +244,10 @@ fn judge(q: &Question, answer: &str, calls: &[String]) -> Result<(), String> {
     }
     if q.kind == Kind::NoTool {
         if !calls.is_empty() {
-            return Err(format!("called {} for a question that needed no tool", calls.join(", ")));
+            return Err(format!(
+                "called {} for a question that needed no tool",
+                calls.join(", ")
+            ));
         }
     } else {
         let said = answer.to_lowercase().replace('\\', "/");
@@ -294,7 +296,10 @@ impl Variant {
 
     fn system(self, ws: &Workspace) -> String {
         let s = tools::system_prompt(ws, false);
-        assert!(s.contains(FIND_SENTENCE), "the finding sentence changed; update FIND_SENTENCE");
+        assert!(
+            s.contains(FIND_SENTENCE),
+            "the finding sentence changed; update FIND_SENTENCE"
+        );
         match self {
             Variant::Search => s,
             Variant::Map => format!(
@@ -350,17 +355,39 @@ fn run(
 ) -> Outcome {
     let started = Instant::now();
     let mut messages = vec![Message::system(variant.system(ws)), Message::user(q.ask)];
-    let setup = Setup { ws, backups, check: None, confine_reads: false, compact: true, commands: None, unattended: false };
-    let r = probe::run_loop(model, &mut messages, &variant.tools(), opts, Transport::Recover, PROBE_ROUNDS, &setup);
+    let setup = Setup {
+        ws,
+        backups,
+        check: None,
+        confine_reads: false,
+        compact: true,
+        commands: None,
+        unattended: false,
+    };
+    let r = probe::run_loop(
+        model,
+        &mut messages,
+        &variant.tools(),
+        opts,
+        Transport::Recover,
+        PROBE_ROUNDS,
+        &setup,
+    );
     // Whatever happened, the next run must read the pinned tree. A reset that
     // fails means this run, and maybe the next, measured nothing.
     let reset = tree.reset();
     let (verdict, why) = if let Err(e) = reset {
-        (Verdict::Error, format!("could not reset the worktree after the run: {e}"))
+        (
+            Verdict::Error,
+            format!("could not reset the worktree after the run: {e}"),
+        )
     } else if let Some(e) = r.error {
         (Verdict::Error, e)
     } else if r.hit_bound {
-        (Verdict::Fail, format!("still calling tools after {PROBE_ROUNDS} rounds"))
+        (
+            Verdict::Fail,
+            format!("still calling tools after {PROBE_ROUNDS} rounds"),
+        )
     } else {
         match judge(q, &r.answer, &r.calls) {
             Ok(()) if r.rounds > tools::MAX_ROUNDS => (Verdict::Late, format!("right, but after {} rounds", r.rounds)),
@@ -413,7 +440,11 @@ impl Worktree {
                 .output()
                 .map_err(|e| format!("could not run git: {e}"))?;
             if !out.status.success() {
-                return Err(format!("git {} failed: {}", args.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
+                return Err(format!(
+                    "git {} failed: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
             }
         }
         Ok(())
@@ -422,7 +453,10 @@ impl Worktree {
 
 impl Drop for Worktree {
     fn drop(&mut self) {
-        let _ = Command::new("git").args(["worktree", "remove", "--force"]).arg(&self.path).status();
+        let _ = Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&self.path)
+            .status();
         let _ = Command::new("git").args(["worktree", "prune"]).status();
     }
 }
@@ -430,7 +464,10 @@ impl Drop for Worktree {
 // ── main ────────────────────────────────────────────────────────────────────
 
 fn arg(args: &[String], key: &str) -> Option<String> {
-    args.iter().position(|a| a == key).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == key)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn main() {
@@ -445,8 +482,10 @@ fn main() {
         Some("map") => vec![Variant::Map],
         _ => vec![Variant::Search, Variant::ReadOnly],
     };
-    let questions: Vec<Question> =
-        questions().into_iter().filter(|q| only.as_deref().is_none_or(|o| q.id.starts_with(o))).collect();
+    let questions: Vec<Question> = questions()
+        .into_iter()
+        .filter(|q| only.as_deref().is_none_or(|o| q.id.starts_with(o)))
+        .collect();
 
     let scratch = std::env::temp_dir().join(format!("bifrost-findprobe-{}", std::process::id()));
     // Started if it is not running, as the apps and the CLI do, and before the
@@ -470,10 +509,17 @@ fn main() {
     println!("ctx:       {}", cfg.num_ctx);
     println!("codebase:  bifrost at {PIN}, {} questions", questions.len());
     println!("runs:      {runs} at the app's own settings, plus 1 at temperature 0");
-    println!("bound:     {PROBE_ROUNDS} rounds (the app stops at {})", tools::MAX_ROUNDS);
+    println!(
+        "bound:     {PROBE_ROUNDS} rounds (the app stops at {})",
+        tools::MAX_ROUNDS
+    );
     if variants.contains(&Variant::Map) {
         let map = search::repo_map(&ws, MAP_BUDGET, || false);
-        println!("map:       {} chars, {} lines", map.chars().count(), map.lines().count());
+        println!(
+            "map:       {} chars, {} lines",
+            map.chars().count(),
+            map.lines().count()
+        );
     }
     println!();
 
@@ -494,8 +540,10 @@ fn main() {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default();
-    let settings: Vec<(&str, Options, usize)> =
-        vec![("app", Options::new(cfg.num_ctx), runs), ("t=0", Options::measured(cfg.num_ctx), 1)];
+    let settings: Vec<(&str, Options, usize)> = vec![
+        ("app", Options::new(cfg.num_ctx), runs),
+        ("t=0", Options::measured(cfg.num_ctx), 1),
+    ];
     let kinds = [Kind::Named, Kind::Vague, Kind::NoTool];
 
     let mut rows = Vec::new();

@@ -65,7 +65,11 @@ Nothing here is secret.
 ";
 
 /// The subjects of the three commits, oldest first.
-const SUBJECTS: [&str; 3] = ["Add the demo crate", "Add the project notes", "Flag two notes for follow-up"];
+const SUBJECTS: [&str; 3] = [
+    "Add the demo crate",
+    "Add the project notes",
+    "Flag two notes for follow-up",
+];
 
 /// The notes the last commit touched, and the other facts the answers are checked against.
 /// All of them are written into the fixture by [`build`], so they cannot drift from it.
@@ -122,7 +126,11 @@ fn facts(rustc: &str) -> Facts {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<(), String> {
-    let out = Command::new("git").args(args).current_dir(dir).output().map_err(|e| format!("git: {e}"))?;
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("git: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {
@@ -185,7 +193,9 @@ struct Task {
 
 /// The digits in `text`, as whole numbers: `"102 lines (3 files)"` holds 102 and 3.
 fn numbers(text: &str) -> Vec<usize> {
-    text.split(|c: char| !c.is_ascii_digit()).filter_map(|t| t.parse().ok()).collect()
+    text.split(|c: char| !c.is_ascii_digit())
+        .filter_map(|t| t.parse().ok())
+        .collect()
 }
 
 fn says(answer: &str, wanted: &str) -> Result<(), String> {
@@ -296,14 +306,24 @@ fn judge(task: &Task, f: &Facts, r: &probe::Run) -> (Verdict, String, bool) {
         return (Verdict::Error, "Smart App Control blocked a command".into(), false);
     }
     match (task.right)(&r.answer, f) {
-        Ok(()) if r.hit_bound => (Verdict::Fail, format!("still calling tools after {PROBE_ROUNDS} rounds"), false),
+        Ok(()) if r.hit_bound => (
+            Verdict::Fail,
+            format!("still calling tools after {PROBE_ROUNDS} rounds"),
+            false,
+        ),
         Ok(()) if r.rounds > tools::MAX_ROUNDS => (Verdict::Pass, String::new(), true),
         Ok(()) => (Verdict::Pass, String::new(), false),
         // A command that timed out told the model nothing: the environment, not the model.
-        Err(e) if r.check_timeouts > 0 => {
-            (Verdict::Error, format!("a command timed out — environment ({e})"), false)
-        }
-        Err(e) if r.stopped => (Verdict::Fail, format!("stopped after repeating a failing call — {e}"), false),
+        Err(e) if r.check_timeouts > 0 => (
+            Verdict::Error,
+            format!("a command timed out — environment ({e})"),
+            false,
+        ),
+        Err(e) if r.stopped => (
+            Verdict::Fail,
+            format!("stopped after repeating a failing call — {e}"),
+            false,
+        ),
         Err(e) => (Verdict::Fail, e, false),
     }
 }
@@ -334,11 +354,30 @@ fn run(model: &str, task: &Task, shell: Shell, opts: Options, scratch: &Path, en
     // What Hugin offers: the folder's tools and `run_command`, with the sentence it adds.
     let mut offered = tools::available(true, None);
     offered.push(tools::run_command_tool(shell));
-    let system = format!("{} {}", tools::system_prompt(&ws, false), tools::command_sentence(shell));
+    let system = format!(
+        "{} {}",
+        tools::system_prompt(&ws, false),
+        tools::command_sentence(shell)
+    );
     let mut messages = vec![Message::system(system), Message::user(task.prompt)];
-    let setup =
-        Setup { ws: &ws, backups: &backups, check: Some(env), confine_reads: false, compact: true, commands: Some(shell), unattended: false };
-    let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, PROBE_ROUNDS, &setup);
+    let setup = Setup {
+        ws: &ws,
+        backups: &backups,
+        check: Some(env),
+        confine_reads: false,
+        compact: true,
+        commands: Some(shell),
+        unattended: false,
+    };
+    let r = probe::run_loop(
+        model,
+        &mut messages,
+        &offered,
+        opts,
+        Transport::Recover,
+        PROBE_ROUNDS,
+        &setup,
+    );
 
     let (verdict, why, late) = judge(task, f, &r);
     out.verdict = verdict;
@@ -357,7 +396,10 @@ fn run(model: &str, task: &Task, shell: Shell, opts: Options, scratch: &Path, en
 // ── main ────────────────────────────────────────────────────────────────────
 
 fn arg(args: &[String], key: &str) -> Option<String> {
-    args.iter().position(|a| a == key).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == key)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn main() {
@@ -380,8 +422,10 @@ fn main() {
         },
         None => Shell::ALL.into_iter().filter(|s| s.available()).collect(),
     };
-    let tasks: Vec<Task> =
-        tasks().into_iter().filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o))).collect();
+    let tasks: Vec<Task> = tasks()
+        .into_iter()
+        .filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o)))
+        .collect();
 
     let rustc = match Command::new("rustc").arg("--version").output() {
         Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
@@ -396,7 +440,10 @@ fn main() {
     let env = Check {
         argv: Vec::new(),
         env: vec![
-            ("CARGO_TARGET_DIR".into(), scratch_root.join("target").to_string_lossy().into_owned()),
+            (
+                "CARGO_TARGET_DIR".into(),
+                scratch_root.join("target").to_string_lossy().into_owned(),
+            ),
             ("CARGO_NET_OFFLINE".into(), "true".into()),
         ],
     };
@@ -404,7 +451,10 @@ fn main() {
     println!("I3 — command probe");
     println!("model:  {model}");
     println!("ctx:    {}", cfg.num_ctx);
-    println!("shells: {}", shells.iter().map(|s| s.label()).collect::<Vec<_>>().join(", "));
+    println!(
+        "shells: {}",
+        shells.iter().map(|s| s.label()).collect::<Vec<_>>().join(", ")
+    );
     println!("tasks:  {}", tasks.len());
     println!("runs:   {runs} at the app's own settings, plus 1 at temperature 0");
     println!("bound:  {PROBE_ROUNDS} rounds (the app stops at {})", tools::MAX_ROUNDS);
@@ -442,8 +492,10 @@ fn main() {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default();
-    let settings: Vec<(&str, Options, usize)> =
-        vec![("app", Options::new(cfg.num_ctx), runs), ("t=0", Options::measured(cfg.num_ctx), 1)];
+    let settings: Vec<(&str, Options, usize)> = vec![
+        ("app", Options::new(cfg.num_ctx), runs),
+        ("t=0", Options::measured(cfg.num_ctx), 1),
+    ];
 
     let mut rows = Vec::new();
     let mut json = Vec::new();
@@ -469,7 +521,11 @@ fn main() {
                     commands += o.commands;
                     failed += o.failed_commands;
                     denied += o.denied_commands;
-                    let shown = if o.verdict == Verdict::Pass && o.late { "LATE" } else { o.verdict.label() };
+                    let shown = if o.verdict == Verdict::Pass && o.late {
+                        "LATE"
+                    } else {
+                        o.verdict.label()
+                    };
                     line.push_str(&format!("{shown:<5} "));
                     if o.verdict != Verdict::Pass {
                         println!("    {} run {}: {} — {}", task.id, i + 1, o.verdict.label(), o.why);
@@ -535,7 +591,10 @@ mod tests {
     use super::*;
 
     fn scratch(tag: &str) -> PathBuf {
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let dir = std::env::temp_dir().join(format!("bifrost-cmdprobe-test-{tag}-{}-{n}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
@@ -582,7 +641,10 @@ mod tests {
         }
         assert_eq!((txt, lines, deadline, fixme), (12, f.total_lines, f.deadline_files, 2));
         assert_eq!(f.total_lines, 102);
-        assert!(out(&dir, &["status", "--porcelain"]).is_empty(), "the fixture is committed whole");
+        assert!(
+            out(&dir, &["status", "--porcelain"]).is_empty(),
+            "the fixture is committed whole"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -596,7 +658,10 @@ mod tests {
         let dir = scratch("build");
         build(&dir).unwrap();
         let env = vec![
-            ("CARGO_TARGET_DIR".to_string(), dir.join("target-elsewhere").to_string_lossy().into_owned()),
+            (
+                "CARGO_TARGET_DIR".to_string(),
+                dir.join("target-elsewhere").to_string_lossy().into_owned(),
+            ),
             ("CARGO_NET_OFFLINE".to_string(), "true".to_string()),
         ];
         let argv = vec!["cargo".to_string(), "build".to_string()];
@@ -638,19 +703,38 @@ mod tests {
     fn a_run_is_judged_by_its_failures_then_its_answer_then_its_rounds() {
         let task = tasks().into_iter().find(|t| t.id.starts_with("c03")).unwrap();
         let f = facts("rustc 1.0.0 (x 2026-01-01)");
-        let run = |answer: &str, rounds: usize| probe::Run { answer: answer.into(), rounds, ..probe::Run::default() };
+        let run = |answer: &str, rounds: usize| probe::Run {
+            answer: answer.into(),
+            rounds,
+            ..probe::Run::default()
+        };
 
         assert!(matches!(judge(&task, &f, &run("main", 3)), (Verdict::Pass, _, false)));
-        assert!(matches!(judge(&task, &f, &run("main", tools::MAX_ROUNDS + 1)), (Verdict::Pass, _, true)));
+        assert!(matches!(
+            judge(&task, &f, &run("main", tools::MAX_ROUNDS + 1)),
+            (Verdict::Pass, _, true)
+        ));
         assert!(matches!(judge(&task, &f, &run("dev", 3)), (Verdict::Fail, _, false)));
-        let hit = probe::Run { hit_bound: true, ..run("main", 20) };
+        let hit = probe::Run {
+            hit_bound: true,
+            ..run("main", 20)
+        };
         assert!(matches!(judge(&task, &f, &hit), (Verdict::Fail, _, false)));
-        let broke = probe::Run { error: Some("ollama".into()), ..run("main", 1) };
+        let broke = probe::Run {
+            error: Some("ollama".into()),
+            ..run("main", 1)
+        };
         assert!(matches!(judge(&task, &f, &broke), (Verdict::Error, _, _)));
-        let blocked = probe::Run { blocked: true, ..run("main", 1) };
+        let blocked = probe::Run {
+            blocked: true,
+            ..run("main", 1)
+        };
         assert!(matches!(judge(&task, &f, &blocked), (Verdict::Error, _, _)));
         // A wrong answer after a command timed out is the environment's.
-        let timed = probe::Run { check_timeouts: 1, ..run("dev", 2) };
+        let timed = probe::Run {
+            check_timeouts: 1,
+            ..run("dev", 2)
+        };
         assert!(matches!(judge(&task, &f, &timed), (Verdict::Error, _, _)));
     }
 

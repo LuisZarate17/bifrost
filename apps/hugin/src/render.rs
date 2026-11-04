@@ -55,7 +55,11 @@ impl Theme {
     }
 
     fn fg(&self, color: Color) -> Style {
-        if self.color { Style::default().fg(color) } else { Style::default() }
+        if self.color {
+            Style::default().fg(color)
+        } else {
+            Style::default()
+        }
     }
 
     /// Raven Violet, the dark shade.
@@ -68,7 +72,9 @@ impl Theme {
     /// wash that would hide the text. Without color there is no band.
     fn band(&self) -> Style {
         if self.color {
-            Style::default().bg(Color::Rgb(0x2b, 0x2b, 0x33)).fg(Color::Rgb(0xe8, 0xe8, 0xee))
+            Style::default()
+                .bg(Color::Rgb(0x2b, 0x2b, 0x33))
+                .fg(Color::Rgb(0xe8, 0xe8, 0xee))
         } else {
             Style::default()
         }
@@ -100,9 +106,13 @@ fn plain(text: &str) -> Line<'static> {
 /// only a change in the live area (the status, the end of a turn).
 pub fn scrollback(e: &Event, theme: &Theme, width: u16) -> Vec<Line<'static>> {
     let lines = match e {
-        Event::Header { folder, branch, changed, model, shell } => {
-            start_screen(theme, folder, branch.as_deref(), *changed, model, shell, width)
-        }
+        Event::Header {
+            folder,
+            branch,
+            changed,
+            model,
+            shell,
+        } => start_screen(theme, folder, branch.as_deref(), *changed, model, shell, width),
         Event::Prompt(text) => return prompt(text, theme, width),
         Event::Allowed(a) => {
             // The card as an approval shows it, wrapped; the note is one short line.
@@ -116,7 +126,13 @@ pub fn scrollback(e: &Event, theme: &Theme, width: u16) -> Vec<Line<'static>> {
         Event::Error(text) => text
             .split('\n')
             .enumerate()
-            .map(|(n, l)| if n == 0 { Line::from(vec![span("! ", theme.bold()), Span::raw(l.to_string())]) } else { plain(l) })
+            .map(|(n, l)| {
+                if n == 0 {
+                    Line::from(vec![span("! ", theme.bold()), Span::raw(l.to_string())])
+                } else {
+                    plain(l)
+                }
+            })
             .collect(),
         // Marked like an error, and in words: the cross is not the only thing that says so.
         Event::Unfinished(text) => vec![Line::from(vec![span("✗ ", theme.bold()), Span::raw(text.clone())])],
@@ -133,7 +149,11 @@ fn prompt(text: &str, theme: &Theme, width: u16) -> Vec<Line<'static>> {
         .split('\n')
         .enumerate()
         .map(|(n, l)| {
-            let lead = if n == 0 { span("› ", theme.accent().add_modifier(Modifier::BOLD)) } else { span("  ", Style::default()) };
+            let lead = if n == 0 {
+                span("› ", theme.accent().add_modifier(Modifier::BOLD))
+            } else {
+                span("  ", Style::default())
+            };
             Line::from(vec![lead, Span::raw(l.to_string())])
         })
         .collect();
@@ -224,10 +244,20 @@ fn half_blocks(map: &[&str]) -> Vec<Vec<(char, Style)>> {
 }
 
 /// The first line of a session: `hugin · <folder> · <branch>, <n> changed · <model> · <shell>`.
-fn header_line(theme: &Theme, folder: &str, branch: Option<&str>, changed: Option<usize>, model: &str, shell: &str) -> Line<'static> {
+fn header_line(
+    theme: &Theme,
+    folder: &str,
+    branch: Option<&str>,
+    changed: Option<usize>,
+    model: &str,
+    shell: &str,
+) -> Line<'static> {
     let text = view::header(folder, branch, changed, model, shell);
     let rest = text.strip_prefix("hugin").unwrap_or(&text).to_string();
-    Line::from(vec![span("hugin", theme.accent().add_modifier(Modifier::BOLD)), span(rest, theme.dim())])
+    Line::from(vec![
+        span("hugin", theme.accent().add_modifier(Modifier::BOLD)),
+        span(rest, theme.dim()),
+    ])
 }
 
 /// What opens a session in the scrollback: the raven with the folder, the model and the shell
@@ -246,7 +276,10 @@ pub fn start_screen(
         return vec![header_line(theme, folder, branch, changed, model, shell)];
     }
     let place = match view::git_note(branch, changed) {
-        Some(g) => vec![Span::raw(view::folder_name(folder)), span(format!(" · {g}"), theme.dim())],
+        Some(g) => vec![
+            Span::raw(view::folder_name(folder)),
+            span(format!(" · {g}"), theme.dim()),
+        ],
         None => vec![Span::raw(view::folder_name(folder))],
     };
     let mut who = vec![Span::raw(model.to_string())];
@@ -286,7 +319,11 @@ pub fn start_screen(
 
 /// An approval's header and the lines to read before answering.
 pub fn approval(a: &Approval, theme: &Theme, width: u16) -> Vec<Line<'static>> {
-    let target = if a.target.is_empty() { String::new() } else { format!(" {}", a.target) };
+    let target = if a.target.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", a.target)
+    };
     let mut lines = vec![Line::from(span(format!("? {}{target}", a.name), theme.accent()))];
     for d in &a.detail {
         // A command is not a diff: its `-la` is not a removed line.
@@ -410,7 +447,14 @@ pub fn status_line(status: &Status, theme: &Theme, width: u16, follow: Follow) -
         (Status::Idle, None) => {
             // The indent takes two columns.
             let room = usize::from(width) >= 2 + HINT.width() + SELECT.width();
-            Line::from(span(if room { format!("{HINT}{SELECT}") } else { HINT.to_string() }, theme.dim()))
+            Line::from(span(
+                if room {
+                    format!("{HINT}{SELECT}")
+                } else {
+                    HINT.to_string()
+                },
+                theme.dim(),
+            ))
         }
         (Status::Working(what, secs), below) => {
             let tail = below.map(|b| format!("  {b}")).unwrap_or_default();
@@ -430,11 +474,17 @@ struct Rows {
 fn rows(input: &Input, width: u16) -> Rows {
     let chunk = (width as usize).saturating_sub(3).max(1);
     let (crow, ccol) = input.cursor();
-    let mut out = Rows { rows: Vec::new(), cursor: (0, 0) };
+    let mut out = Rows {
+        rows: Vec::new(),
+        cursor: (0, 0),
+    };
     for (n, line) in input.lines().enumerate() {
         let chars: Vec<char> = line.chars().collect();
         let first_row = out.rows.len();
-        let pieces = chars.chunks(chunk).map(|c| c.iter().collect::<String>()).collect::<Vec<_>>();
+        let pieces = chars
+            .chunks(chunk)
+            .map(|c| c.iter().collect::<String>())
+            .collect::<Vec<_>>();
         let pieces = if pieces.is_empty() { vec![String::new()] } else { pieces };
         out.rows.extend(pieces);
         if n == crow {
@@ -462,15 +512,32 @@ fn rule(width: u16, theme: &Theme) -> Line<'static> {
 
 /// Draw the live box on the last rows of `area`: a rule, the input, a rule and the status line,
 /// indented. Returns where the cursor is.
-pub fn draw_live(f: &mut Frame, area: Rect, status: &Status, follow: Follow, input: &Input, theme: &Theme) -> Option<Position> {
+pub fn draw_live(
+    f: &mut Frame,
+    area: Rect,
+    status: &Status,
+    follow: Follow,
+    input: &Input,
+    theme: &Theme,
+) -> Option<Position> {
     let laid = rows(input, area.width);
-    let shown = laid.rows.len().min(INPUT_ROWS).min(usize::from(area.height).saturating_sub(3));
+    let shown = laid
+        .rows
+        .len()
+        .min(INPUT_ROWS)
+        .min(usize::from(area.height).saturating_sub(3));
     // The window of rows that keeps the cursor in view.
-    let from = (laid.cursor.0 + 1).saturating_sub(shown).min(laid.rows.len().saturating_sub(shown));
+    let from = (laid.cursor.0 + 1)
+        .saturating_sub(shown)
+        .min(laid.rows.len().saturating_sub(shown));
     let mut lines: Vec<Line> = vec![rule(area.width, theme)];
     lines.extend(laid.rows.iter().enumerate().skip(from).take(shown).map(|(n, text)| {
         // The marker is on the input's first row only.
-        let lead = if n == 0 { span("› ", theme.accent()) } else { span("  ", Style::default()) };
+        let lead = if n == 0 {
+            span("› ", theme.accent())
+        } else {
+            span("  ", Style::default())
+        };
         Line::from(vec![lead, Span::raw(text.clone())])
     }));
     lines.push(rule(area.width, theme));
@@ -493,25 +560,43 @@ pub fn draw_live(f: &mut Frame, area: Rect, status: &Status, follow: Follow, inp
 
 /// Draw the whole screen: the pinned prompt (if any) and the transcript's rows from the top, and
 /// the live box on the last rows. The caller has made `view` for the rows the box leaves.
-pub fn draw_screen(f: &mut Frame, view: &View, status: &Status, follow: Follow, input: &Input, theme: &Theme) -> Option<Position> {
+pub fn draw_screen(
+    f: &mut Frame,
+    view: &View,
+    status: &Status,
+    follow: Follow,
+    input: &Input,
+    theme: &Theme,
+) -> Option<Position> {
     let area = f.area();
     let boxed = live_height(input, area.width).min(area.height);
     let room = area.height - boxed;
     for (y, line) in (area.y..).zip(view.sticky.iter().chain(&view.rows).take(usize::from(room))) {
         f.render_widget(line.clone(), Rect { y, height: 1, ..area });
     }
-    draw_live(f, Rect { y: area.y + room, height: boxed, ..area }, status, follow, input, theme)
+    draw_live(
+        f,
+        Rect {
+            y: area.y + room,
+            height: boxed,
+            ..area
+        },
+        status,
+        follow,
+        input,
+        theme,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::buffer::Buffer;
-    use ratatui::widgets::Widget;
     use crate::transcript::{Said, Transcript};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::widgets::Widget;
 
     fn lit() -> Theme {
         Theme::new(true)
@@ -524,14 +609,27 @@ mod tests {
     /// Paint lines into a buffer the height of the lines, a row each, as the screen does.
     fn paint(lines: &[Line<'static>], buf: &mut Buffer) {
         for (y, line) in (buf.area.y..).zip(lines) {
-            line.clone().render(Rect { y, height: 1, ..buf.area }, buf);
+            line.clone().render(
+                Rect {
+                    y,
+                    height: 1,
+                    ..buf.area
+                },
+                buf,
+            );
         }
     }
 
     /// A buffer's rows as text, with the blanks at the end of each cut off.
     fn text_of(buf: &Buffer) -> Vec<String> {
         (0..buf.area.height)
-            .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
             .collect()
     }
 
@@ -563,7 +661,9 @@ mod tests {
     }
 
     fn colored(buf: &Buffer) -> bool {
-        buf.content().iter().any(|c| c.fg != Color::Reset || c.bg != Color::Reset)
+        buf.content()
+            .iter()
+            .any(|c| c.fg != Color::Reset || c.bg != Color::Reset)
     }
 
     fn header() -> Event {
@@ -577,7 +677,10 @@ mod tests {
     }
 
     fn step(text: &str, status: PlanStatus) -> PlanStep {
-        PlanStep { text: text.into(), status }
+        PlanStep {
+            text: text.into(),
+            status,
+        }
     }
 
     // ── the live area ──
@@ -597,7 +700,10 @@ mod tests {
     #[test]
     fn the_box_sits_on_the_last_rows_and_the_rows_above_it_are_blank() {
         let (rows, _) = live(&Status::Idle, &Input::default(), &lit(), 70, 7);
-        assert_eq!(rows, ["", "", "", bar(70).as_str(), "›", &bar(70), &format!("  {HINT}")]);
+        assert_eq!(
+            rows,
+            ["", "", "", bar(70).as_str(), "›", &bar(70), &format!("  {HINT}")]
+        );
     }
 
     #[test]
@@ -611,11 +717,29 @@ mod tests {
 
     #[test]
     fn a_running_turn_says_what_it_waits_for_and_for_how_long() {
-        let (rows, _) = live(&Status::Working("thinking".into(), 12), &Input::default(), &lit(), 40, 4);
+        let (rows, _) = live(
+            &Status::Working("thinking".into(), 12),
+            &Input::default(),
+            &lit(),
+            40,
+            4,
+        );
         assert_eq!(rows[3], "  thinking · 12s");
-        let (rows, _) = live(&Status::Working("running cargo check".into(), 4), &Input::default(), &lit(), 40, 4);
+        let (rows, _) = live(
+            &Status::Working("running cargo check".into(), 4),
+            &Input::default(),
+            &lit(),
+            40,
+            4,
+        );
         assert_eq!(rows[3], "  running cargo check · 4s");
-        let (rows, _) = live(&Status::Working("Starting Ollama…".into(), 0), &Input::default(), &lit(), 40, 4);
+        let (rows, _) = live(
+            &Status::Working("Starting Ollama…".into(), 0),
+            &Input::default(),
+            &lit(),
+            40,
+            4,
+        );
         assert_eq!(rows[3], "  Starting Ollama… · 0s");
     }
 
@@ -638,7 +762,16 @@ mod tests {
             draw_live(f, f.area(), &Status::Idle, Follow::End, &input, &lit());
         })
         .unwrap();
-        assert_eq!(text_of(term.backend().buffer()), [bar(62), "› first".into(), "  second".into(), bar(62), format!("  {HINT}")]);
+        assert_eq!(
+            text_of(term.backend().buffer()),
+            [
+                bar(62),
+                "› first".into(),
+                "  second".into(),
+                bar(62),
+                format!("  {HINT}")
+            ]
+        );
         term.backend_mut().assert_cursor_position((8, 2));
     }
 
@@ -649,8 +782,11 @@ mod tests {
         // Rows of width - 3 = 7 characters: 25 characters take 4.
         assert_eq!(live_height(&input, 10), 3 + 4);
         let mut input = Input::default();
-        input.paste(&"line
-".repeat(20));
+        input.paste(
+            &"line
+"
+            .repeat(20),
+        );
         assert_eq!(live_height(&input, 40), 3 + INPUT_ROWS as u16);
         let (rows, _) = live(&Status::Idle, &input, &lit(), 40, 3 + INPUT_ROWS as u16);
         // The cursor is on the last, empty line, so the window ends there.
@@ -677,7 +813,8 @@ mod tests {
         type_in(&mut input, "hey");
         let mut term = Terminal::new(TestBackend::new(30, 6)).unwrap();
         let mut at = None;
-        term.draw(|f| at = draw_live(f, f.area(), &Status::Idle, Follow::End, &input, &lit())).unwrap();
+        term.draw(|f| at = draw_live(f, f.area(), &Status::Idle, Follow::End, &input, &lit()))
+            .unwrap();
         assert_eq!(at, Some(Position::new(5, 3)));
         term.backend_mut().assert_cursor_position((5, 3));
     }
@@ -698,7 +835,10 @@ mod tests {
 
     #[test]
     fn the_header_names_the_folder_the_branch_and_the_model() {
-        assert_eq!(event_text(&header(), &mono(), 40), ["hugin · demo · main, 2 changed · qwen"]);
+        assert_eq!(
+            event_text(&header(), &mono(), 40),
+            ["hugin · demo · main, 2 changed · qwen"]
+        );
         let lines = scrollback(&header(), &lit(), 20);
         assert_eq!(lines[0].spans[0].style.fg, Some(hex("#8b7cf8")));
         assert_eq!(lines[0].spans[1].style.fg, None);
@@ -713,9 +853,17 @@ mod tests {
 
     #[test]
     fn a_tool_line_is_a_bullet_a_verb_a_target_and_an_outcome() {
-        let e = Event::Tool(ToolLine { name: "edit".into(), target: "a.rs +1 −1".into(), outcome: "applied".into() });
+        let e = Event::Tool(ToolLine {
+            name: "edit".into(),
+            target: "a.rs +1 −1".into(),
+            outcome: "applied".into(),
+        });
         assert_eq!(event_text(&e, &lit(), 80), ["● edit a.rs +1 −1 → applied"]);
-        let bare = Event::Tool(ToolLine { name: "plan".into(), target: String::new(), outcome: String::new() });
+        let bare = Event::Tool(ToolLine {
+            name: "plan".into(),
+            target: String::new(),
+            outcome: String::new(),
+        });
         assert_eq!(event_text(&bare, &lit(), 80), ["● plan"]);
         assert_eq!(scrollback(&e, &lit(), 80)[0].spans[0].style.fg, Some(hex("#8b7cf8")));
     }
@@ -724,14 +872,27 @@ mod tests {
         Approval {
             name: "edit".into(),
             target: "a.rs +1 −1".into(),
-            detail: vec![" fn a() {".into(), "-    old();".into(), "+    new();".into(), "⋯".into(), " }".into()],
+            detail: vec![
+                " fn a() {".into(),
+                "-    old();".into(),
+                "+    new();".into(),
+                "⋯".into(),
+                " }".into(),
+            ],
         }
     }
 
     #[test]
     fn an_approval_shows_its_diff_with_a_separator_between_hunks() {
         let lines = approval(&edit_approval(), &lit(), 80);
-        let want = ["? edit a.rs +1 −1", "   fn a() {", "  -    old();", "  +    new();", "  ⋯", "   }"];
+        let want = [
+            "? edit a.rs +1 −1",
+            "   fn a() {",
+            "  -    old();",
+            "  +    new();",
+            "  ⋯",
+            "   }",
+        ];
         assert_eq!(text_of(&shown(&lines, 80)), want);
         let fg = |n: usize| lines[n].spans[0].style.fg;
         assert_eq!(fg(0), Some(hex("#8b7cf8")));
@@ -742,9 +903,19 @@ mod tests {
 
     #[test]
     fn a_plan_is_checkboxes_an_answer_is_plain_and_an_error_and_a_stop_are_marked() {
-        let plan = Event::Plan(vec![step("read it", PlanStatus::Done), step("fix it", PlanStatus::Doing), step("test it", PlanStatus::Pending)]);
-        assert_eq!(event_text(&plan, &lit(), 80), ["[x] read it", "[ ] fix it", "[ ] test it"]);
-        assert_eq!(event_text(&Event::Answer("one\n\ntwo".into()), &lit(), 80), ["one", "", "two"]);
+        let plan = Event::Plan(vec![
+            step("read it", PlanStatus::Done),
+            step("fix it", PlanStatus::Doing),
+            step("test it", PlanStatus::Pending),
+        ]);
+        assert_eq!(
+            event_text(&plan, &lit(), 80),
+            ["[x] read it", "[ ] fix it", "[ ] test it"]
+        );
+        assert_eq!(
+            event_text(&Event::Answer("one\n\ntwo".into()), &lit(), 80),
+            ["one", "", "two"]
+        );
         assert_eq!(event_text(&Event::Error("no model".into()), &lit(), 80), ["! no model"]);
         assert_eq!(event_text(&Event::Stopped, &lit(), 80), ["· stopped"]);
         assert!(scrollback(&Event::Status("x".into()), &lit(), 80).is_empty());
@@ -758,7 +929,10 @@ mod tests {
         // Words, not just a mark, and the same with no color at all.
         assert_eq!(event_text(&e, &mono(), 80), ["✗ the check failed — not done"]);
         let lines = scrollback(&e, &mono(), 80);
-        assert!(lines[0].spans[0].style.add_modifier.contains(Modifier::BOLD), "the cross is bold, like an error's mark");
+        assert!(
+            lines[0].spans[0].style.add_modifier.contains(Modifier::BOLD),
+            "the cross is bold, like an error's mark"
+        );
         assert!(!colored(&shown(&lines, 80)));
         assert_eq!(event_text(&e, &lit(), 12), ["✗ the check", "failed — not", "done"]);
     }
@@ -767,7 +941,10 @@ mod tests {
     fn long_lines_wrap_at_spaces_and_cut_words_longer_than_the_line() {
         let e = Event::Answer("aaa bbb ccc ddd".into());
         assert_eq!(event_text(&e, &lit(), 8), ["aaa bbb", "ccc ddd"]);
-        assert_eq!(event_text(&Event::Answer("abcdefghij".into()), &lit(), 4), ["abcd", "efgh", "ij"]);
+        assert_eq!(
+            event_text(&Event::Answer("abcdefghij".into()), &lit(), 4),
+            ["abcd", "efgh", "ij"]
+        );
     }
 
     #[test]
@@ -775,7 +952,11 @@ mod tests {
         let events = [
             header(),
             Event::Prompt("hi".into()),
-            Event::Tool(ToolLine { name: "read".into(), target: "a.rs".into(), outcome: "2 lines".into() }),
+            Event::Tool(ToolLine {
+                name: "read".into(),
+                target: "a.rs".into(),
+                outcome: "2 lines".into(),
+            }),
             Event::Stopped,
         ];
         for e in &events {
@@ -808,11 +989,22 @@ mod tests {
         let row = &cells[0];
         assert_eq!(row[0], ('▀', Style::default().fg(dark)));
         assert_eq!(row[1], ('▄', Style::default().fg(light)));
-        assert_eq!(row[2], ('▀', Style::default().fg(Color::Rgb(0x6a, 0x58, 0xe6)).bg(Color::Rgb(0x3c, 0x2f, 0x96))));
+        assert_eq!(
+            row[2],
+            (
+                '▀',
+                Style::default()
+                    .fg(Color::Rgb(0x6a, 0x58, 0xe6))
+                    .bg(Color::Rgb(0x3c, 0x2f, 0x96))
+            )
+        );
         assert_eq!(row[3], (' ', Style::default()));
         // An odd last row has an empty bottom.
         assert_eq!(half_blocks(&["#", ".", "o"]).len(), 2);
-        assert_eq!(half_blocks(&["#", ".", "o"])[1][0], ('▀', Style::default().fg(Color::Rgb(0xec, 0xeb, 0xe6))));
+        assert_eq!(
+            half_blocks(&["#", ".", "o"])[1][0],
+            ('▀', Style::default().fg(Color::Rgb(0xec, 0xeb, 0xe6)))
+        );
     }
 
     #[test]
@@ -832,7 +1024,7 @@ mod tests {
         assert_eq!(side(1), "thought, sent out to work");
         assert_eq!(side(2), "demo · main, 2 changed");
         assert_eq!(side(3), "qwen · Git Bash");
-                // Two spaces of margin, and the art starts there.
+        // Two spaces of margin, and the art starts there.
         assert!(rows[1].starts_with("  "));
         assert_eq!(rows[0].chars().nth(MARGIN + 9), Some('▀'));
         // Styles: Hugin bold violet, the rest of the place line dim.
@@ -857,7 +1049,16 @@ mod tests {
         let rows = text_of(&shown(&start(&lit(), Some("main"), "", 47), 47));
         assert_eq!(rows.len(), 4 + 4 + 1);
         assert!(rows[0..4].iter().all(|r| r.chars().count() <= MARGIN + ART_WIDTH));
-        assert_eq!(&rows[4..], ["  Hugin", "  thought, sent out to work", "  demo · main, 2 changed", "  qwen", ""]);
+        assert_eq!(
+            &rows[4..],
+            [
+                "  Hugin",
+                "  thought, sent out to work",
+                "  demo · main, 2 changed",
+                "  qwen",
+                ""
+            ]
+        );
         let rows = text_of(&shown(&start(&lit(), Some("main"), "", 48), 48));
         assert_eq!(rows.len(), 5);
     }
@@ -873,16 +1074,29 @@ mod tests {
 
     #[test]
     fn line_mode_keeps_its_plain_header() {
-        assert_eq!(view::header("C:\\work\\demo", Some("main"), Some(2), "qwen", ""), "hugin · demo · main, 2 changed · qwen");
-        assert_eq!(view::header("C:\\work\\demo", None, None, "qwen", "bash"), "hugin · demo · qwen · bash");
+        assert_eq!(
+            view::header("C:\\work\\demo", Some("main"), Some(2), "qwen", ""),
+            "hugin · demo · main, 2 changed · qwen"
+        );
+        assert_eq!(
+            view::header("C:\\work\\demo", None, None, "qwen", "bash"),
+            "hugin · demo · qwen · bash"
+        );
     }
 
     // ── the screen ──
 
     #[test]
     fn a_prompt_is_on_a_band_across_the_full_width_with_its_marker_in_the_accent_and_bold() {
-        let lines = scrollback(&Event::Prompt("fix it
-then test".into()), &lit(), 30);
+        let lines = scrollback(
+            &Event::Prompt(
+                "fix it
+then test"
+                    .into(),
+            ),
+            &lit(),
+            30,
+        );
         let buf = shown(&lines, 30);
         let band = Color::Rgb(0x2b, 0x2b, 0x33);
         for y in 0..2 {
@@ -914,8 +1128,12 @@ then test".into()), &lit(), 30);
 
     #[test]
     fn the_sticky_prompt_is_one_row_on_the_band() {
-        let line = sticky_prompt("one two three four
-second", &lit(), 12);
+        let line = sticky_prompt(
+            "one two three four
+second",
+            &lit(),
+            12,
+        );
         let buf = shown(&[line], 12);
         assert_eq!(text_of(&buf), ["› one two t…"]);
         assert_eq!(buf[(11, 0)].bg, Color::Rgb(0x2b, 0x2b, 0x33));
@@ -927,14 +1145,21 @@ second", &lit(), 12);
         let said = |status: &Status, follow| status_line(status, &lit(), 100, follow).spans[0].content.to_string();
         assert_eq!(said(&Status::Idle, Follow::Up), "↓ ctrl+end");
         assert_eq!(said(&Status::Idle, Follow::Behind), "↓ new below · ctrl+end");
-        assert_eq!(said(&Status::Working("thinking".into(), 3), Follow::Behind), "thinking · 3s  ↓ new below · ctrl+end");
+        assert_eq!(
+            said(&Status::Working("thinking".into(), 3), Follow::Behind),
+            "thinking · 3s  ↓ new below · ctrl+end"
+        );
         // An approval is asked as it always was.
         assert_eq!(said(&Status::Approving, Follow::Behind), ASK);
     }
 
     #[test]
     fn the_hint_adds_shift_drag_select_only_when_there_is_room_for_it() {
-        let said = |w| status_line(&Status::Idle, &lit(), w, Follow::End).spans[0].content.to_string();
+        let said = |w| {
+            status_line(&Status::Idle, &lit(), w, Follow::End).spans[0]
+                .content
+                .to_string()
+        };
         assert_eq!(said(80), format!("{HINT}{SELECT}"));
         assert_eq!(said(79), HINT);
     }
@@ -943,10 +1168,13 @@ second", &lit(), 12);
     fn the_screen_is_the_pinned_prompt_the_rows_and_the_box_on_the_last_rows() {
         let mut t = Transcript::default();
         t.push(Said::Event(Event::Prompt("ask".into())));
-        t.push(Said::Event(Event::Answer("a1
+        t.push(Said::Event(Event::Answer(
+            "a1
 a2
 a3
-a4".into())));
+a4"
+            .into(),
+        )));
         t.lay(30, &mono());
         let view = t.view(4, 0, &mono(), 30);
         let mut term = Terminal::new(TestBackend::new(30, 8)).unwrap();
@@ -956,7 +1184,15 @@ a4".into())));
         .unwrap();
         let rows = text_of(term.backend().buffer());
         assert_eq!(rows[..4], ["› ask", "a2", "a3", "a4"]);
-        assert_eq!(rows[4..], [bar(30), "›".to_string(), bar(30), format!("  {HINT}").chars().take(30).collect::<String>()]);
+        assert_eq!(
+            rows[4..],
+            [
+                bar(30),
+                "›".to_string(),
+                bar(30),
+                format!("  {HINT}").chars().take(30).collect::<String>()
+            ]
+        );
         term.backend_mut().assert_cursor_position((2, 5));
     }
 }

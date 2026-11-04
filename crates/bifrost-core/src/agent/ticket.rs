@@ -92,20 +92,36 @@ pub enum Payload {
     /// it, and the lines the card showed. `run_approved` opens **this**, never a path
     /// or a range from the webview — so an approved `src/a.rs` cannot become a
     /// read of something else, nor lines 1–50 a read of the whole file.
-    Read { real: std::path::PathBuf, range: Option<tools::Lines> },
+    Read {
+        real: std::path::PathBuf,
+        range: Option<tools::Lines>,
+    },
     /// `stop` is this check's number on the Stop counter, taken **when the card
     /// is shown** rather than when the command starts: a Stop pressed between
     /// Allow and the start — while the approval is still on its way — must
     /// reach it too, or it would run with nothing left to stop it.
-    Check { root: String, argv: Vec<String>, stop: u64 },
+    Check {
+        root: String,
+        argv: Vec<String>,
+        stop: u64,
+    },
     /// A search or a listing: the folder it was approved for and exactly what
     /// the card showed, with a place on the Stop counter — a walk of a large
     /// folder can take a while, and Stop must reach it.
-    Find { root: String, find: Find, stop: u64 },
+    Find {
+        root: String,
+        find: Find,
+        stop: u64,
+    },
     /// A shell command, Hugin's: the folder, the shell and the exact text the card
     /// showed — which is also the ticket's path, so a ticket for one command cannot
     /// be redeemed for another.
-    Command { root: String, shell: crate::check::Shell, command: String, stop: u64 },
+    Command {
+        root: String,
+        shell: crate::check::Shell,
+        command: String,
+        stop: u64,
+    },
 }
 
 /// What a finding call looks for.
@@ -136,7 +152,12 @@ pub fn arm(name: &str, path: &str, payload: Option<Payload>) -> String {
             .unwrap_or_default()
     );
     if let Ok(mut slot) = pending().lock() {
-        *slot = Some(Armed { token: token.clone(), name: name.into(), path: path.into(), payload });
+        *slot = Some(Armed {
+            token: token.clone(),
+            name: name.into(),
+            path: path.into(),
+            payload,
+        });
     }
     token
 }
@@ -146,12 +167,7 @@ pub fn arm(name: &str, path: &str, payload: Option<Payload>) -> String {
 /// **The slot is taken either way.** A mismatched attempt burns the ticket
 /// rather than leaving it for a second try, so a caller cannot guess repeatedly
 /// against a standing approval.
-fn redeem_in(
-    slot: &mut Option<Armed>,
-    token: &str,
-    name: &str,
-    path: &str,
-) -> Result<Option<Payload>, String> {
+fn redeem_in(slot: &mut Option<Armed>, token: &str, name: &str, path: &str) -> Result<Option<Payload>, String> {
     match slot.take() {
         Some(a) if a.token == token && a.name == name && a.path == path => Ok(a.payload),
         _ => Err("this call was not approved".to_string()),
@@ -179,7 +195,12 @@ mod tests {
     fn armed(name: &str, path: &str) -> (Option<Armed>, String) {
         let token = "ticket-1".to_string();
         (
-            Some(Armed { token: token.clone(), name: name.into(), path: path.into(), payload: None }),
+            Some(Armed {
+                token: token.clone(),
+                name: name.into(),
+                path: path.into(),
+                payload: None,
+            }),
             token,
         )
     }
@@ -224,7 +245,10 @@ mod tests {
         // Whatever was outstanding is replaced, so only the newest call stands.
         let slot = pending().lock().unwrap();
         let a = slot.as_ref().expect("a call should be armed");
-        assert_eq!((a.token.as_str(), a.name.as_str(), a.path.as_str()), (token.as_str(), "read_file", "C:/from-arm.txt"));
+        assert_eq!(
+            (a.token.as_str(), a.name.as_str(), a.path.as_str()),
+            (token.as_str(), "read_file", "C:/from-arm.txt")
+        );
     }
 
     /// **The edit that runs is the one that was planned** - the ticket hands back
@@ -233,8 +257,12 @@ mod tests {
     fn an_edit_ticket_redeems_the_plan_it_was_armed_with() {
         let dir = std::env::temp_dir().join(format!("mimir-plan-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("a.txt"), "one
-").unwrap();
+        std::fs::write(
+            dir.join("a.txt"),
+            "one
+",
+        )
+        .unwrap();
         let ws = edit::Workspace::open(&dir).unwrap();
         let plan = edit::plan_replace(&ws, "a.txt", "one", "two").unwrap();
         let mut slot = Some(Armed {
@@ -304,7 +332,12 @@ mod tests {
     fn an_edit_ticket_cannot_be_redeemed_as_a_read() {
         // Same token and path, different tool: a read must not get the plan, and
         // must not be allowed to run on an edit's approval.
-        let mut slot = Some(Armed { token: "t".into(), name: "edit_file".into(), path: "a.txt".into(), payload: None });
+        let mut slot = Some(Armed {
+            token: "t".into(),
+            name: "edit_file".into(),
+            path: "a.txt".into(),
+            payload: None,
+        });
         assert!(redeem_in(&mut slot, "t", "read_file", "a.txt").is_err());
     }
 
@@ -343,15 +376,30 @@ mod tests {
     #[test]
     fn a_search_ticket_redeems_what_the_card_showed() {
         let shown = "\"greet(\" in src/**/*.rs";
-        let find = Find::Search { text: "greet(".into(), pattern: Some("src/**/*.rs".into()) };
-        let payload = Payload::Find { root: r"C:\work\demo".into(), find, stop: 3 };
+        let find = Find::Search {
+            text: "greet(".into(),
+            pattern: Some("src/**/*.rs".into()),
+        };
+        let payload = Payload::Find {
+            root: r"C:\work\demo".into(),
+            find,
+            stop: 3,
+        };
         let armed = || {
-            Some(Armed { token: "t".into(), name: "search".into(), path: shown.into(), payload: Some(payload.clone()) })
+            Some(Armed {
+                token: "t".into(),
+                name: "search".into(),
+                path: shown.into(),
+                payload: Some(payload.clone()),
+            })
         };
         // Not as a read of a file that happens to have that name, nor as a listing.
         assert!(redeem_in(&mut armed(), "t", "read_file", shown).is_err());
         assert!(redeem_in(&mut armed(), "t", "list_files", shown).is_err());
-        assert_eq!(redeem_in(&mut armed(), "t", "search", shown).unwrap(), Some(payload.clone()));
+        assert_eq!(
+            redeem_in(&mut armed(), "t", "search", shown).unwrap(),
+            Some(payload.clone())
+        );
     }
 
     /// **The file that is read is the one that was resolved when the card was
@@ -365,11 +413,17 @@ mod tests {
             token: "t".into(),
             name: "read_file".into(),
             path: shown.into(),
-            payload: Some(Payload::Read { real: open.clone(), range: None }),
+            payload: Some(Payload::Read {
+                real: open.clone(),
+                range: None,
+            }),
         });
         assert_eq!(
             redeem_in(&mut slot, "t", "read_file", shown).unwrap(),
-            Some(Payload::Read { real: open, range: None })
+            Some(Payload::Read {
+                real: open,
+                range: None
+            })
         );
     }
 
@@ -379,7 +433,10 @@ mod tests {
     fn a_read_ticket_redeems_with_its_range() {
         let open = std::path::PathBuf::from(r"C:\work\demo\src\a.rs");
         let shown = r"C:\work\demo\src\a.rs";
-        let range = Some(tools::Lines { start: 120, end: Some(180) });
+        let range = Some(tools::Lines {
+            start: 120,
+            end: Some(180),
+        });
         let payload = Payload::Read { real: open, range };
         let mut slot = Some(Armed {
             token: "t".into(),
@@ -398,7 +455,10 @@ mod tests {
                 token: "t".into(),
                 name: "read_file".into(),
                 path: shown.into(),
-                payload: Some(Payload::Read { real: shown.into(), range: None }),
+                payload: Some(Payload::Read {
+                    real: shown.into(),
+                    range: None,
+                }),
             })
         };
         assert!(redeem_in(&mut armed(), "t", "search", shown).is_err());
@@ -425,8 +485,15 @@ mod tests {
                 payload: Some(payload.clone()),
             })
         };
-        assert_eq!(redeem_in(&mut armed(), "t", "run_command", command).unwrap(), Some(payload.clone()));
-        for other in ["git log --oneline\n  git status", "git log --oneline", " git log --oneline\n  git status "] {
+        assert_eq!(
+            redeem_in(&mut armed(), "t", "run_command", command).unwrap(),
+            Some(payload.clone())
+        );
+        for other in [
+            "git log --oneline\n  git status",
+            "git log --oneline",
+            " git log --oneline\n  git status ",
+        ] {
             assert!(redeem_in(&mut armed(), "t", "run_command", other).is_err(), "{other:?}");
         }
         // Not as a check, nor as a read of a file with that name.

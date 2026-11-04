@@ -24,14 +24,25 @@ pub struct Input {
 
 impl Default for Input {
     fn default() -> Self {
-        Self { lines: vec![Vec::new()], row: 0, col: 0, history: Vec::new(), browsing: None, draft: String::new() }
+        Self {
+            lines: vec![Vec::new()],
+            row: 0,
+            col: 0,
+            history: Vec::new(),
+            browsing: None,
+            draft: String::new(),
+        }
     }
 }
 
 impl Input {
     /// The text, lines joined with `\n`.
     pub fn text(&self) -> String {
-        self.lines.iter().map(|l| l.iter().collect::<String>()).collect::<Vec<_>>().join("\n")
+        self.lines
+            .iter()
+            .map(|l| l.iter().collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[cfg(test)]
@@ -362,7 +373,10 @@ mod tests {
     #[test]
     fn altgr_types_its_character_and_other_control_keys_do_nothing() {
         let mut input = Input::default();
-        input.key(press(KeyCode::Char('@'), KeyModifiers::CONTROL | KeyModifiers::ALT), false);
+        input.key(
+            press(KeyCode::Char('@'), KeyModifiers::CONTROL | KeyModifiers::ALT),
+            false,
+        );
         input.key(press(KeyCode::Char('x'), KeyModifiers::CONTROL), false);
         input.key(press(KeyCode::Char('y'), KeyModifiers::ALT), false);
         assert_eq!(input.text(), "@");

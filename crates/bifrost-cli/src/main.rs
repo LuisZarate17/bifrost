@@ -1,5 +1,5 @@
-use std::io::{stdout, BufRead, BufReader, Write};
-use std::sync::mpsc::{channel, Sender};
+use std::io::{BufRead, BufReader, Write, stdout};
+use std::sync::mpsc::{Sender, channel};
 use std::time::{Duration, Instant};
 
 use base64::prelude::*;
@@ -11,8 +11,8 @@ use windows_capture::frame::Frame;
 use windows_capture::graphics_capture_api::InternalCaptureControl;
 use windows_capture::monitor::Monitor;
 use windows_capture::settings::{
-    ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
-    MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
+    ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings, MinimumUpdateIntervalSettings,
+    SecondaryWindowSettings, Settings,
 };
 
 mod power;
@@ -73,11 +73,7 @@ impl GraphicsCaptureApiHandler for Capture {
         Ok(Self { sender: ctx.flags })
     }
 
-    fn on_frame_arrived(
-        &mut self,
-        frame: &mut Frame,
-        control: InternalCaptureControl,
-    ) -> Result<(), Self::Error> {
+    fn on_frame_arrived(&mut self, frame: &mut Frame, control: InternalCaptureControl) -> Result<(), Self::Error> {
         let width = frame.width();
         let height = frame.height();
 
@@ -88,11 +84,7 @@ impl GraphicsCaptureApiHandler for Capture {
         // when this callback returns, so `.to_vec()` copies it into memory we own.
         let pixels = buffer.as_nopadding_buffer(&mut scratch).to_vec();
 
-        self.sender.send(Shot {
-            pixels,
-            width,
-            height,
-        })?;
+        self.sender.send(Shot { pixels, width, height })?;
 
         control.stop();
         Ok(())
@@ -163,10 +155,7 @@ fn parse_flags(args: &[String], cfg: &config::Config) -> Result<(u64, String), S
         match args[i].as_str() {
             "--model" => {
                 i += 1;
-                model = args
-                    .get(i)
-                    .ok_or_else(|| "--model needs a value".to_string())?
-                    .clone();
+                model = args.get(i).ok_or_else(|| "--model needs a value".to_string())?.clone();
             }
             other => match other.parse::<u64>() {
                 Ok(secs) => delay_secs = secs,

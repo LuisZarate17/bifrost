@@ -38,7 +38,10 @@ struct Dir {
 
 impl Dir {
     fn new(tag: &str) -> Self {
-        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or_default();
+        let n = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
         let root = std::env::temp_dir().join(format!("hugin-ask-{tag}-{}-{n}", std::process::id()));
         std::fs::create_dir_all(root.join("proj")).unwrap();
         Dir { root }
@@ -74,7 +77,11 @@ impl Dir {
     fn git_init(&self) {
         let config = self.root.join("global.gitconfig");
         std::fs::write(&config, "[user]\n\tname = t\n\temail = t@t\n").unwrap();
-        for args in [&["init", "-q", "-b", "main"][..], &["add", "-A"], &["commit", "-q", "-m", "x"]] {
+        for args in [
+            &["init", "-q", "-b", "main"][..],
+            &["add", "-A"],
+            &["commit", "-q", "-m", "x"],
+        ] {
             let out = Command::new("git")
                 .args(args)
                 .current_dir(self.folder())
@@ -82,7 +89,11 @@ impl Dir {
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .output()
                 .expect("git runs");
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
         }
     }
 }
@@ -110,7 +121,10 @@ fn lines(n: usize) -> String {
 /// A folder with something in it to look at.
 fn project(dir: &Dir) {
     dir.write("src/lib.rs", &lines(30));
-    dir.write("src/other.rs", "fn other() {}\nfn more() {}\nfn third() {}\nfn fourth() {}\n");
+    dir.write(
+        "src/other.rs",
+        "fn other() {}\nfn more() {}\nfn third() {}\nfn fourth() {}\n",
+    );
     dir.write("README.md", "# demo\n\nA tiny project.\n");
 }
 
@@ -144,8 +158,19 @@ type Seen = Arc<Mutex<Option<Ctx>>>;
 
 fn round(reply: Reply) -> Result<Round, String> {
     // A reply that is not words is one call.
-    let metrics = Metrics { tool_calls: usize::from(!matches!(reply, Reply::Answer { .. })), ..Metrics::default() };
-    Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, thinking: None, metrics, sent: compact_for_send(&mut [], &[], 8192, None, 0) })
+    let metrics = Metrics {
+        tool_calls: usize::from(!matches!(reply, Reply::Answer { .. })),
+        ..Metrics::default()
+    };
+    Ok(Round {
+        reply,
+        prompt_eval_count: 0,
+        recovered: false,
+        fed_back: false,
+        thinking: None,
+        metrics,
+        sent: compact_for_send(&mut [], &[], 8192, None, 0),
+    })
 }
 
 /// What a model that is not Qwen leaves when Ollama cannot parse its call: the stand-in call the
@@ -157,11 +182,24 @@ fn unreadable(why: &str) -> Result<Round, String> {
         error: format!("error: {why}. Send one valid tool call."),
         raw_call: raw(chat::INVALID_TOOL_CALL, json!({ "error": why })),
     };
-    round(rejected).map(|r| Round { fed_back: true, metrics: Metrics { error: Some(why.to_string()), ..r.metrics }, ..r })
+    round(rejected).map(|r| Round {
+        fed_back: true,
+        metrics: Metrics {
+            error: Some(why.to_string()),
+            ..r.metrics
+        },
+        ..r
+    })
 }
 
 fn raw(name: &str, arguments: serde_json::Value) -> chat::ToolCall {
-    chat::ToolCall { id: None, function: chat::FunctionCall { name: name.into(), arguments } }
+    chat::ToolCall {
+        id: None,
+        function: chat::FunctionCall {
+            name: name.into(),
+            arguments,
+        },
+    }
 }
 
 /// A call the folder's rule runs without asking, run: what `round` does with a read, a listing or a
@@ -218,21 +256,39 @@ fn script(steps: Vec<Step>) -> (impl FnOnce(&Ctx) -> Wired, Reached, Heard, Seen
     let (ran, heard, seen) = (Reached::default(), Heard::default(), Seen::default());
     let (ran_by, heard_by, seen_by) = (ran.clone(), heard.clone(), seen.clone());
     let wire = move |ctx: &Ctx| {
-        *seen_by.lock().unwrap() = Some(Ctx { root: ctx.root.clone(), env: ctx.env.clone() });
+        *seen_by.lock().unwrap() = Some(Ctx {
+            root: ctx.root.clone(),
+            env: ctx.env.clone(),
+        });
         let ws = Workspace::open(&ctx.root).unwrap();
         let mut steps = VecDeque::from(steps);
         let ask = move |messages: &[Message], _: Option<Calibration>, _: bool| {
-            heard_by.lock().unwrap().push(messages.last().map(|m| (m.role.clone(), m.content.clone())).unwrap_or_default());
-            match steps.pop_front().expect("the loop asked the model more often than the script allows") {
-                Step::Answer(text) => round(Reply::Answer { content: text.into(), eval_count: 7 }),
+            heard_by.lock().unwrap().push(
+                messages
+                    .last()
+                    .map(|m| (m.role.clone(), m.content.clone()))
+                    .unwrap_or_default(),
+            );
+            match steps
+                .pop_front()
+                .expect("the loop asked the model more often than the script allows")
+            {
+                Step::Answer(text) => round(Reply::Answer {
+                    content: text.into(),
+                    eval_count: 7,
+                }),
                 Step::Fail(why) => Err(why.to_string()),
                 Step::Unreadable(why) => unreadable(why),
                 Step::Sleep(secs) => {
                     std::thread::sleep(Duration::from_secs(secs));
-                    round(Reply::Answer { content: "too late".into(), eval_count: 7 })
+                    round(Reply::Answer {
+                        content: "too late".into(),
+                        eval_count: 7,
+                    })
                 }
                 Step::Read(path, range) => {
-                    let args = json!({ "path": path, "start_line": range.map(|r| r.0), "end_line": range.and_then(|r| r.1) });
+                    let args =
+                        json!({ "path": path, "start_line": range.map(|r| r.0), "end_line": range.and_then(|r| r.1) });
                     auto(&ws, "read_file", args)
                 }
                 Step::List(pattern) => auto(&ws, "list_files", json!({ "pattern": pattern })),
@@ -244,7 +300,10 @@ fn script(steps: Vec<Step>) -> (impl FnOnce(&Ctx) -> Wired, Reached, Heard, Seen
             ran_by.lock().unwrap().push(name.to_string());
             Err(format!("the script did not expect a call to {name}"))
         };
-        Wired { ask: Box::new(ask), run: Box::new(run) }
+        Wired {
+            ask: Box::new(ask),
+            run: Box::new(run),
+        }
     };
     (wire, ran, heard, seen)
 }
@@ -256,7 +315,11 @@ fn ask(dir: &Dir, secs: u64, steps: Vec<Step>) -> (Report, Reached, Heard) {
 }
 
 fn looked(report: &Report) -> Vec<(&str, Option<&str>)> {
-    report.looked_at.iter().map(|l| (l.path.as_str(), l.lines.as_deref())).collect()
+    report
+        .looked_at
+        .iter()
+        .map(|l| (l.path.as_str(), l.lines.as_deref()))
+        .collect()
 }
 
 // ── what it was asked ───────────────────────────────────────────────────────
@@ -278,8 +341,18 @@ fn the_scout_is_offered_the_tools_that_read_and_none_that_write() {
     let names: Vec<String> = offered().into_iter().map(|t| t.function.name).collect();
     assert_eq!(names, ["read_file", "list_files", "search"]);
     // Every other tool the app has exists, and is not among them.
-    let all: Vec<String> = tools::available(true, Some("cargo check")).into_iter().map(|t| t.function.name).collect();
-    for writer in ["edit_file", "create_file", "delete_file", "move_file", "run_check", "update_plan"] {
+    let all: Vec<String> = tools::available(true, Some("cargo check"))
+        .into_iter()
+        .map(|t| t.function.name)
+        .collect();
+    for writer in [
+        "edit_file",
+        "create_file",
+        "delete_file",
+        "move_file",
+        "run_check",
+        "update_plan",
+    ] {
         assert!(all.iter().any(|n| n == writer), "{writer} is a tool the app has");
         assert!(!names.iter().any(|n| n == writer), "{writer} is offered");
     }
@@ -303,7 +376,10 @@ fn the_run_is_set_up_with_those_tools_a_prompt_of_its_own_and_no_commands() {
     let env = ctx.env;
     let names: Vec<String> = env.offered.unwrap().into_iter().map(|t| t.function.name).collect();
     assert_eq!(names, ["read_file", "list_files", "search"]);
-    assert!(env.commands.is_none() && env.identity.is_none(), "no shell, and no sentence for the app's own prompt");
+    assert!(
+        env.commands.is_none() && env.identity.is_none(),
+        "no shell, and no sentence for the app's own prompt"
+    );
     assert!(env.backups.is_none() && env.check_env.is_empty());
     let prompt = env.system.expect("a prompt of its own, used as it is");
     assert!(prompt.contains(&ctx.root), "{prompt}");
@@ -320,7 +396,10 @@ fn the_run_is_set_up_with_those_tools_a_prompt_of_its_own_and_no_commands() {
         assert!(prompt.contains(must), "{must}\n{prompt}");
     }
     // The app's prompt tells the model it can change files; this one must not.
-    assert!(!prompt.contains("edit_file") && !prompt.contains("change files") && !prompt.contains("read and change"), "{prompt}");
+    assert!(
+        !prompt.contains("edit_file") && !prompt.contains("change files") && !prompt.contains("read and change"),
+        "{prompt}"
+    );
 }
 
 /// Every card that asks is answered no.
@@ -338,8 +417,19 @@ fn whatever_asks_is_denied() {
         size: None,
     };
     for name in [
-        "edit_file", "create_file", "delete_file", "move_file", "write_file", "run_check", "run_command", "read_file", "list_files",
-        "search", "update_plan", "no_such_tool", "",
+        "edit_file",
+        "create_file",
+        "delete_file",
+        "move_file",
+        "write_file",
+        "run_check",
+        "run_command",
+        "read_file",
+        "list_files",
+        "search",
+        "update_plan",
+        "no_such_tool",
+        "",
     ] {
         for path in ["src/lib.rs", "../outside.txt", r"C:\Windows\win.ini", ".git/config", ""] {
             assert_eq!(decide(&call(name, path)), Decision::Deny, "{name} {path}");
@@ -371,10 +461,17 @@ fn what_it_looked_at_comes_from_the_reads_that_ran_and_not_from_the_answer() {
     let (report, ran, _) = ask(&dir, 60, steps);
     assert_eq!(
         looked(&report),
-        [("src/lib.rs", None), ("src/other.rs", Some("2-3")), ("README.md", Some("1-3"))],
+        [
+            ("src/lib.rs", None),
+            ("src/other.rs", Some("2-3")),
+            ("README.md", Some("1-3"))
+        ],
         "{report:?}"
     );
-    assert_eq!(report.answer, "It is in src/never_read.rs, lines 1-5, and in src/lib.rs.");
+    assert_eq!(
+        report.answer,
+        "It is in src/never_read.rs, lines 1-5, and in src/lib.rs."
+    );
     assert_eq!((report.status(), report.exit_code()), (Status::Answered, 0));
     assert!(ran.lock().unwrap().is_empty());
 }
@@ -394,7 +491,14 @@ fn a_file_read_again_is_named_once_and_a_whole_read_stands_for_the_parts() {
     ];
     let (report, _, _) = ask(&dir, 60, steps);
     // Files in the order they were first read; the parts of one together.
-    assert_eq!(looked(&report), [("src/lib.rs", None), ("src/other.rs", Some("1-2")), ("src/other.rs", Some("3-4"))]);
+    assert_eq!(
+        looked(&report),
+        [
+            ("src/lib.rs", None),
+            ("src/other.rs", Some("1-2")),
+            ("src/other.rs", Some("3-4"))
+        ]
+    );
     let parts = vec![
         Step::Read("src/other.rs", Some((3, Some(4)))),
         Step::Read("src/lib.rs", Some((1, Some(5)))),
@@ -402,7 +506,14 @@ fn a_file_read_again_is_named_once_and_a_whole_read_stands_for_the_parts() {
         Step::Answer("Done."),
     ];
     let (report, _, _) = ask(&dir, 60, parts);
-    assert_eq!(looked(&report), [("src/other.rs", Some("3-4")), ("src/other.rs", Some("1-2")), ("src/lib.rs", Some("1-5"))]);
+    assert_eq!(
+        looked(&report),
+        [
+            ("src/other.rs", Some("3-4")),
+            ("src/other.rs", Some("1-2")),
+            ("src/lib.rs", Some("1-5"))
+        ]
+    );
 }
 
 /// A read that the size limit cut says what it gave, not what was asked for.
@@ -411,14 +522,28 @@ fn a_read_cut_at_the_size_limit_names_the_lines_it_gave() {
     let dir = Dir::new("cut");
     // 3000 lines of 40 bytes: 120 KB, which a read gives 64 KB of at most.
     dir.write("big.txt", &format!("{}\n", "x".repeat(39)).repeat(3000));
-    let (report, _, heard) = ask(&dir, 60, vec![Step::Read("big.txt", Some((1, Some(3000)))), Step::Answer("Read.")]);
-    let (path, lines) = (report.looked_at[0].path.as_str(), report.looked_at[0].lines.clone().unwrap());
+    let (report, _, heard) = ask(
+        &dir,
+        60,
+        vec![Step::Read("big.txt", Some((1, Some(3000)))), Step::Answer("Read.")],
+    );
+    let (path, lines) = (
+        report.looked_at[0].path.as_str(),
+        report.looked_at[0].lines.clone().unwrap(),
+    );
     assert_eq!(path, "big.txt");
     let (from, to) = lines.split_once('-').unwrap();
     assert_eq!(from, "1");
     let to: usize = to.parse().unwrap();
-    assert!((1000..3000).contains(&to), "cut well before the 3000 asked for: {lines}");
-    assert!(heard.lock().unwrap()[1].1.contains("cut at 65536 bytes"), "{:?}", heard.lock().unwrap()[1]);
+    assert!(
+        (1000..3000).contains(&to),
+        "cut well before the 3000 asked for: {lines}"
+    );
+    assert!(
+        heard.lock().unwrap()[1].1.contains("cut at 65536 bytes"),
+        "{:?}",
+        heard.lock().unwrap()[1]
+    );
 }
 
 #[test]
@@ -426,8 +551,15 @@ fn any_folder_will_do_git_or_not() {
     let dir = Dir::new("plain");
     project(&dir);
     assert!(!dir.folder().join(".git").exists());
-    let (report, _, _) = ask(&dir, 60, vec![Step::Read("README.md", None), Step::Answer("A tiny project.")]);
-    assert_eq!((report.status(), report.exit_code(), looked(&report)), (Status::Answered, 0, vec![("README.md", None)]));
+    let (report, _, _) = ask(
+        &dir,
+        60,
+        vec![Step::Read("README.md", None), Step::Answer("A tiny project.")],
+    );
+    assert_eq!(
+        (report.status(), report.exit_code(), looked(&report)),
+        (Status::Answered, 0, vec![("README.md", None)])
+    );
 }
 
 // ── what it is refused ──────────────────────────────────────────────────────
@@ -452,9 +584,19 @@ fn a_call_it_was_not_given_is_denied_and_nothing_runs() {
     ];
     let (report, ran, heard) = ask(&dir, 60, steps);
 
-    assert!(ran.lock().unwrap().is_empty(), "the runner was reached: {:?}", ran.lock().unwrap());
+    assert!(
+        ran.lock().unwrap().is_empty(),
+        "the runner was reached: {:?}",
+        ran.lock().unwrap()
+    );
     // Each of them was answered no, and the model was told so before its next request.
-    let told: Vec<String> = heard.lock().unwrap().iter().skip(1).map(|(role, said)| format!("{role}: {said}")).collect();
+    let told: Vec<String> = heard
+        .lock()
+        .unwrap()
+        .iter()
+        .skip(1)
+        .map(|(role, said)| format!("{role}: {said}"))
+        .collect();
     assert_eq!(told.len(), 7);
     for (said, want) in told.iter().zip([
         "tool: The user declined this change to src/lib.rs. Nothing was written.",
@@ -470,7 +612,11 @@ fn a_call_it_was_not_given_is_denied_and_nothing_runs() {
     assert_eq!(report.answer, "I could not change anything, and that is all I know.");
     assert_eq!((report.status(), report.exit_code()), (Status::Answered, 0));
     assert!(report.looked_at.is_empty());
-    assert_eq!(scratch::fingerprints(&dir.folder()).unwrap(), before, "the folder changed");
+    assert_eq!(
+        scratch::fingerprints(&dir.folder()).unwrap(),
+        before,
+        "the folder changed"
+    );
 }
 
 /// **Nothing is written anywhere in the folder, its `.git` included, down to the times**, by a run
@@ -489,7 +635,10 @@ fn a_run_leaves_the_folder_and_its_git_as_it_found_them_down_to_the_times() {
     dir.write("src/lib.rs", &lines(31));
     dir.write("notes.txt", "untracked\n");
     let before = scratch::fingerprints(&dir.folder()).unwrap();
-    assert!(before.keys().any(|k| k.starts_with(".git/objects/")), "the .git is in the fingerprint");
+    assert!(
+        before.keys().any(|k| k.starts_with(".git/objects/")),
+        "the .git is in the fingerprint"
+    );
 
     let steps = vec![
         Step::List(None),
@@ -511,10 +660,19 @@ fn a_run_leaves_the_folder_and_its_git_as_it_found_them_down_to_the_times() {
     assert_eq!(looked(&report), [("src/lib.rs", None), ("notes.txt", None)]);
 
     let after = scratch::fingerprints(&dir.folder()).unwrap();
-    let differ: Vec<&String> = before.keys().chain(after.keys()).filter(|k| before.get(*k) != after.get(*k)).take(10).collect();
+    let differ: Vec<&String> = before
+        .keys()
+        .chain(after.keys())
+        .filter(|k| before.get(*k) != after.get(*k))
+        .take(10)
+        .collect();
     assert!(differ.is_empty(), "the folder changed: {differ:?}");
     // And no file was left in the work folder but the lock.
-    let left: Vec<String> = std::fs::read_dir(dir.work()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    let left: Vec<String> = std::fs::read_dir(dir.work())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
     assert_eq!(left, ["lock"]);
 }
 
@@ -526,8 +684,14 @@ fn answered() -> Report {
         model: "qwen3-coder:30b".into(),
         answer: "It is in src/main.rs (lines 120-180).".into(),
         looked_at: vec![
-            LookedAt { path: "src/main.rs".into(), lines: Some("120-180".into()) },
-            LookedAt { path: "src/lib.rs".into(), lines: None },
+            LookedAt {
+                path: "src/main.rs".into(),
+                lines: Some("120-180".into()),
+            },
+            LookedAt {
+                path: "src/lib.rs".into(),
+                lines: None,
+            },
         ],
         seconds: 41.2,
         time: 300,
@@ -545,29 +709,64 @@ fn the_text_is_a_first_line_the_answer_and_the_files_looked_at() {
          \n\
          looked at:\n  src/main.rs (lines 120-180)\n  src/lib.rs\n"
     );
-    let none = Report { looked_at: Vec::new(), ..answered() };
-    assert!(none.to_text().ends_with("\n\nlooked at: no file was read\n"), "{}", none.to_text());
+    let none = Report {
+        looked_at: Vec::new(),
+        ..answered()
+    };
+    assert!(
+        none.to_text().ends_with("\n\nlooked at: no file was read\n"),
+        "{}",
+        none.to_text()
+    );
 }
 
 #[test]
 fn a_partial_answer_says_why_and_still_lists_what_was_looked_at() {
-    let stopped = Report { stopped: true, answer: String::new(), ..answered() };
+    let stopped = Report {
+        stopped: true,
+        answer: String::new(),
+        ..answered()
+    };
     assert_eq!(
         stopped.to_text(),
         "hugin: PARTIAL — stopped at the 300 s time limit; this is what it had by then.\n\
          \n\
          looked at:\n  src/main.rs (lines 120-180)\n  src/lib.rs\n"
     );
-    let bound = Report { notes: vec!["Stopped after 20 tool rounds.".into()], ..answered() };
-    assert!(bound.to_text().starts_with("hugin: PARTIAL — Stopped after 20 tool rounds. (41 s).\n\nIt is in"), "{}", bound.to_text());
-    let silent = Report { answer: String::new(), ..answered() };
-    assert!(silent.to_text().starts_with("hugin: PARTIAL — the model gave no answer (41 s).\n"), "{}", silent.to_text());
+    let bound = Report {
+        notes: vec!["Stopped after 20 tool rounds.".into()],
+        ..answered()
+    };
+    assert!(
+        bound
+            .to_text()
+            .starts_with("hugin: PARTIAL — Stopped after 20 tool rounds. (41 s).\n\nIt is in"),
+        "{}",
+        bound.to_text()
+    );
+    let silent = Report {
+        answer: String::new(),
+        ..answered()
+    };
+    assert!(
+        silent
+            .to_text()
+            .starts_with("hugin: PARTIAL — the model gave no answer (41 s).\n"),
+        "{}",
+        silent.to_text()
+    );
 }
 
 #[test]
 fn an_error_is_one_line() {
-    let report = Report { error: Some("could not start Ollama: not installed".into()), ..answered() };
-    assert_eq!(report.to_text(), "hugin --ask could not answer: could not start Ollama: not installed\n");
+    let report = Report {
+        error: Some("could not start Ollama: not installed".into()),
+        ..answered()
+    };
+    assert_eq!(
+        report.to_text(),
+        "hugin --ask could not answer: could not start Ollama: not installed\n"
+    );
 }
 
 /// Answered is 0, partial 3, and a run that could not be made 1.
@@ -575,17 +774,65 @@ fn an_error_is_one_line() {
 fn each_way_a_run_ends_has_a_status_and_an_exit_code() {
     let cases = [
         ("answered", answered(), Status::Answered, 0),
-        ("stopped by the time limit", Report { stopped: true, ..answered() }, Status::Partial, 3),
-        ("stopped at a bound", Report { notes: vec!["Stopped after 20 tool rounds.".into()], ..answered() }, Status::Partial, 3),
-        ("no answer", Report { answer: String::new(), ..answered() }, Status::Partial, 3),
-        ("an error", Report { error: Some("no model".into()), ..answered() }, Status::Error, 1),
-        ("an error, and nothing else", Report { error: Some("no model".into()), answer: String::new(), ..answered() }, Status::Error, 1),
+        (
+            "stopped by the time limit",
+            Report {
+                stopped: true,
+                ..answered()
+            },
+            Status::Partial,
+            3,
+        ),
+        (
+            "stopped at a bound",
+            Report {
+                notes: vec!["Stopped after 20 tool rounds.".into()],
+                ..answered()
+            },
+            Status::Partial,
+            3,
+        ),
+        (
+            "no answer",
+            Report {
+                answer: String::new(),
+                ..answered()
+            },
+            Status::Partial,
+            3,
+        ),
+        (
+            "an error",
+            Report {
+                error: Some("no model".into()),
+                ..answered()
+            },
+            Status::Error,
+            1,
+        ),
+        (
+            "an error, and nothing else",
+            Report {
+                error: Some("no model".into()),
+                answer: String::new(),
+                ..answered()
+            },
+            Status::Error,
+            1,
+        ),
     ];
     for (what, report, status, code) in cases {
         assert_eq!((report.status(), report.exit_code()), (status, code), "{what}");
-        assert_eq!(report.to_json()["status"], serde_json::to_value(status).unwrap(), "{what}");
+        assert_eq!(
+            report.to_json()["status"],
+            serde_json::to_value(status).unwrap(),
+            "{what}"
+        );
     }
-    let words: Vec<_> = [Status::Answered, Status::Partial, Status::Error].iter().map(|s| serde_json::to_value(s).unwrap()).collect();
+    let words: Vec<_> = [Status::Answered, Status::Partial, Status::Error]
+        .iter()
+        .map(|s| serde_json::to_value(s).unwrap())
+        .collect();
     assert_eq!(words, ["answered", "partial", "error"]);
 }
 
@@ -594,7 +841,12 @@ fn each_way_a_run_ends_has_a_status_and_an_exit_code() {
 fn the_json_has_exactly_these_fields_in_this_order() {
     let want = r##"{"status":"answered","answer":"It is in src/main.rs (lines 120-180).","looked_at":[{"path":"src/main.rs","lines":"120-180"},{"path":"src/lib.rs","lines":null}],"seconds":41.2,"model":"qwen3-coder:30b","folder":"C:\\work\\demo","error":null}"##;
     assert_eq!(answered().to_json_string(), want);
-    let failed = Report { error: Some("no model".into()), answer: String::new(), looked_at: Vec::new(), ..answered() };
+    let failed = Report {
+        error: Some("no model".into()),
+        answer: String::new(),
+        looked_at: Vec::new(),
+        ..answered()
+    };
     assert_eq!(
         failed.to_json_string(),
         r##"{"status":"error","answer":"","looked_at":[],"seconds":41.2,"model":"qwen3-coder:30b","folder":"C:\\work\\demo","error":"no model"}"##
@@ -610,14 +862,28 @@ fn a_slow_model_is_stopped_on_time_and_the_run_is_partial() {
     let dir = Dir::new("slow");
     project(&dir);
     let started = Instant::now();
-    let (report, ran, _) = ask(&dir, 4, vec![Step::Read("src/lib.rs", Some((1, Some(4)))), Step::Sleep(30)]);
+    let (report, ran, _) = ask(
+        &dir,
+        4,
+        vec![Step::Read("src/lib.rs", Some((1, Some(4)))), Step::Sleep(30)],
+    );
     let took = started.elapsed();
     assert!(took < Duration::from_secs(7), "took {took:?}");
-    assert!(report.seconds <= 4.2, "the whole run had 4 seconds, and took {} s", report.seconds);
+    assert!(
+        report.seconds <= 4.2,
+        "the whole run had 4 seconds, and took {} s",
+        report.seconds
+    );
     assert!(report.stopped && report.answer.is_empty(), "{report:?}");
     assert_eq!((report.status(), report.exit_code()), (Status::Partial, 3));
     assert_eq!(looked(&report), [("src/lib.rs", Some("1-4"))]);
-    assert!(report.to_text().starts_with("hugin: PARTIAL — stopped at the 4 s time limit"), "{}", report.to_text());
+    assert!(
+        report
+            .to_text()
+            .starts_with("hugin: PARTIAL — stopped at the 4 s time limit"),
+        "{}",
+        report.to_text()
+    );
     assert_eq!(report.to_json()["status"], "partial");
     assert!(ran.lock().unwrap().is_empty());
 }
@@ -629,7 +895,11 @@ fn a_request_that_fails_is_a_run_that_could_not_be_made() {
     let (report, _, _) = ask(&dir, 60, vec![Step::Fail("could not start Ollama: not installed")]);
     assert_eq!((report.status(), report.exit_code()), (Status::Error, 1));
     assert_eq!(report.error.as_deref(), Some("could not start Ollama: not installed"));
-    assert!(report.to_text().starts_with("hugin --ask could not answer: could not start Ollama"));
+    assert!(
+        report
+            .to_text()
+            .starts_with("hugin --ask could not answer: could not start Ollama")
+    );
     assert_eq!(report.to_json()["error"], "could not start Ollama: not installed");
 }
 
@@ -638,9 +908,14 @@ fn traced(dir: &Dir, steps: Vec<Step>) -> (Report, Heard, Vec<serde_json::Value>
     let file = dir.root.join("trace.jsonl");
     let (wire, _, heard, _) = script(steps);
     let trace = Trace::open(&file);
-    let report = execute(&dir.job(60), "devstral:24b", |ctx| trace::wired(Some(trace), "devstral:24b", wire(ctx)));
+    let report = execute(&dir.job(60), "devstral:24b", |ctx| {
+        trace::wired(Some(trace), "devstral:24b", wire(ctx))
+    });
     let text = std::fs::read_to_string(&file).unwrap_or_default();
-    let lines = text.lines().map(|l| serde_json::from_str(l).expect("a line of JSON")).collect();
+    let lines = text
+        .lines()
+        .map(|l| serde_json::from_str(l).expect("a line of JSON"))
+        .collect();
     (report, heard, lines)
 }
 
@@ -652,19 +927,50 @@ fn a_call_sent_back_is_told_to_the_model_and_the_next_valid_call_runs() {
     let dir = Dir::new("fedback");
     project(&dir);
     let why = "error parsing tool call: raw='{\"name\":', err=unexpected end of JSON input";
-    let steps = vec![Step::Unreadable(why), Step::Read("src/lib.rs", Some((1, Some(5)))), Step::Answer("It is in src/lib.rs.")];
+    let steps = vec![
+        Step::Unreadable(why),
+        Step::Read("src/lib.rs", Some((1, Some(5)))),
+        Step::Answer("It is in src/lib.rs."),
+    ];
     let (report, heard, lines) = traced(&dir, steps);
 
-    assert_eq!((report.status(), report.exit_code()), (Status::Answered, 0), "{report:?}");
+    assert_eq!(
+        (report.status(), report.exit_code()),
+        (Status::Answered, 0),
+        "{report:?}"
+    );
     assert_eq!(looked(&report), [("src/lib.rs", Some("1-5"))]);
     // The model was told, in words that name no format, and then it read the file.
     let heard = heard.lock().unwrap();
-    assert_eq!(heard[1], ("tool".to_string(), format!("error: {why}. Send one valid tool call.")));
+    assert_eq!(
+        heard[1],
+        ("tool".to_string(), format!("error: {why}. Send one valid tool call."))
+    );
 
     assert_eq!(lines.len(), 3, "a line for each request: {lines:?}");
-    let marks: Vec<_> = lines.iter().map(|l| (l["fed_back"].as_bool(), l["recovered"].as_bool(), l["tool_calls"].as_u64())).collect();
-    assert_eq!(marks, [(Some(true), Some(false), Some(1)), (Some(false), Some(false), Some(1)), (Some(false), Some(false), Some(0))]);
-    assert!(lines.iter().all(|l| l["model"] == "devstral:24b" && l["thinking_len"] == 0));
+    let marks: Vec<_> = lines
+        .iter()
+        .map(|l| {
+            (
+                l["fed_back"].as_bool(),
+                l["recovered"].as_bool(),
+                l["tool_calls"].as_u64(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        marks,
+        [
+            (Some(true), Some(false), Some(1)),
+            (Some(false), Some(false), Some(1)),
+            (Some(false), Some(false), Some(0))
+        ]
+    );
+    assert!(
+        lines
+            .iter()
+            .all(|l| l["model"] == "devstral:24b" && l["thinking_len"] == 0)
+    );
     // The first line says why; the others have nothing to say.
     assert_eq!(lines[0]["error"], why);
     assert!(lines[1..].iter().all(|l| l["error"].is_null()));
@@ -674,10 +980,18 @@ fn a_call_sent_back_is_told_to_the_model_and_the_next_valid_call_runs() {
 fn a_request_that_failed_is_a_line_with_the_error_and_the_run_still_reports() {
     let dir = Dir::new("tracefail");
     project(&dir);
-    let (report, _, lines) = traced(&dir, vec![Step::Fail("/api/chat returned 500 Internal Server Error: {\"error\":\"EOF\"}")]);
+    let (report, _, lines) = traced(
+        &dir,
+        vec![Step::Fail(
+            "/api/chat returned 500 Internal Server Error: {\"error\":\"EOF\"}",
+        )],
+    );
     assert_eq!(report.status(), Status::Error);
     assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0]["error"], "/api/chat returned 500 Internal Server Error: {\"error\":\"EOF\"}");
+    assert_eq!(
+        lines[0]["error"],
+        "/api/chat returned 500 Internal Server Error: {\"error\":\"EOF\"}"
+    );
     assert!(lines[0]["prompt_eval_count"].is_null());
 }
 
@@ -693,7 +1007,10 @@ fn one_run_at_a_time_with_p() {
     let (wire, _, _, _) = script(vec![]);
     let report = execute(&dir.job(60), "m", wire);
     assert_eq!(report.status(), Status::Error);
-    assert!(report.error.as_deref().is_some_and(|e| e.contains("already running")), "{report:?}");
+    assert!(
+        report.error.as_deref().is_some_and(|e| e.contains("already running")),
+        "{report:?}"
+    );
     drop(held);
     let (report, _, _) = ask(&dir, 60, vec![Step::Answer("Free now.")]);
     assert_eq!(report.status(), Status::Answered, "{report:?}");
@@ -709,14 +1026,20 @@ fn a_folder_that_cannot_be_asked_about_is_an_error_before_anything_starts() {
     job.folder = dir.root.join("not-there");
     let report = execute(&job, "m", wire);
     assert_eq!((report.status(), report.exit_code()), (Status::Error, 1));
-    assert!(report.error.as_deref().is_some_and(|e| e.contains("cannot use")), "{report:?}");
+    assert!(
+        report.error.as_deref().is_some_and(|e| e.contains("cannot use")),
+        "{report:?}"
+    );
 
     if cfg!(windows) {
         let mut job = dir.job(60);
         job.folder = PathBuf::from(r"C:\");
         let report = execute(&job, "m", |_: &Ctx| -> Wired { panic!("the model was set up") });
         assert_eq!(report.status(), Status::Error);
-        assert!(report.error.as_deref().is_some_and(|e| e.contains("too broad")), "{report:?}");
+        assert!(
+            report.error.as_deref().is_some_and(|e| e.contains("too broad")),
+            "{report:?}"
+        );
     }
     // Nothing was made for any of them, not even the work folder.
     assert!(!dir.work().exists());
@@ -724,7 +1047,10 @@ fn a_folder_that_cannot_be_asked_about_is_an_error_before_anything_starts() {
 
 #[test]
 fn the_claude_note_tells_claude_when_to_ask_hugin_a_question_and_to_check_the_answer() {
-    let note: String = crate::print::CLAUDE_NOTE.split_whitespace().collect::<Vec<_>>().join(" ");
+    let note: String = crate::print::CLAUDE_NOTE
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     for must in [
         "**Questions about a codebase** (where is X, how does Y work, what calls Z)",
         "`hugin --ask \"<the question>\" --json`",
@@ -739,9 +1065,17 @@ fn the_claude_note_tells_claude_when_to_ask_hugin_a_question_and_to_check_the_an
 fn nothing_but_the_lock_is_made_outside_the_folder() {
     let dir = Dir::new("lockonly");
     project(&dir);
-    let (report, _, _) = ask(&dir, 60, vec![Step::Read("README.md", None), Step::Answer("A tiny project.")]);
+    let (report, _, _) = ask(
+        &dir,
+        60,
+        vec![Step::Read("README.md", None), Step::Answer("A tiny project.")],
+    );
     assert_eq!(report.status(), Status::Answered);
-    let left: Vec<String> = std::fs::read_dir(dir.work()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    let left: Vec<String> = std::fs::read_dir(dir.work())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
     assert_eq!(left, ["lock"]);
     // ... and nothing in the folder: the same files, as they were written.
     let mut files: Vec<String> = scratch::fingerprints(&dir.folder()).unwrap().into_keys().collect();

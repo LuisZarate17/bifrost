@@ -42,9 +42,7 @@ const SOURCE: &str = include_str!("../../../packages/ui/src/colors.json");
 /// The palette, parsed on first use and kept.
 pub fn palette() -> &'static Palette {
     static PALETTE: OnceLock<Palette> = OnceLock::new();
-    PALETTE.get_or_init(|| {
-        serde_json::from_str(SOURCE).expect("packages/ui/src/colors.json no longer matches Palette")
-    })
+    PALETTE.get_or_init(|| serde_json::from_str(SOURCE).expect("packages/ui/src/colors.json no longer matches Palette"))
 }
 
 #[cfg(test)]

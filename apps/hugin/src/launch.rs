@@ -49,9 +49,11 @@ pub fn target() -> Result<(PathBuf, String), String> {
     let program = std::env::current_exe()
         .map_err(|e| format!("cannot find hugin.exe: {e}"))?
         .with_file_name("hugin.exe");
-    let folder = choose_folder(config::load().hugin_last_folder, std::env::var("USERPROFILE").ok(), |f| {
-        Path::new(f).is_dir()
-    });
+    let folder = choose_folder(
+        config::load().hugin_last_folder,
+        std::env::var("USERPROFILE").ok(),
+        |f| Path::new(f).is_dir(),
+    );
     Ok((program, folder))
 }
 
@@ -85,7 +87,7 @@ pub fn start(program: &Path, folder: &str) -> Result<Started, String> {
 /// flashes and closes. Without that flag, Windows gives the child its new console's own
 /// handles, and Hugin sees a terminal.
 fn new_console(program: &Path, folder: &str) -> Result<u32, String> {
-    use std::ffi::{c_void, OsStr};
+    use std::ffi::{OsStr, c_void};
     use std::os::windows::ffi::OsStrExt;
 
     #[repr(C)]

@@ -10,7 +10,10 @@ use crate::trace::*;
 
 fn round(prompt_eval_count: u32, recovered: bool, fed_back: bool, metrics: Metrics) -> Round {
     Round {
-        reply: Reply::Answer { content: "ok".into(), eval_count: metrics.eval_count },
+        reply: Reply::Answer {
+            content: "ok".into(),
+            eval_count: metrics.eval_count,
+        },
         prompt_eval_count,
         recovered,
         fed_back,
@@ -60,13 +63,20 @@ fn a_reply_is_a_line_with_ollamas_numbers_and_how_it_was_handled() {
 #[test]
 fn a_note_the_round_made_is_in_the_line_and_without_one_the_key_is_absent() {
     let note = "think high is set for devstral:24b, but it does not report the thinking capability, so it was not sent";
-    let metrics = Metrics { note: Some(note.into()), ..Metrics::default() };
+    let metrics = Metrics {
+        note: Some(note.into()),
+        ..Metrics::default()
+    };
     let line = Line::of("devstral:24b", at(0, 0), &Ok(round(900, false, false, metrics)));
     assert_eq!(line.note.as_deref(), Some(note));
     let json = serde_json::to_value(&line).unwrap();
     assert_eq!(json["note"], note);
 
-    let plain = Line::of("devstral:24b", at(0, 0), &Ok(round(900, false, false, Metrics::default())));
+    let plain = Line::of(
+        "devstral:24b",
+        at(0, 0),
+        &Ok(round(900, false, false, Metrics::default())),
+    );
     assert_eq!(plain.note, None);
     assert!(serde_json::to_value(&plain).unwrap().get("note").is_none());
     assert!(Line::of("m", at(0, 0), &Err("x".to_string())).note.is_none());
@@ -74,18 +84,31 @@ fn a_note_the_round_made_is_in_the_line_and_without_one_the_key_is_absent() {
 
 #[test]
 fn a_call_that_was_fed_back_says_so_and_a_missing_duration_is_null() {
-    let metrics = Metrics { tool_calls: 1, error: Some("error parsing tool call: raw='{'".into()), ..Metrics::default() };
+    let metrics = Metrics {
+        tool_calls: 1,
+        error: Some("error parsing tool call: raw='{'".into()),
+        ..Metrics::default()
+    };
     let line = Line::of("m", at(0, 0), &Ok(round(0, false, true, metrics)));
     assert!(line.fed_back && !line.recovered);
-    assert_eq!((line.total_duration, line.prompt_eval_duration, line.eval_duration), (None, None, None));
-    assert_eq!((line.tool_calls, line.error.as_deref()), (1, Some("error parsing tool call: raw='{'")));
+    assert_eq!(
+        (line.total_duration, line.prompt_eval_duration, line.eval_duration),
+        (None, None, None)
+    );
+    assert_eq!(
+        (line.tool_calls, line.error.as_deref()),
+        (1, Some("error parsing tool call: raw='{'"))
+    );
 }
 
 #[test]
 fn a_failed_request_is_a_line_with_the_error_text() {
     let line = Line::of("m", at(0, 0), &Err("/api/chat returned 500: EOF".to_string()));
     assert_eq!(line.error.as_deref(), Some("/api/chat returned 500: EOF"));
-    assert_eq!((line.prompt_eval_count, line.eval_count, line.tool_calls), (None, None, 0));
+    assert_eq!(
+        (line.prompt_eval_count, line.eval_count, line.tool_calls),
+        (None, None, 0)
+    );
     assert!(!line.recovered && !line.fed_back);
 }
 
@@ -101,7 +124,10 @@ fn lines_are_appended_one_to_a_line() {
     }
     let text = std::fs::read_to_string(&file).unwrap();
     assert_eq!(text.lines().count(), 2);
-    assert!(text.lines().all(|l| serde_json::from_str::<serde_json::Value>(l).is_ok()));
+    assert!(
+        text.lines()
+            .all(|l| serde_json::from_str::<serde_json::Value>(l).is_ok())
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -155,7 +155,11 @@ fn tasks() -> Vec<Task> {
             prompt: "In src/main.rs, rename the function greet to welcome, and update the place it is called.",
             expect: Expect::Files(vec![(
                 "src/main.rs",
-                with(&with(MAIN_RS, "fn greet(", "fn welcome("), "greet(\"world\")", "welcome(\"world\")"),
+                with(
+                    &with(MAIN_RS, "fn greet(", "fn welcome("),
+                    "greet(\"world\")",
+                    "welcome(\"world\")",
+                ),
             )]),
         },
         Task {
@@ -171,13 +175,20 @@ fn tasks() -> Vec<Task> {
             prompt: "In README.md, change the Running section so it tells people to run `cargo run --release` instead of `cargo run`.",
             expect: Expect::Files(vec![(
                 "README.md",
-                with(README_MD, "Run it with `cargo run`.", "Run it with `cargo run --release`."),
+                with(
+                    README_MD,
+                    "Run it with `cargo run`.",
+                    "Run it with `cargo run --release`.",
+                ),
             )]),
         },
         Task {
             id: "t05-string",
             prompt: "In src/main.rs, make main greet \"Luis\" instead of \"world\".",
-            expect: Expect::Files(vec![("src/main.rs", with(MAIN_RS, "greet(\"world\")", "greet(\"Luis\")"))]),
+            expect: Expect::Files(vec![(
+                "src/main.rs",
+                with(MAIN_RS, "greet(\"world\")", "greet(\"Luis\")"),
+            )]),
         },
         Task {
             id: "t06-delete",
@@ -215,8 +226,14 @@ fn tasks() -> Vec<Task> {
                 check: |f| {
                     let s = f.get("CHANGELOG.md").ok_or("CHANGELOG.md was not created")?;
                     let lines: Vec<&str> = s.lines().map(str::trim_end).collect();
-                    let h = lines.iter().position(|l| *l == "# Changelog").ok_or("no '# Changelog' heading")?;
-                    let b = lines.iter().position(|l| *l == "- Initial release").ok_or("no '- Initial release' bullet")?;
+                    let h = lines
+                        .iter()
+                        .position(|l| *l == "# Changelog")
+                        .ok_or("no '# Changelog' heading")?;
+                    let b = lines
+                        .iter()
+                        .position(|l| *l == "- Initial release")
+                        .ok_or("no '- Initial release' bullet")?;
                     if b < h {
                         return Err("the bullet comes before the heading".into());
                     }
@@ -227,7 +244,9 @@ fn tasks() -> Vec<Task> {
         Task {
             id: "t09-readonly",
             prompt: "What port does the server listen on? Just tell me, don't change anything.",
-            expect: Expect::Unchanged { answer_mentions: "8080" },
+            expect: Expect::Unchanged {
+                answer_mentions: "8080",
+            },
         },
         Task {
             id: "t10-two-files",
@@ -382,7 +401,10 @@ fn judge(task: &Task, before: &Files, after: &BTreeMap<String, Vec<u8>>, answer:
             if answer.contains(answer_mentions) {
                 (Verdict::Pass, String::new())
             } else {
-                (Verdict::Fail, format!("changed nothing, but the answer never said {answer_mentions}"))
+                (
+                    Verdict::Fail,
+                    format!("changed nothing, but the answer never said {answer_mentions}"),
+                )
             }
         }
         Expect::Judge { check, .. } => match check(&after_text) {
@@ -434,8 +456,24 @@ fn run(model: &str, task: &Task, format: Format, transport: Transport, opts: &Op
     let tools = format.tools();
 
     let mut messages = vec![Message::system(format.system(&ws)), Message::user(task.prompt)];
-    let setup = Setup { ws: &ws, backups: &backups, check: None, confine_reads: false, compact: true, commands: None, unattended: false };
-    let r = probe::run_loop(model, &mut messages, &tools, *opts, transport, tools::MAX_ROUNDS, &setup);
+    let setup = Setup {
+        ws: &ws,
+        backups: &backups,
+        check: None,
+        confine_reads: false,
+        compact: true,
+        commands: None,
+        unattended: false,
+    };
+    let r = probe::run_loop(
+        model,
+        &mut messages,
+        &tools,
+        *opts,
+        transport,
+        tools::MAX_ROUNDS,
+        &setup,
+    );
     let secs = started.elapsed().as_secs_f64();
 
     if let Some(e) = r.error {
@@ -479,7 +517,10 @@ fn run(model: &str, task: &Task, format: Format, transport: Transport, opts: &Op
 // ── main ────────────────────────────────────────────────────────────────────
 
 fn arg(args: &[String], key: &str) -> Option<String> {
-    args.iter().position(|a| a == key).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == key)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn main() {
@@ -506,7 +547,10 @@ fn main() {
     println!("G7 — edit probe");
     println!("model:  {model}");
     println!("ctx:    {}", cfg.num_ctx);
-    println!("tasks:  {} · files have CRLF endings, like every file in this repo", tasks.len());
+    println!(
+        "tasks:  {} · files have CRLF endings, like every file in this repo",
+        tasks.len()
+    );
     println!("runs:   {runs} at the app's own settings, plus 1 at temperature 0\n");
 
     // Warm at the app's context, so the first task is not timing a model load.
@@ -533,64 +577,80 @@ fn main() {
     let mut json = Vec::new();
 
     for &format in &formats {
-      for &transport in &transports {
-        for (label, opts, n) in &settings {
-            let mut tally = [0usize; 4];
-            let mut total_secs = 0.0;
-            let mut edit_errors = 0;
-            let mut calls_total = 0;
-            let mut recovered_total = 0;
-            let mut fed_back_total = 0;
-            println!("── {} · {} · {} ──", format.name(), transport.name(), label);
-            for task in &tasks {
-                let mut line = String::new();
-                for i in 0..*n {
-                    let scratch = scratch_root.join(format!("{}-{}-{}-{}-{i}", format.name(), transport.name(), label.replace('=', ""), task.id));
-                    let o = run(&model, task, format, transport, opts, &scratch);
-                    let _ = std::fs::remove_dir_all(&scratch);
-                    tally[o.verdict as usize] += 1;
-                    total_secs += o.secs;
-                    edit_errors += o.edit_errors;
-                    calls_total += o.calls.len();
-                    recovered_total += o.recovered;
-                    fed_back_total += o.fed_back;
-                    line.push_str(&format!("{:<5} ", o.verdict.label()));
-                    if o.verdict != Verdict::Pass {
-                        println!("    {} run {}: {} — {}", task.id, i + 1, o.verdict.label(), o.why);
-                        for l in &o.log {
-                            println!("      {l}");
+        for &transport in &transports {
+            for (label, opts, n) in &settings {
+                let mut tally = [0usize; 4];
+                let mut total_secs = 0.0;
+                let mut edit_errors = 0;
+                let mut calls_total = 0;
+                let mut recovered_total = 0;
+                let mut fed_back_total = 0;
+                println!("── {} · {} · {} ──", format.name(), transport.name(), label);
+                for task in &tasks {
+                    let mut line = String::new();
+                    for i in 0..*n {
+                        let scratch = scratch_root.join(format!(
+                            "{}-{}-{}-{}-{i}",
+                            format.name(),
+                            transport.name(),
+                            label.replace('=', ""),
+                            task.id
+                        ));
+                        let o = run(&model, task, format, transport, opts, &scratch);
+                        let _ = std::fs::remove_dir_all(&scratch);
+                        tally[o.verdict as usize] += 1;
+                        total_secs += o.secs;
+                        edit_errors += o.edit_errors;
+                        calls_total += o.calls.len();
+                        recovered_total += o.recovered;
+                        fed_back_total += o.fed_back;
+                        line.push_str(&format!("{:<5} ", o.verdict.label()));
+                        if o.verdict != Verdict::Pass {
+                            println!("    {} run {}: {} — {}", task.id, i + 1, o.verdict.label(), o.why);
+                            for l in &o.log {
+                                println!("      {l}");
+                            }
                         }
-                    }
-                    json.push(serde_json::json!({
+                        json.push(serde_json::json!({
                         "format": format.name(), "transport": transport.name(), "setting": label, "log": o.log, "task": task.id, "run": i + 1,
                         "verdict": o.verdict.label(), "why": o.why, "calls": o.calls,
                         "editErrors": o.edit_errors, "recovered": o.recovered, "fedBack": o.fed_back, "rounds": o.rounds, "hitBound": o.hit_bound,
                         "secs": (o.secs * 10.0).round() / 10.0,
                     }));
+                    }
+                    println!("  {:<14} {line}", task.id);
                 }
-                println!("  {:<14} {line}", task.id);
+                let runs_done: usize = tally.iter().sum();
+                let pct = 100.0 * tally[0] as f64 / runs_done.max(1) as f64;
+                println!(
+                    "  → {pass}/{runs_done} pass ({pct:.0}%) · {near} near · {fail} fail · {err} error · {edit_errors} rejected edits · {:.1}s avg\n",
+                    total_secs / runs_done.max(1) as f64,
+                    pass = tally[0],
+                    near = tally[1],
+                    fail = tally[2],
+                    err = tally[3],
+                );
+                if recovered_total > 0 {
+                    println!("  ({recovered_total} malformed calls recovered)");
+                }
+                if fed_back_total > 0 {
+                    println!("  ({fed_back_total} unreadable calls sent back to the model)");
+                }
+                rows.push(format!(
+                    "| {} | {} | {} | {}/{} ({pct:.0}%) | {} | {} | {} | {edit_errors} | {:.1} | {:.1}s |",
+                    format.name(),
+                    transport.name(),
+                    label,
+                    tally[0],
+                    runs_done,
+                    tally[1],
+                    tally[2],
+                    tally[3],
+                    calls_total as f64 / runs_done.max(1) as f64,
+                    total_secs / runs_done.max(1) as f64,
+                ));
             }
-            let runs_done: usize = tally.iter().sum();
-            let pct = 100.0 * tally[0] as f64 / runs_done.max(1) as f64;
-            println!(
-                "  → {pass}/{runs_done} pass ({pct:.0}%) · {near} near · {fail} fail · {err} error · {edit_errors} rejected edits · {:.1}s avg\n",
-                total_secs / runs_done.max(1) as f64,
-                pass = tally[0], near = tally[1], fail = tally[2], err = tally[3],
-            );
-            if recovered_total > 0 {
-                println!("  ({recovered_total} malformed calls recovered)");
-            }
-            if fed_back_total > 0 {
-                println!("  ({fed_back_total} unreadable calls sent back to the model)");
-            }
-            rows.push(format!(
-                "| {} | {} | {} | {}/{} ({pct:.0}%) | {} | {} | {} | {edit_errors} | {:.1} | {:.1}s |",
-                format.name(), transport.name(), label, tally[0], runs_done, tally[1], tally[2], tally[3],
-                calls_total as f64 / runs_done.max(1) as f64,
-                total_secs / runs_done.max(1) as f64,
-            ));
         }
-      }
     }
 
     println!("─── {model} ───");

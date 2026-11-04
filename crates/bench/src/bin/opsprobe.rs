@@ -118,11 +118,17 @@ struct Task {
 }
 
 fn file<'a>(f: &'a Files, name: &str) -> Result<&'a str, String> {
-    f.get(name).map(String::as_str).ok_or_else(|| format!("{name} is missing"))
+    f.get(name)
+        .map(String::as_str)
+        .ok_or_else(|| format!("{name} is missing"))
 }
 
 fn gone(f: &Files, name: &str) -> Result<(), String> {
-    if f.contains_key(name) { Err(format!("{name} is still there")) } else { Ok(()) }
+    if f.contains_key(name) {
+        Err(format!("{name} is still there"))
+    } else {
+        Ok(())
+    }
 }
 
 fn tasks() -> Vec<Task> {
@@ -317,7 +323,11 @@ fn restore_check(
             diffs.push(format!("left behind {k}"));
         }
     }
-    if diffs.is_empty() { Ok(()) } else { Err(diffs.join(", ")) }
+    if diffs.is_empty() {
+        Ok(())
+    } else {
+        Err(diffs.join(", "))
+    }
 }
 
 fn run(model: &str, task: &Task, opts: Options, scratch: &Path, cargo: &Check) -> Outcome {
@@ -330,9 +340,28 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, cargo: &Check) -
     let ws = Workspace::open(&dir).expect("fixture folder");
 
     let offered = tools::available(true, Some(&check::label(&cargo.argv)));
-    let mut messages = vec![Message::system(tools::system_prompt(&ws, true)), Message::user(task.prompt)];
-    let setup = Setup { ws: &ws, backups: &backups, check: Some(cargo), confine_reads: false, compact: true, commands: None, unattended: false };
-    let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, PROBE_ROUNDS, &setup);
+    let mut messages = vec![
+        Message::system(tools::system_prompt(&ws, true)),
+        Message::user(task.prompt),
+    ];
+    let setup = Setup {
+        ws: &ws,
+        backups: &backups,
+        check: Some(cargo),
+        confine_reads: false,
+        compact: true,
+        commands: None,
+        unattended: false,
+    };
+    let r = probe::run_loop(
+        model,
+        &mut messages,
+        &offered,
+        opts,
+        Transport::Recover,
+        PROBE_ROUNDS,
+        &setup,
+    );
 
     let mut out = Outcome {
         verdict: Verdict::Fail,
@@ -368,7 +397,12 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, cargo: &Check) -
                 out.why = format!("the final check did not finish ({:?}) — environment", o.ended);
             }
             Ok(o) if !o.passed() => {
-                let first = o.output.lines().find(|l| l.starts_with("error")).unwrap_or("").to_string();
+                let first = o
+                    .output
+                    .lines()
+                    .find(|l| l.starts_with("error"))
+                    .unwrap_or("")
+                    .to_string();
                 out.why = format!("does not build: {first}");
             }
             Ok(_) => match (task.done)(&tree(&dir)) {
@@ -395,7 +429,10 @@ fn run(model: &str, task: &Task, opts: Options, scratch: &Path, cargo: &Check) -
 // ── main ────────────────────────────────────────────────────────────────────
 
 fn arg(args: &[String], key: &str) -> Option<String> {
-    args.iter().position(|a| a == key).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == key)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn main() {
@@ -404,8 +441,10 @@ fn main() {
     let model = arg(&args, "--model").unwrap_or(cfg.model.clone());
     let runs: usize = arg(&args, "--runs").and_then(|s| s.parse().ok()).unwrap_or(3);
     let only = arg(&args, "--only");
-    let tasks: Vec<Task> =
-        tasks().into_iter().filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o))).collect();
+    let tasks: Vec<Task> = tasks()
+        .into_iter()
+        .filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o)))
+        .collect();
 
     let scratch_root = std::env::temp_dir().join(format!("bifrost-opsprobe-{}", std::process::id()));
     // A scratch APPDATA: the tools never read it for the fixture (backups are passed
@@ -418,7 +457,10 @@ fn main() {
     let cargo = Check {
         argv: vec!["cargo".into(), "check".into()],
         env: vec![
-            ("CARGO_TARGET_DIR".into(), scratch_root.join("target").to_string_lossy().into_owned()),
+            (
+                "CARGO_TARGET_DIR".into(),
+                scratch_root.join("target").to_string_lossy().into_owned(),
+            ),
             ("CARGO_NET_OFFLINE".into(), "true".into()),
             ("APPDATA".into(), appdata.to_string_lossy().into_owned()),
         ],
@@ -427,7 +469,10 @@ fn main() {
     println!("H9 — operations probe");
     println!("model:  {model}");
     println!("ctx:    {}", cfg.num_ctx);
-    println!("tasks:  {} · rename, delete, nested create, move, and a trap (remove a function, keep the file)", tasks.len());
+    println!(
+        "tasks:  {} · rename, delete, nested create, move, and a trap (remove a function, keep the file)",
+        tasks.len()
+    );
     println!("runs:   {runs} at the app's own settings, plus 1 at temperature 0");
     println!("bound:  {PROBE_ROUNDS} rounds (the app stops at {})", tools::MAX_ROUNDS);
     println!("restore: after every run, Undo all over that run's changes must give the fixture back byte for byte\n");
@@ -461,8 +506,10 @@ fn main() {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default();
-    let settings: Vec<(&str, Options, usize)> =
-        vec![("app", Options::new(cfg.num_ctx), runs), ("t=0", Options::measured(cfg.num_ctx), 1)];
+    let settings: Vec<(&str, Options, usize)> = vec![
+        ("app", Options::new(cfg.num_ctx), runs),
+        ("t=0", Options::measured(cfg.num_ctx), 1),
+    ];
 
     let mut rows = Vec::new();
     let mut json = Vec::new();
@@ -499,7 +546,11 @@ fn main() {
                         println!("    {} run {}: RESTORE FAILED — {e}", task.id, i + 1);
                     }
                 }
-                let shown = if o.verdict == Verdict::Pass && o.over_app_bound { "LATE" } else { o.verdict.label() };
+                let shown = if o.verdict == Verdict::Pass && o.over_app_bound {
+                    "LATE"
+                } else {
+                    o.verdict.label()
+                };
                 line.push_str(&format!("{shown:<5} "));
                 if o.verdict != Verdict::Pass {
                     println!("    {} run {}: {} — {}", task.id, i + 1, o.verdict.label(), o.why);
@@ -534,7 +585,10 @@ fn main() {
     }
 
     println!("─── {model} ───");
-    println!("| setting | pass (≤{} rounds) | pass later | fail | error | deletes | moves | delete→create | restore |", tools::MAX_ROUNDS);
+    println!(
+        "| setting | pass (≤{} rounds) | pass later | fail | error | deletes | moves | delete→create | restore |",
+        tools::MAX_ROUNDS
+    );
     println!("|---|---|---|---|---|---|---|---|---|");
     for r in &rows {
         println!("{r}");
@@ -569,7 +623,10 @@ mod tests {
 
     impl Scratch {
         fn new(label: &str) -> Scratch {
-            let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let n = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
             Scratch(std::env::temp_dir().join(format!("bifrost-opsprobe-{label}-{}-{n}", std::process::id())))
         }
     }
@@ -603,7 +660,10 @@ mod tests {
         std::fs::write(dir.join("src/util.rs"), b"changed").unwrap();
         std::fs::create_dir_all(dir.join("src/net")).unwrap();
         let err = restore_check(&dir, &base.join("backups"), &[], &before).unwrap_err();
-        assert!(err.contains("changed src/util.rs") && err.contains("left behind src/net/"), "{err}");
+        assert!(
+            err.contains("changed src/util.rs") && err.contains("left behind src/net/"),
+            "{err}"
+        );
     }
 
     /// And it passes when a real run is undone: a move into a new folder, an edit
@@ -623,8 +683,15 @@ mod tests {
             &|| edit::plan_move(&ws, "src/config.rs", "src/settings/config.rs").unwrap(),
             &|| edit::plan_replace(&ws, "src/settings/config.rs", "8080", "9090").unwrap(),
             &|| edit::plan_delete(&ws, "src/legacy.rs").unwrap(),
-            &|| edit::plan_create(&ws, "src/net/http.rs", "pub fn x() {}
-").unwrap(),
+            &|| {
+                edit::plan_create(
+                    &ws,
+                    "src/net/http.rs",
+                    "pub fn x() {}
+",
+                )
+                .unwrap()
+            },
         ];
         for step in steps {
             ids.push(edit::apply(&step(), &backups).unwrap().id);

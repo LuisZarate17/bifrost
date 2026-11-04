@@ -4,7 +4,16 @@ use crate::launch::{choose_folder, wt_args};
 fn the_wt_arguments_open_a_new_window_with_a_titled_tab_in_the_folder() {
     assert_eq!(
         wt_args(r"C:\work\demo", r"C:\bin\hugin.exe"),
-        ["-w", "new", "new-tab", "--title", "Hugin", "-d", r"C:\work\demo", r"C:\bin\hugin.exe"]
+        [
+            "-w",
+            "new",
+            "new-tab",
+            "--title",
+            "Hugin",
+            "-d",
+            r"C:\work\demo",
+            r"C:\bin\hugin.exe"
+        ]
     );
 }
 
@@ -21,7 +30,10 @@ fn the_folder_is_the_recorded_one_only_while_it_exists() {
     let exists = |f: &str| f == r"C:\work";
     let profile = || Some(r"C:\Users\me".to_string());
     assert_eq!(choose_folder(Some(r"C:\work".into()), profile(), exists), r"C:\work");
-    assert_eq!(choose_folder(Some(r"C:\gone".into()), profile(), exists), r"C:\Users\me");
+    assert_eq!(
+        choose_folder(Some(r"C:\gone".into()), profile(), exists),
+        r"C:\Users\me"
+    );
     assert_eq!(choose_folder(None, profile(), exists), r"C:\Users\me");
     assert_eq!(choose_folder(None, None, exists), ".");
 }

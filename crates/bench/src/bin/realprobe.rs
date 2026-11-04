@@ -118,14 +118,21 @@ struct Task {
 }
 
 fn text_of(v: &Value, key: &str) -> Result<String, String> {
-    v.get(key).and_then(Value::as_str).map(str::to_string).ok_or_else(|| format!("`{key}` is missing or not text"))
+    v.get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("`{key}` is missing or not text"))
 }
 
 fn words_of(v: &Value) -> Result<Vec<String>, String> {
     v.as_array()
         .ok_or("a command is not a list of words")?
         .iter()
-        .map(|w| w.as_str().map(str::to_string).ok_or_else(|| "a command word is not text".to_string()))
+        .map(|w| {
+            w.as_str()
+                .map(str::to_string)
+                .ok_or_else(|| "a command word is not text".to_string())
+        })
         .collect()
 }
 
@@ -138,8 +145,14 @@ fn parse_task(text: &str, dir: &Path) -> Result<Task, String> {
         .ok_or("`hidden` is missing")?
         .iter()
         .map(|h| match text_of(h, "kind")?.as_str() {
-            "append" => Ok(Hidden::Append { file: text_of(h, "file")?, src: text_of(h, "src")? }),
-            "file" => Ok(Hidden::File { path: text_of(h, "path")?, src: text_of(h, "src")? }),
+            "append" => Ok(Hidden::Append {
+                file: text_of(h, "file")?,
+                src: text_of(h, "src")?,
+            }),
+            "file" => Ok(Hidden::File {
+                path: text_of(h, "path")?,
+                src: text_of(h, "src")?,
+            }),
             other => Err(format!("a hidden entry has kind `{other}`: append or file")),
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -148,7 +161,12 @@ fn parse_task(text: &str, dir: &Path) -> Result<Task, String> {
         .and_then(Value::as_array)
         .ok_or("`wrong` is missing")?
         .iter()
-        .map(|w| Ok(Wrong { patch: text_of(w, "patch")?, why: text_of(w, "why")? }))
+        .map(|w| {
+            Ok(Wrong {
+                patch: text_of(w, "patch")?,
+                why: text_of(w, "why")?,
+            })
+        })
         .collect::<Result<Vec<_>, String>>()?;
     let suites = v
         .get("suites")
@@ -166,7 +184,10 @@ fn parse_task(text: &str, dir: &Path) -> Result<Task, String> {
         pin: text_of(&v, "pin")?,
         check,
         hidden,
-        hidden_count: v.get("hidden_count").and_then(Value::as_u64).ok_or("`hidden_count` is missing")? as usize,
+        hidden_count: v
+            .get("hidden_count")
+            .and_then(Value::as_u64)
+            .ok_or("`hidden_count` is missing")? as usize,
         hidden_filter: text_of(&v, "hidden_filter")?,
         suites,
         wrong,
@@ -249,9 +270,14 @@ fn touch(tree: &Path, task: &Task) {
 /// stopped, ran out of disk or ended with no exit code. `None`: it finished by itself.
 fn unfinished(o: &check::Outcome) -> Option<String> {
     match &o.ended {
-        check::Ended::TimedOut => Some(format!("a scoring command timed out after {:.0}s — environment", o.elapsed.as_secs_f64())),
+        check::Ended::TimedOut => Some(format!(
+            "a scoring command timed out after {:.0}s — environment",
+            o.elapsed.as_secs_f64()
+        )),
         check::Ended::Stopped => Some("a scoring command was stopped — environment".to_string()),
-        check::Ended::DiskFull => Some("a scoring command was stopped for a nearly full disk — environment".to_string()),
+        check::Ended::DiskFull => {
+            Some("a scoring command was stopped for a nearly full disk — environment".to_string())
+        }
         check::Ended::Exited(None) => Some("a scoring command ended with no exit code — environment".to_string()),
         check::Ended::Exited(Some(_)) => None,
     }
@@ -260,7 +286,13 @@ fn unfinished(o: &check::Outcome) -> Option<String> {
 /// `argv` in `dir`, whole output kept, however it ended. A Smart App Control block is touched
 /// past and run again, up to `BLOCK_TRIES` runs in all. `Err`: it could not start, or stayed
 /// blocked.
-fn cargo_raw(dir: &Path, task: Option<&Task>, argv: &[String], env: &[(String, String)], timeout: Duration) -> Result<check::Outcome, String> {
+fn cargo_raw(
+    dir: &Path,
+    task: Option<&Task>,
+    argv: &[String],
+    env: &[(String, String)],
+    timeout: Duration,
+) -> Result<check::Outcome, String> {
     for attempt in 1..=BLOCK_TRIES {
         let o = check::run_with_input(dir, argv, &[], KEEP, timeout, env, || false)?;
         if o.blocked.is_some() {
@@ -279,7 +311,13 @@ fn cargo_raw(dir: &Path, task: Option<&Task>, argv: &[String], env: &[(String, S
 
 /// [`cargo_raw`] for a command that has to finish by itself. `Err` is an ERROR: it could not
 /// start, did not finish, or stayed blocked.
-fn cargo(dir: &Path, task: Option<&Task>, argv: &[String], env: &[(String, String)], timeout: Duration) -> Result<check::Outcome, String> {
+fn cargo(
+    dir: &Path,
+    task: Option<&Task>,
+    argv: &[String],
+    env: &[(String, String)],
+    timeout: Duration,
+) -> Result<check::Outcome, String> {
     let o = cargo_raw(dir, task, argv, env, timeout)?;
     match unfinished(&o) {
         Some(why) => Err(why),
@@ -304,9 +342,18 @@ fn hung(o: &check::Outcome) -> bool {
 /// `argv` is a `cargo test` command, `filter` the test filter after `--`. Built first, with the
 /// usual limit (`--no-run`: a compile error ends it there, as `Done`), then run with
 /// [`TEST_TIMEOUT`]. A hang is `Hung`; any other end that is not a finish is an ERROR.
-fn cargo_tests(dir: &Path, task: &Task, argv: &[String], filter: Option<&str>, env: &[(String, String)]) -> Result<Ran, String> {
+fn cargo_tests(
+    dir: &Path,
+    task: &Task,
+    argv: &[String],
+    filter: Option<&str>,
+    env: &[(String, String)],
+) -> Result<Ran, String> {
     let mut build = argv.to_vec();
-    build.insert(argv.iter().position(|w| w == "--").unwrap_or(argv.len()), "--no-run".to_string());
+    build.insert(
+        argv.iter().position(|w| w == "--").unwrap_or(argv.len()),
+        "--no-run".to_string(),
+    );
     let built = cargo(dir, Some(task), &build, env, SCORE_TIMEOUT)?;
     if !built.passed() {
         return Ok(Ran::Done(built));
@@ -343,7 +390,9 @@ impl Tally {
 
 /// `running 12 tests` or `running 1 test`.
 fn is_libtest_header(line: &str) -> bool {
-    let Some(rest) = line.strip_prefix("running ") else { return false };
+    let Some(rest) = line.strip_prefix("running ") else {
+        return false;
+    };
     let count = rest.strip_suffix(" tests").or_else(|| rest.strip_suffix(" test"));
     count.is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
@@ -359,7 +408,11 @@ fn tally(output: &str) -> Tally {
             t.reported += 1;
             for part in rest.split(';') {
                 let part = part.trim();
-                let number = |suffix: &str| part.strip_suffix(suffix).and_then(|n| n.rsplit(' ').next()).and_then(|n| n.parse::<usize>().ok());
+                let number = |suffix: &str| {
+                    part.strip_suffix(suffix)
+                        .and_then(|n| n.rsplit(' ').next())
+                        .and_then(|n| n.parse::<usize>().ok())
+                };
                 t.passed += number(" passed").unwrap_or(0);
                 t.failed += number(" failed").unwrap_or(0);
             }
@@ -371,11 +424,18 @@ fn tally(output: &str) -> Tally {
 /// The first thing worth saying about a command that did not pass: the tests that failed, else
 /// the first compiler error, else its exit code.
 fn failure_note(output: &str, code: Option<i32>) -> String {
-    let failed: Vec<&str> =
-        output.lines().filter(|l| l.trim_start().starts_with("test ") && l.trim_end().ends_with("FAILED")).map(str::trim).collect();
+    let failed: Vec<&str> = output
+        .lines()
+        .filter(|l| l.trim_start().starts_with("test ") && l.trim_end().ends_with("FAILED"))
+        .map(str::trim)
+        .collect();
     if !failed.is_empty() {
         let shown = failed.iter().take(3).copied().collect::<Vec<_>>().join(", ");
-        return if failed.len() > 3 { format!("{shown} (+{} more)", failed.len() - 3) } else { shown };
+        return if failed.len() > 3 {
+            format!("{shown} (+{} more)", failed.len() - 3)
+        } else {
+            shown
+        };
     }
     if let Some(line) = output.lines().find(|l| l.starts_with("error")) {
         return format!("does not compile: {}", line.trim());
@@ -388,13 +448,21 @@ fn failure_note(output: &str, code: Option<i32>) -> String {
 fn judge_hidden(output: &str, code: Option<i32>, want: usize) -> Result<(), String> {
     let t = tally(output);
     if code != Some(0) {
-        return Err(format!("hidden tests: {} ({} passed, {} failed, wanted {want})", failure_note(output, code), t.passed, t.failed));
+        return Err(format!(
+            "hidden tests: {} ({} passed, {} failed, wanted {want})",
+            failure_note(output, code),
+            t.passed,
+            t.failed
+        ));
     }
     if t.cut_short() {
         return Err("hidden tests: a test program ended without reporting its result".to_string());
     }
     if t.failed > 0 || t.passed != want {
-        return Err(format!("hidden tests: {} passed and {} failed, wanted {want} passed", t.passed, t.failed));
+        return Err(format!(
+            "hidden tests: {} passed and {} failed, wanted {want} passed",
+            t.passed, t.failed
+        ));
     }
     Ok(())
 }
@@ -444,12 +512,20 @@ struct Scorer {
 
 impl Scorer {
     fn new(repo: &Path, scratch: &Path) -> Self {
-        Self { target: repo.join("target"), home: scratch.join("scoring-home"), pins: HashMap::new() }
+        Self {
+            target: repo.join("target"),
+            home: scratch.join("scoring-home"),
+            pins: HashMap::new(),
+        }
     }
 
     fn env(&self) -> Vec<(String, String)> {
         let show = |p: &Path| p.to_string_lossy().into_owned();
-        let (appdata, local, temp) = (self.home.join("appdata"), self.home.join("local"), self.home.join("temp"));
+        let (appdata, local, temp) = (
+            self.home.join("appdata"),
+            self.home.join("local"),
+            self.home.join("temp"),
+        );
         for dir in [&appdata, &local, &temp] {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -472,7 +548,10 @@ impl Scorer {
         argv.extend(["--".to_string(), "--list".to_string()]);
         let o = cargo(tree, Some(task), &argv, &self.env(), SCORE_TIMEOUT)?;
         if !o.passed() {
-            return Err(format!("could not list the tests: {}", failure_note(&o.output, Some(-1))));
+            return Err(format!(
+                "could not list the tests: {}",
+                failure_note(&o.output, Some(-1))
+            ));
         }
         Ok(parse_list(&o.output))
     }
@@ -500,7 +579,10 @@ impl Scorer {
         if let Some(patch) = patch {
             let out = git(Some(tree), &["apply", "--whitespace=nowarn", &patch.to_string_lossy()])?;
             if !out.status.success() {
-                return Ok(Judged::Wrong(format!("patch did not apply: {}", first_line(&out.stderr))));
+                return Ok(Judged::Wrong(format!(
+                    "patch did not apply: {}",
+                    first_line(&out.stderr)
+                )));
             }
         }
 
@@ -509,7 +591,9 @@ impl Scorer {
                 Hidden::Append { file, src } => (file, src, true),
                 Hidden::File { path, src } => (path, src, false),
             };
-            let src = std::fs::read_to_string(task.dir.join(src)).map_err(|e| format!("{}: {e}", src))?.replace("\r\n", "\n");
+            let src = std::fs::read_to_string(task.dir.join(src))
+                .map_err(|e| format!("{}: {e}", src))?
+                .replace("\r\n", "\n");
             let at = tree.join(rel);
             let body = if append {
                 match std::fs::read_to_string(&at) {
@@ -526,7 +610,12 @@ impl Scorer {
         }
 
         let o = match cargo_tests(tree, task, &task.check, Some(&task.hidden_filter), &env)? {
-            Ran::Hung => return Ok(Judged::Wrong(format!("hidden tests: tests hung (still running after {}s)", TEST_TIMEOUT.as_secs()))),
+            Ran::Hung => {
+                return Ok(Judged::Wrong(format!(
+                    "hidden tests: tests hung (still running after {}s)",
+                    TEST_TIMEOUT.as_secs()
+                )));
+            }
             Ran::Done(o) => o,
         };
         let code = match o.ended {
@@ -539,7 +628,13 @@ impl Scorer {
 
         for suite in &task.suites {
             let o = match cargo_tests(tree, task, suite, None, &env)? {
-                Ran::Hung => return Ok(Judged::Wrong(format!("`{}` fails: tests hung (still running after {}s)", suite.join(" "), TEST_TIMEOUT.as_secs()))),
+                Ran::Hung => {
+                    return Ok(Judged::Wrong(format!(
+                        "`{}` fails: tests hung (still running after {}s)",
+                        suite.join(" "),
+                        TEST_TIMEOUT.as_secs()
+                    )));
+                }
                 Ran::Done(o) => o,
             };
             let code = match o.ended {
@@ -547,7 +642,11 @@ impl Scorer {
                 _ => None,
             };
             if code != Some(0) || tally(&o.output).cut_short() {
-                let why = if code == Some(0) { "a test program ended without reporting its result".to_string() } else { failure_note(&o.output, code) };
+                let why = if code == Some(0) {
+                    "a test program ended without reporting its result".to_string()
+                } else {
+                    failure_note(&o.output, code)
+                };
                 return Ok(Judged::Wrong(format!("`{}` fails: {why}", suite.join(" "))));
             }
         }
@@ -561,9 +660,21 @@ impl Scorer {
         }
         let missing: Vec<&String> = self.pins[&task.id].difference(&now).collect();
         if !missing.is_empty() {
-            let shown = missing.iter().take(3).map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
-            let more = if missing.len() > 3 { format!(" (+{} more)", missing.len() - 3) } else { String::new() };
-            return Ok(Judged::Wrong(format!("{} test(s) of the pinned tree are gone: {shown}{more}", missing.len())));
+            let shown = missing
+                .iter()
+                .take(3)
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = if missing.len() > 3 {
+                format!(" (+{} more)", missing.len() - 3)
+            } else {
+                String::new()
+            };
+            return Ok(Judged::Wrong(format!(
+                "{} test(s) of the pinned tree are gone: {shown}{more}",
+                missing.len()
+            )));
         }
         Ok(Judged::Correct)
     }
@@ -581,7 +692,13 @@ enum Verdict {
 }
 
 impl Verdict {
-    const ALL: [Verdict; 5] = [Verdict::Pass, Verdict::CorrectNotDone, Verdict::FalseDone, Verdict::Fail, Verdict::Error];
+    const ALL: [Verdict; 5] = [
+        Verdict::Pass,
+        Verdict::CorrectNotDone,
+        Verdict::FalseDone,
+        Verdict::Fail,
+        Verdict::Error,
+    ];
 
     fn label(self) -> &'static str {
         match self {
@@ -602,7 +719,10 @@ fn book(status: &str, judged: &Judged) -> (Verdict, String) {
     let done = status == "done";
     match judged {
         Judged::Error(why) => (Verdict::Error, why.clone()),
-        Judged::Correct if done => (Verdict::Pass, "the hidden tests, the suites and the pinned tests all hold".to_string()),
+        Judged::Correct if done => (
+            Verdict::Pass,
+            "the hidden tests, the suites and the pinned tests all hold".to_string(),
+        ),
         Judged::Correct => (Verdict::CorrectNotDone, format!("correct, but Hugin said {status}")),
         Judged::Wrong(why) if done => (Verdict::FalseDone, why.clone()),
         Judged::Wrong(why) => (Verdict::Fail, why.clone()),
@@ -631,8 +751,12 @@ fn parse_report(output: &str) -> Result<HuginReport, String> {
         if !line.starts_with('{') {
             continue;
         }
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
-        let Some(status) = v.get("status").and_then(Value::as_str) else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(status) = v.get("status").and_then(Value::as_str) else {
+            continue;
+        };
         return Ok(HuginReport {
             status: status.to_string(),
             warnings: v.get("warnings").and_then(Value::as_array).map_or(0, Vec::len),
@@ -669,7 +793,13 @@ fn patch_of(report: &HuginReport, spare: &Path) -> Result<Option<PathBuf>, Strin
 /// A command's words as `--check` reads them: quoted where a word has a space.
 fn join_check(argv: &[String]) -> String {
     argv.iter()
-        .map(|w| if w.is_empty() || w.chars().any(char::is_whitespace) { format!("\"{w}\"") } else { w.clone() })
+        .map(|w| {
+            if w.is_empty() || w.chars().any(char::is_whitespace) {
+                format!("\"{w}\"")
+            } else {
+                w.clone()
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -729,8 +859,19 @@ impl RunResult {
 }
 
 /// Hugin on the task in a fresh worktree at the pin.
-fn run_hugin(ctx: &Ctx, hugin: &Path, sandbox: &Sandbox, task: &Task, run: usize, model: &str) -> Result<HuginReport, String> {
-    let work = Worktree::add(&ctx.scratch.join(format!("work-{}-{run}", task.id)), &task.pin, ctx.keep)?;
+fn run_hugin(
+    ctx: &Ctx,
+    hugin: &Path,
+    sandbox: &Sandbox,
+    task: &Task,
+    run: usize,
+    model: &str,
+) -> Result<HuginReport, String> {
+    let work = Worktree::add(
+        &ctx.scratch.join(format!("work-{}-{run}", task.id)),
+        &task.pin,
+        ctx.keep,
+    )?;
     prepare(&ctx.repo, &work.path, task)?;
     let text = std::fs::read(task.dir.join("task.txt")).map_err(|e| format!("task.txt: {e}"))?;
     let argv: Vec<String> = [
@@ -753,7 +894,12 @@ fn run_hugin(ctx: &Ctx, hugin: &Path, sandbox: &Sandbox, task: &Task, run: usize
     sandbox.clear_build_cache();
     let o = ran?;
     match &o.ended {
-        check::Ended::TimedOut => return Err(format!("Hugin ran past {}s and its process tree was killed", HUGIN_GUARD.as_secs())),
+        check::Ended::TimedOut => {
+            return Err(format!(
+                "Hugin ran past {}s and its process tree was killed",
+                HUGIN_GUARD.as_secs()
+            ));
+        }
         check::Ended::Stopped => return Err("Hugin was stopped".to_string()),
         check::Ended::DiskFull => return Err("Hugin was stopped for a nearly full disk".to_string()),
         check::Ended::Exited(_) => {}
@@ -764,13 +910,37 @@ fn run_hugin(ctx: &Ctx, hugin: &Path, sandbox: &Sandbox, task: &Task, run: usize
         if let Some(what) = &o.blocked {
             return format!("Windows blocked {what}");
         }
-        let tail: String = o.output.chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect();
+        let tail: String = o
+            .output
+            .chars()
+            .rev()
+            .take(300)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         format!("{e} (exit {:?}): {}", o.ended, tail.trim())
     })
 }
 
-fn run_one(ctx: &Ctx, scorer: &mut Scorer, hugin: &Path, sandbox: &Sandbox, task: &Task, run: usize, model: &str) -> RunResult {
-    let result = |verdict, why: String, status: &str, seconds, warnings| RunResult { task: task.id.clone(), run, verdict, why, status: status.to_string(), seconds, warnings };
+fn run_one(
+    ctx: &Ctx,
+    scorer: &mut Scorer,
+    hugin: &Path,
+    sandbox: &Sandbox,
+    task: &Task,
+    run: usize,
+    model: &str,
+) -> RunResult {
+    let result = |verdict, why: String, status: &str, seconds, warnings| RunResult {
+        task: task.id.clone(),
+        run,
+        verdict,
+        why,
+        status: status.to_string(),
+        seconds,
+        warnings,
+    };
     let started = Instant::now();
     let report = match run_hugin(ctx, hugin, sandbox, task, run, model) {
         Ok(r) => r,
@@ -778,7 +948,13 @@ fn run_one(ctx: &Ctx, scorer: &mut Scorer, hugin: &Path, sandbox: &Sandbox, task
     };
     let booked = |verdict, why| result(verdict, why, &report.status, report.seconds, report.warnings);
     if report.status == "error" {
-        return booked(Verdict::Error, format!("Hugin made no proposal: {}", report.error.as_deref().unwrap_or("no reason given")));
+        return booked(
+            Verdict::Error,
+            format!(
+                "Hugin made no proposal: {}",
+                report.error.as_deref().unwrap_or("no reason given")
+            ),
+        );
     }
     let spare = ctx.scratch.join(format!("diff-{}-{run}.patch", task.id));
     let patch = match patch_of(&report, &spare) {
@@ -815,7 +991,10 @@ fn summary(results: &[RunResult]) -> Vec<String> {
     let passes = count(results, Verdict::Pass);
     let quick = results.iter().filter(|r| r.under_540s() == Some(true)).count();
     lines.push(String::new());
-    lines.push(format!("passes: {passes} of {} runs, {quick} of them within {UNDER_SECS:.0}s", results.len()));
+    lines.push(format!(
+        "passes: {passes} of {} runs, {quick} of them within {UNDER_SECS:.0}s",
+        results.len()
+    ));
     lines.push(format!(
         "false-done: {} of {} runs (Hugin said done, the hidden tests say it is not)",
         count(results, Verdict::FalseDone),
@@ -858,7 +1037,9 @@ fn hidden_in_pin(task: &Task) -> Result<Vec<String>, String> {
     }
     for h in &task.hidden {
         match h {
-            Hidden::File { path, .. } if files.lines().any(|l| l == path) => found.push(format!("{path} is in the pinned tree")),
+            Hidden::File { path, .. } if files.lines().any(|l| l == path) => {
+                found.push(format!("{path} is in the pinned tree"))
+            }
             Hidden::Append { file, .. } => {
                 let shown = git(None, &["show", &format!("{}:{file}", task.pin)])?;
                 if String::from_utf8_lossy(&shown.stdout).contains(&task.hidden_filter) {
@@ -875,7 +1056,10 @@ fn hidden_in_pin(task: &Task) -> Result<Vec<String>, String> {
 /// one note each. Hugin sets any such patch's status to `review`, so a reference that does it
 /// could never be a PASS.
 fn tests_edited_by(patch: &[u8]) -> Vec<String> {
-    bent::changed_tests(patch).iter().map(|b| format!("the reference patch removes lines of existing tests — {}", b.warning())).collect()
+    bent::changed_tests(patch)
+        .iter()
+        .map(|b| format!("the reference patch removes lines of existing tests — {}", b.warning()))
+        .collect()
 }
 
 /// [`tests_edited_by`] for the task's `reference.patch`.
@@ -887,7 +1071,9 @@ fn reference_edits_tests(task: &Task) -> Result<Vec<String>, String> {
 
 fn selfcheck(ctx: &Ctx, tasks: &[Task]) -> bool {
     println!("J1 — realprobe selfcheck (no model, no Hugin)\n");
-    println!("| task | reference correct? | pin is FAIL? | wrong patches FAIL | hidden unreachable? | reference edits no test? |");
+    println!(
+        "| task | reference correct? | pin is FAIL? | wrong patches FAIL | hidden unreachable? | reference edits no test? |"
+    );
     println!("|---|---|---|---|---|---|");
     let mut scorer = Scorer::new(&ctx.repo, &ctx.scratch);
     let mut all_ok = true;
@@ -903,13 +1089,16 @@ fn selfcheck(ctx: &Ctx, tasks: &[Task]) -> bool {
         let mut reference = "NO".to_string();
         let mut pin = "NO".to_string();
         let mut wrongs = format!("0/{}", task.wrong.len());
-        match Worktree::add(&ctx.scratch.join("score"), &task.pin, ctx.keep).and_then(|t| prepare(&ctx.repo, &t.path, task).map(|()| t)) {
+        match Worktree::add(&ctx.scratch.join("score"), &task.pin, ctx.keep)
+            .and_then(|t| prepare(&ctx.repo, &t.path, task).map(|()| t))
+        {
             Err(e) => notes.push(format!("could not check out the pin: {e}")),
             Ok(tree) => {
                 let j = scorer.score(&tree.path, task, Some(&task.dir.join("reference.patch")));
                 reference = cell(j == Judged::Correct, "reference", &j, &mut notes);
 
-                let reset = |notes: &mut Vec<String>| tree.reset().map_err(|e| notes.push(format!("reset: {e}"))).is_ok();
+                let reset =
+                    |notes: &mut Vec<String>| tree.reset().map_err(|e| notes.push(format!("reset: {e}"))).is_ok();
                 if reset(&mut notes) {
                     let j = scorer.score(&tree.path, task, None);
                     pin = cell(matches!(j, Judged::Wrong(_)), "pin", &j, &mut notes);
@@ -954,9 +1143,16 @@ fn selfcheck(ctx: &Ctx, tasks: &[Task]) -> bool {
                 "NO".to_string()
             }
         };
-        let row_ok = reference == "yes" && pin == "yes" && wrongs == format!("{0}/{0}", task.wrong.len()) && hidden == "yes" && untouched == "yes";
+        let row_ok = reference == "yes"
+            && pin == "yes"
+            && wrongs == format!("{0}/{0}", task.wrong.len())
+            && hidden == "yes"
+            && untouched == "yes";
         all_ok &= row_ok;
-        println!("| {} | {reference} | {pin} | {wrongs} | {hidden} | {untouched} |", task.id);
+        println!(
+            "| {} | {reference} | {pin} | {wrongs} | {hidden} | {untouched} |",
+            task.id
+        );
         for n in notes {
             println!("    {}: {n}", task.id);
         }
@@ -966,7 +1162,10 @@ fn selfcheck(ctx: &Ctx, tasks: &[Task]) -> bool {
         && require_installed(&[], NO_SUCH_MODEL).is_err()
         && require_installed(&["qwen3:8b".to_string()], "qwen3:8b").is_ok();
     all_ok &= refused;
-    println!("\n| a model Ollama does not list is refused before any work | {} |", if refused { "yes" } else { "NO" });
+    println!(
+        "\n| a model Ollama does not list is refused before any work | {} |",
+        if refused { "yes" } else { "NO" }
+    );
     println!("\nselfcheck: {}", if all_ok { "all hold" } else { "FAILED" });
     all_ok
 }
@@ -990,7 +1189,14 @@ enum Cmd {
 }
 
 fn parse_args(args: &[String]) -> Result<Cmd, String> {
-    let mut o = Opts { model: None, runs: 1, only: None, think: None, keep: false, selfcheck: false };
+    let mut o = Opts {
+        model: None,
+        runs: 1,
+        only: None,
+        think: None,
+        keep: false,
+        selfcheck: false,
+    };
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         let mut value = |flag: &str, what: &str| it.next().cloned().ok_or_else(|| format!("{flag} needs {what}"));
@@ -1007,12 +1213,18 @@ fn parse_args(args: &[String]) -> Result<Cmd, String> {
             }
             "--runs" => {
                 let n = value("--runs", "a number")?;
-                o.runs = n.parse().ok().filter(|n| *n > 0).ok_or_else(|| format!("--runs takes a number above 0, not {n}"))?;
+                o.runs = n
+                    .parse()
+                    .ok()
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| format!("--runs takes a number above 0, not {n}"))?;
             }
             "--only" => o.only = Some(value("--only", "an id prefix")?),
             "--think" => {
                 let word = value("--think", "off, low, medium or high")?;
-                o.think = Some(Think::parse(&word).ok_or_else(|| format!("--think takes off, low, medium or high, not {word}"))?);
+                o.think = Some(
+                    Think::parse(&word).ok_or_else(|| format!("--think takes off, low, medium or high, not {word}"))?,
+                );
             }
             other if other.starts_with('-') => return Err(format!("unknown flag: {other}")),
             other => return Err(format!("unexpected argument: {other}")),
@@ -1044,7 +1256,10 @@ fn real_main(args: &[String]) -> i32 {
     };
     let repo = std::env::current_dir().unwrap_or_default();
     let tasks: Vec<Task> = match load_tasks(&repo) {
-        Ok(t) => t.into_iter().filter(|t| opts.only.as_deref().is_none_or(|o| t.id.starts_with(o))).collect(),
+        Ok(t) => t
+            .into_iter()
+            .filter(|t| opts.only.as_deref().is_none_or(|o| t.id.starts_with(o)))
+            .collect(),
         Err(e) => {
             eprintln!("{e}");
             return 1;
@@ -1056,7 +1271,11 @@ fn real_main(args: &[String]) -> i32 {
     }
 
     let scratch = std::env::temp_dir().join(format!("bifrost-realprobe-{}", std::process::id()));
-    let ctx = Ctx { repo, scratch, keep: opts.keep };
+    let ctx = Ctx {
+        repo,
+        scratch,
+        keep: opts.keep,
+    };
     let code = if opts.selfcheck {
         i32::from(!selfcheck(&ctx, &tasks))
     } else {
@@ -1128,7 +1347,11 @@ fn real_run(ctx: &Ctx, opts: &Opts, tasks: &[Task]) -> i32 {
     println!("model:  {model}");
     println!("think:  {}", opts.think.map_or("unset (the model's own)", Think::name));
     println!("tasks:  {} × {} runs", tasks.len(), opts.runs);
-    println!("hugin:  {} (--time {HUGIN_TIME}, killed past {}s)\n", hugin.display(), HUGIN_GUARD.as_secs());
+    println!(
+        "hugin:  {} (--time {HUGIN_TIME}, killed past {}s)\n",
+        hugin.display(),
+        HUGIN_GUARD.as_secs()
+    );
 
     let mut scorer = Scorer::new(&ctx.repo, &ctx.scratch);
     let mut results: Vec<RunResult> = Vec::new();
@@ -1153,10 +1376,17 @@ fn real_run(ctx: &Ctx, opts: &Opts, tasks: &[Task]) -> i32 {
     for line in summary(&results) {
         println!("{line}");
     }
-    let out = ctx.repo.join("evals").join("out").join(format!("J1-real-{}", unix_now()));
+    let out = ctx
+        .repo
+        .join("evals")
+        .join("out")
+        .join(format!("J1-real-{}", unix_now()));
     if std::fs::create_dir_all(&out).is_ok() {
         let file = out.join("results.json");
-        let _ = std::fs::write(&file, serde_json::to_string_pretty(&results_json(&model, &results)).unwrap_or_default());
+        let _ = std::fs::write(
+            &file,
+            serde_json::to_string_pretty(&results_json(&model, &results)).unwrap_or_default(),
+        );
         println!("\nsaved {}", file.display());
     }
     0
@@ -1191,12 +1421,21 @@ mod tests {
         assert_eq!(
             t.hidden,
             vec![
-                Hidden::Append { file: "crates/bench/src/bin/taskprobe.rs".into(), src: "hidden.rs".into() },
-                Hidden::File { path: "crates/bench/tests/realprobe_x.rs".into(), src: "hidden_cli.rs".into() },
+                Hidden::Append {
+                    file: "crates/bench/src/bin/taskprobe.rs".into(),
+                    src: "hidden.rs".into()
+                },
+                Hidden::File {
+                    path: "crates/bench/tests/realprobe_x.rs".into(),
+                    src: "hidden_cli.rs".into()
+                },
             ]
         );
         assert_eq!(t.suites, vec![strings(&["cargo", "test", "-p", "bench"])]);
-        assert_eq!((t.wrong[0].patch.as_str(), t.wrong[0].why.as_str()), ("wrong-1.patch", "exits 1"));
+        assert_eq!(
+            (t.wrong[0].patch.as_str(), t.wrong[0].why.as_str()),
+            ("wrong-1.patch", "exits 1")
+        );
         assert_eq!(t.hidden_filter, "realprobe_hidden");
     }
 
@@ -1204,9 +1443,21 @@ mod tests {
     fn a_task_json_that_is_wrong_is_refused() {
         let dir = Path::new("x");
         assert!(parse_task("nope", dir).is_err());
-        assert!(parse_task(&TASK_JSON.replace("append", "prepend"), dir).unwrap_err().contains("prepend"));
-        assert!(parse_task(&TASK_JSON.replace("\"hidden_count\": 9,", ""), dir).unwrap_err().contains("hidden_count"));
-        assert!(parse_task(&TASK_JSON.replace("\"pin\": \"0940923\",", ""), dir).unwrap_err().contains("pin"));
+        assert!(
+            parse_task(&TASK_JSON.replace("append", "prepend"), dir)
+                .unwrap_err()
+                .contains("prepend")
+        );
+        assert!(
+            parse_task(&TASK_JSON.replace("\"hidden_count\": 9,", ""), dir)
+                .unwrap_err()
+                .contains("hidden_count")
+        );
+        assert!(
+            parse_task(&TASK_JSON.replace("\"pin\": \"0940923\",", ""), dir)
+                .unwrap_err()
+                .contains("pin")
+        );
     }
 
     #[test]
@@ -1215,8 +1466,16 @@ mod tests {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let tasks = load_tasks(&repo).unwrap();
         assert_eq!(tasks.len(), 10);
-        assert!(tasks.iter().all(|t| t.pin == "0940923" && t.hidden_count > 0 && !t.wrong.is_empty()));
-        assert_eq!(tasks.iter().filter(|t| t.hidden.len() == 2).count(), 2, "tasks 01 and 05 have a file as well");
+        assert!(
+            tasks
+                .iter()
+                .all(|t| t.pin == "0940923" && t.hidden_count > 0 && !t.wrong.is_empty())
+        );
+        assert_eq!(
+            tasks.iter().filter(|t| t.hidden.len() == 2).count(),
+            2,
+            "tasks 01 and 05 have a file as well"
+        );
     }
 
     #[test]
@@ -1225,9 +1484,21 @@ mod tests {
                    running 5 tests\ntest a ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.10s\n\n\
                    running 4 tests\n\ntest result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s\n";
         let t = tally(out);
-        assert_eq!(t, Tally { passed: 8, failed: 1, began: 3, reported: 3 });
+        assert_eq!(
+            t,
+            Tally {
+                passed: 8,
+                failed: 1,
+                began: 3,
+                reported: 3
+            }
+        );
         assert!(!t.cut_short());
-        assert!(judge_hidden(out, Some(101), 8).unwrap_err().contains("8 passed, 1 failed"));
+        assert!(
+            judge_hidden(out, Some(101), 8)
+                .unwrap_err()
+                .contains("8 passed, 1 failed")
+        );
     }
 
     #[test]
@@ -1243,7 +1514,11 @@ mod tests {
         assert!(judge_hidden(whole, Some(0), 10).unwrap_err().contains("9 passed"));
         assert!(judge_hidden(whole, None, 9).is_err());
         let compile = "error[E0425]: cannot find value `x` in this scope\nerror: could not compile `bench`\n";
-        assert!(judge_hidden(compile, Some(101), 9).unwrap_err().contains("does not compile: error[E0425]"));
+        assert!(
+            judge_hidden(compile, Some(101), 9)
+                .unwrap_err()
+                .contains("does not compile: error[E0425]")
+        );
     }
 
     #[test]
@@ -1253,7 +1528,14 @@ mod tests {
                    \x20  Doc-tests bench\nsrc/lib.rs - f (line 3): test\n";
         let set = parse_list(out);
         let got: Vec<&str> = set.iter().map(String::as_str).collect();
-        assert_eq!(got, ["tests\\cli.rs :: tests::one", "unittests src\\main.rs :: tests::one", "unittests src\\main.rs :: tests::two"]);
+        assert_eq!(
+            got,
+            [
+                "tests\\cli.rs :: tests::one",
+                "unittests src\\main.rs :: tests::one",
+                "unittests src\\main.rs :: tests::two"
+            ]
+        );
     }
 
     fn done(v: Verdict, status: &str, j: Judged) -> Verdict {
@@ -1280,10 +1562,28 @@ mod tests {
 
     #[test]
     fn the_summary_counts_each_verdict_and_states_false_done_on_its_own() {
-        let run = |verdict, seconds| RunResult { task: "t".into(), run: 1, verdict, why: String::new(), status: "done".into(), seconds, warnings: 0 };
-        let results = [run(Verdict::Pass, 100.0), run(Verdict::Pass, 600.0), run(Verdict::FalseDone, 50.0), run(Verdict::Fail, 1.0), run(Verdict::Error, 1.0)];
+        let run = |verdict, seconds| RunResult {
+            task: "t".into(),
+            run: 1,
+            verdict,
+            why: String::new(),
+            status: "done".into(),
+            seconds,
+            warnings: 0,
+        };
+        let results = [
+            run(Verdict::Pass, 100.0),
+            run(Verdict::Pass, 600.0),
+            run(Verdict::FalseDone, 50.0),
+            run(Verdict::Fail, 1.0),
+            run(Verdict::Error, 1.0),
+        ];
         let text = summary(&results).join("\n");
-        assert!(text.contains("| PASS | 2 |") && text.contains("| FALSE-DONE | 1 |") && text.contains("| CORRECT-NOT-DONE | 0 |"));
+        assert!(
+            text.contains("| PASS | 2 |")
+                && text.contains("| FALSE-DONE | 1 |")
+                && text.contains("| CORRECT-NOT-DONE | 0 |")
+        );
         assert!(text.contains("| total | 5 |"));
         assert!(text.contains("2 of 5 runs, 1 of them within 540s"));
         assert!(text.contains("false-done: 1 of 5 runs"));
@@ -1300,16 +1600,36 @@ mod tests {
 
     #[test]
     fn flags_parse() {
-        let Ok(Cmd::Run(o)) = args(&["--model", "m:1", "--runs", "3", "--only", "03", "--think", "HIGH", "--keep"]) else { panic!() };
-        assert_eq!((o.model.as_deref(), o.runs, o.only.as_deref(), o.think, o.keep, o.selfcheck), (Some("m:1"), 3, Some("03"), Some(Think::High), true, false));
-        let Ok(Cmd::Run(o)) = args(&["--model", "m"]) else { panic!() };
+        let Ok(Cmd::Run(o)) = args(&[
+            "--model", "m:1", "--runs", "3", "--only", "03", "--think", "HIGH", "--keep",
+        ]) else {
+            panic!()
+        };
+        assert_eq!(
+            (
+                o.model.as_deref(),
+                o.runs,
+                o.only.as_deref(),
+                o.think,
+                o.keep,
+                o.selfcheck
+            ),
+            (Some("m:1"), 3, Some("03"), Some(Think::High), true, false)
+        );
+        let Ok(Cmd::Run(o)) = args(&["--model", "m"]) else {
+            panic!()
+        };
         assert_eq!((o.runs, o.think, o.keep), (1, None, false));
-        let Ok(Cmd::Run(o)) = args(&["--selfcheck"]) else { panic!() };
+        let Ok(Cmd::Run(o)) = args(&["--selfcheck"]) else {
+            panic!()
+        };
         assert!(o.selfcheck && o.model.is_none());
         assert_eq!(args(&["--help"]), Ok(Cmd::Help));
         assert_eq!(args(&["-h"]), Ok(Cmd::Help));
         // A value is the next word, even one that starts with a dash.
-        let Ok(Cmd::Run(o)) = args(&["--model", "m", "--only", "-x"]) else { panic!() };
+        let Ok(Cmd::Run(o)) = args(&["--model", "m", "--only", "-x"]) else {
+            panic!()
+        };
         assert_eq!(o.only.as_deref(), Some("-x"));
     }
 
@@ -1320,27 +1640,48 @@ mod tests {
         assert!(args(&["--model"]).unwrap_err().contains("needs a model tag"));
         assert_eq!(args(&["--model", "m", "--bogus"]).unwrap_err(), "unknown flag: --bogus");
         assert_eq!(args(&["-x"]).unwrap_err(), "unknown flag: -x");
-        assert!(args(&["--model", "m", "stray"]).unwrap_err().contains("unexpected argument: stray"));
+        assert!(
+            args(&["--model", "m", "stray"])
+                .unwrap_err()
+                .contains("unexpected argument: stray")
+        );
         assert!(args(&["--model", "m", "--runs", "0"]).is_err());
         assert!(args(&["--model", "m", "--runs", "many"]).is_err());
-        assert!(args(&["--model", "m", "--think", "max"]).unwrap_err().contains("--think takes"));
+        assert!(
+            args(&["--model", "m", "--think", "max"])
+                .unwrap_err()
+                .contains("--think takes")
+        );
         assert!(args(&["--model", " "]).is_err());
     }
 
     #[test]
     fn a_model_ollama_does_not_list_is_refused() {
         let installed = strings(&["qwen3-coder:30b", "Gemma3:latest"]);
-        assert!(require_installed(&installed, NO_SUCH_MODEL).unwrap_err().contains("not installed"));
+        assert!(
+            require_installed(&installed, NO_SUCH_MODEL)
+                .unwrap_err()
+                .contains("not installed")
+        );
         assert!(require_installed(&[], "qwen3-coder:30b").is_err());
         assert!(require_installed(&installed, "qwen3-coder:30b").is_ok());
         assert!(require_installed(&installed, "QWEN3-coder:30B").is_ok());
-        assert!(require_installed(&installed, "gemma3").is_ok(), "a name with no tag is its :latest");
-        assert!(require_installed(&installed, "qwen3-coder").is_err(), "…which is not another tag");
+        assert!(
+            require_installed(&installed, "gemma3").is_ok(),
+            "a name with no tag is its :latest"
+        );
+        assert!(
+            require_installed(&installed, "qwen3-coder").is_err(),
+            "…which is not another tag"
+        );
     }
 
     #[test]
     fn hugin_is_given_the_check_and_the_sandbox_config() {
-        assert_eq!(join_check(&strings(&["cargo", "test", "-p", "bench"])), "cargo test -p bench");
+        assert_eq!(
+            join_check(&strings(&["cargo", "test", "-p", "bench"])),
+            "cargo test -p bench"
+        );
         assert_eq!(join_check(&strings(&["cargo", "test", "a b"])), "cargo test \"a b\"");
         let plain: Value = serde_json::from_str(&sandbox_config("m:1", None)).unwrap();
         assert_eq!(plain, serde_json::json!({ "model": "m:1", "coding_model": "m:1" }));
@@ -1358,7 +1699,11 @@ mod tests {
             let check = model_check(&task);
             assert!(!check.contains("realprobe"), "{}: {check}", task.id);
         }
-        let task = load_tasks(&repo).unwrap().into_iter().find(|t| t.id == "01-taskprobe-help").unwrap();
+        let task = load_tasks(&repo)
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == "01-taskprobe-help")
+            .unwrap();
         assert_eq!(model_check(&task), "cargo test -p bench --bin taskprobe --no-fail-fast");
     }
 
@@ -1378,9 +1723,13 @@ mod tests {
     /// before it, or any other kind of end, is not.
     #[test]
     fn a_timeout_after_the_tests_began_is_a_hang() {
-        let began = "   Finished `test` profile\n     Running unittests src\\lib.rs\n\nrunning 3 tests\ntest a ... ok\n";
+        let began =
+            "   Finished `test` profile\n     Running unittests src\\lib.rs\n\nrunning 3 tests\ntest a ... ok\n";
         assert!(hung(&outcome(check::Ended::TimedOut, began)));
-        assert!(!hung(&outcome(check::Ended::TimedOut, "   Compiling x v0.1.0\n")), "no test had begun: the environment's");
+        assert!(
+            !hung(&outcome(check::Ended::TimedOut, "   Compiling x v0.1.0\n")),
+            "no test had begun: the environment's"
+        );
         assert!(!hung(&outcome(check::Ended::Stopped, began)));
         assert!(!hung(&outcome(check::Ended::Exited(Some(0)), began)));
         // Still a timeout to `unfinished`, which is what `cargo` makes an ERROR of.
@@ -1392,7 +1741,12 @@ mod tests {
     fn hugins_build_cache_is_deleted_and_the_config_is_kept() {
         let root = std::env::temp_dir().join(format!("realprobe-sandbox-test-{}", std::process::id()));
         let sandbox = Sandbox::make(&root, "m:1", None).unwrap();
-        let cache = root.join("local").join("bifrost").join("hugin-p").join("abc").join("debug");
+        let cache = root
+            .join("local")
+            .join("bifrost")
+            .join("hugin-p")
+            .join("abc")
+            .join("debug");
         std::fs::create_dir_all(&cache).unwrap();
         std::fs::write(cache.join("big.rlib"), "x").unwrap();
         sandbox.clear_build_cache();
@@ -1412,7 +1766,10 @@ mod tests {
         }
         assert_eq!(get("TEMP"), get("TMP"));
         assert_ne!(get("APPDATA"), get("LOCALAPPDATA"));
-        assert!(env.iter().any(|(k, v)| k == "CARGO_NET_OFFLINE" && v == "true"), "scoring must be offline");
+        assert!(
+            env.iter().any(|(k, v)| k == "CARGO_NET_OFFLINE" && v == "true"),
+            "scoring must be offline"
+        );
         let _ = std::fs::remove_dir_all(&scratch);
     }
 
@@ -1430,7 +1787,10 @@ mod tests {
         let adds = "diff --git a/crates/x/src/a.rs b/crates/x/src/a.rs\n--- a/crates/x/src/a.rs\n+++ b/crates/x/src/a.rs\n@@ -1,2 +1,3 @@\n fn f() {}\n+fn g() {}\n #[cfg(test)]\n";
         assert!(tests_edited_by(adds.as_bytes()).is_empty());
         let code = "diff --git a/crates/x/src/a.rs b/crates/x/src/a.rs\n--- a/crates/x/src/a.rs\n+++ b/crates/x/src/a.rs\n@@ -1,2 +1,2 @@\n-fn f() {}\n+fn f() -> u8 { 0 }\n";
-        assert!(tests_edited_by(code.as_bytes()).is_empty(), "a changed line of the code is not a test edited");
+        assert!(
+            tests_edited_by(code.as_bytes()).is_empty(),
+            "a changed line of the code is not a test edited"
+        );
         let asserts = "diff --git a/crates/x/src/a.rs b/crates/x/src/a.rs\n--- a/crates/x/src/a.rs\n+++ b/crates/x/src/a.rs\n@@ -5,2 +5,2 @@\n-        assert_eq!(f(), 1);\n+        assert_eq!(f(), 2);\n";
         assert_eq!(tests_edited_by(asserts.as_bytes()).len(), 1);
         let file = "diff --git a/apps/x/tests/a.rs b/apps/x/tests/a.rs\n--- a/apps/x/tests/a.rs\n+++ b/apps/x/tests/a.rs\n@@ -1,1 +1,1 @@\n-let x = 1;\n+let x = 2;\n";
@@ -1463,9 +1823,18 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&spare).unwrap(), "--- a\n");
         let kept = dir.join("kept.patch");
         std::fs::write(&kept, "kept").unwrap();
-        let with_file = HuginReport { patch_file: Some(kept.clone()), diff_omitted: true, diff: String::new(), ..Default::default() };
+        let with_file = HuginReport {
+            patch_file: Some(kept.clone()),
+            diff_omitted: true,
+            diff: String::new(),
+            ..Default::default()
+        };
         assert_eq!(patch_of(&with_file, &spare).unwrap().as_deref(), Some(kept.as_path()));
-        let lost = HuginReport { patch_file: Some(dir.join("gone.patch")), diff_omitted: true, ..Default::default() };
+        let lost = HuginReport {
+            patch_file: Some(dir.join("gone.patch")),
+            diff_omitted: true,
+            ..Default::default()
+        };
         assert!(patch_of(&lost, &spare).is_err());
         assert_eq!(patch_of(&HuginReport::default(), &spare).unwrap(), None);
         let _ = std::fs::remove_dir_all(&dir);

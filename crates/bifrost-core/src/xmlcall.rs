@@ -41,8 +41,7 @@ const IM_END: &str = "<|im_end|>";
 
 /// The default system text Ollama's `Qwen3CoderRenderer` substitutes when
 /// tools are offered and the conversation has no system message of its own.
-const DEFAULT_SYSTEM: &str =
-    "You are Qwen, a helpful AI assistant that can interact with a computer to solve tasks.";
+const DEFAULT_SYSTEM: &str = "You are Qwen, a helpful AI assistant that can interact with a computer to solve tasks.";
 
 /// JSON with Go's `encoding/json` escaping of `<`, `>` and `&` as `\u003c`,
 /// `\u003e`, `\u0026` — Ollama's renderer uses `json.Marshal` for every
@@ -110,7 +109,9 @@ fn additional_keys(obj: &Value, allowed: &[&str]) -> String {
 /// has. Falls back to no parameters rather than failing the whole render.
 fn call_args(v: &Value) -> Vec<(String, Value)> {
     let obj = match v {
-        Value::String(s) => serde_json::from_str::<Value>(s).ok().and_then(|p| p.as_object().cloned()),
+        Value::String(s) => serde_json::from_str::<Value>(s)
+            .ok()
+            .and_then(|p| p.as_object().cloned()),
         Value::Object(o) => Some(o.clone()),
         _ => None,
     };
@@ -161,14 +162,24 @@ pub fn render(messages: &[Message], tools: &[Tool]) -> String {
                         if let Some(t) = prop.get("type") {
                             out.push_str(&format!("\n<type>{}</type>", format_type(t)));
                         }
-                        if let Some(d) = prop.get("description").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+                        if let Some(d) = prop
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .filter(|s| !s.is_empty())
+                        {
                             out.push_str(&format!("\n<description>{d}</description>"));
                         }
-                        out.push_str(&additional_keys(prop, &["anyOf", "items", "enum", "properties", "required"]));
+                        out.push_str(&additional_keys(
+                            prop,
+                            &["anyOf", "items", "enum", "properties", "required"],
+                        ));
                         out.push_str("\n</parameter>");
                     }
                 }
-                out.push_str(&additional_keys(&tool.function.parameters, &["$defs", "items", "required"]));
+                out.push_str(&additional_keys(
+                    &tool.function.parameters,
+                    &["$defs", "items", "required"],
+                ));
                 out.push_str("\n</parameters>");
                 out.push_str("\n</function>");
             }
@@ -291,7 +302,11 @@ fn find_form_a(s: &str, from: usize, offered: Option<&HashSet<&str>>) -> Option<
             let name_start = ws_end + "<function=".len();
             let name_end = name_start + gt;
             if offered.is_none_or(|names| names.contains(&s[name_start..name_end])) {
-                return Some(FormA { tc_at, tag_end: name_end + 1, name: s[name_start..name_end].to_string() });
+                return Some(FormA {
+                    tc_at,
+                    tag_end: name_end + 1,
+                    name: s[name_start..name_end].to_string(),
+                });
             }
         }
         search_from = after_tc;
@@ -321,7 +336,11 @@ fn find_form_b(s: &str, from: usize, names: &HashSet<&str>) -> Option<FormB> {
             let name_end = name_start + gt;
             let name = &s[name_start..name_end];
             if names.contains(name) {
-                return Some(FormB { at, tag_end: name_end + 1, name: name.to_string() });
+                return Some(FormB {
+                    at,
+                    tag_end: name_end + 1,
+                    name: name.to_string(),
+                });
             }
         }
         search_from = at + "<function=".len();
@@ -331,7 +350,10 @@ fn find_form_b(s: &str, from: usize, names: &HashSet<&str>) -> Option<FormB> {
 
 /// Whether `name` is shaped like a parameter name: letters, digits, `_` and `-`.
 fn is_identifier(name: &str) -> bool {
-    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// Whether, from just after a `<parameter=NAME>` tag (`from`), the rest of
@@ -380,7 +402,11 @@ fn call_end(region: &str) -> usize {
     for tag in ["</tool_call>", "</function>"] {
         if let Some(at) = region.rfind(tag) {
             let after = at + tag.len();
-            return if region[after..].contains("</parameter>") { region.len() } else { after };
+            return if region[after..].contains("</parameter>") {
+                region.len()
+            } else {
+                after
+            };
         }
     }
     region.len()
@@ -395,7 +421,13 @@ struct ValueEnd {
 /// `</tool_call>`, `</parameter>` or `</function>`, which is the whole point:
 /// Ollama's own parser is not. See the module doc for the anchoring idea, and
 /// the brief's A/B rule this ports.
-fn find_value_end(region: &str, value_start: usize, key: &str, arg_names: &[&str], taken: &HashSet<&str>) -> Option<ValueEnd> {
+fn find_value_end(
+    region: &str,
+    value_start: usize,
+    key: &str,
+    arg_names: &[&str],
+    taken: &HashSet<&str>,
+) -> Option<ValueEnd> {
     const CLOSE: &str = "</parameter>";
     let mut occurrences = Vec::new();
     let mut search = value_start;
@@ -464,7 +496,10 @@ fn find_value_end(region: &str, value_start: usize, key: &str, arg_names: &[&str
         (None, Some(b)) => b,
         (None, None) => return None,
     };
-    Some(ValueEnd { value_end: chosen, next_pos: chosen + CLOSE.len() })
+    Some(ValueEnd {
+        value_end: chosen,
+        next_pos: chosen + CLOSE.len(),
+    })
 }
 
 /// `parseValue`: one leading and one trailing newline removed, if present.
@@ -566,8 +601,12 @@ fn typed_value(raw: &str, prop_type: Option<&Value>) -> Value {
 /// the tool layer decides what a missing parameter means.
 fn parse_params(region: &str, tool_name: &str, tools: &[Tool]) -> Result<(Map<String, Value>, usize), String> {
     let schema = tools.iter().find(|t| t.function.name == tool_name);
-    let props = schema.and_then(|t| t.function.parameters.get("properties")).and_then(Value::as_object);
-    let arg_names: Vec<&str> = props.map(|m| m.keys().map(String::as_str).collect()).unwrap_or_default();
+    let props = schema
+        .and_then(|t| t.function.parameters.get("properties"))
+        .and_then(Value::as_object);
+    let arg_names: Vec<&str> = props
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default();
 
     let fail = |why: &str| {
         let preview: String = region.chars().take(160).collect();
@@ -619,9 +658,18 @@ fn parse_params(region: &str, tool_name: &str, tools: &[Tool]) -> Result<(Map<St
         closed = true;
     }
     if !closed {
-        let required = schema.and_then(|t| t.function.parameters.get("required")).and_then(Value::as_array);
-        if let Some(missing) = required.into_iter().flatten().filter_map(Value::as_str).find(|k| !args.contains_key(*k)) {
-            return Err(fail(&format!("the reply ended before the required parameter {missing}")));
+        let required = schema
+            .and_then(|t| t.function.parameters.get("required"))
+            .and_then(Value::as_array);
+        if let Some(missing) = required
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .find(|k| !args.contains_key(*k))
+        {
+            return Err(fail(&format!(
+                "the reply ended before the required parameter {missing}"
+            )));
         }
     }
     Ok((args, i))
@@ -648,7 +696,11 @@ pub fn extract_calls(content: &str, tools: &[Tool]) -> (String, Vec<ToolCall>, V
 
     loop {
         let form_a = find_form_a(content, pos, None);
-        let form_b = if !seen_call_start || last_bare { find_form_b(content, pos, &names) } else { None };
+        let form_b = if !seen_call_start || last_bare {
+            find_form_b(content, pos, &names)
+        } else {
+            None
+        };
 
         let (start, tag_end, name, bare) = match (form_a, form_b) {
             (Some(a), Some(b)) if a.tc_at <= b.at => (a.tc_at, a.tag_end, a.name, false),
@@ -668,7 +720,9 @@ pub fn extract_calls(content: &str, tools: &[Tool]) -> (String, Vec<ToolCall>, V
             // Worded like every other failure here and in `toolcall`, since it
             // goes back to the model the same way.
             let preview: String = content[start..].chars().take(160).collect();
-            failures.push(format!("the tool call could not be read (no such tool: {name}): {preview}"));
+            failures.push(format!(
+                "the tool call could not be read (no such tool: {name}): {preview}"
+            ));
             pos = match content[tag_end..].find("</tool_call>") {
                 Some(rel) => tag_end + rel + "</tool_call>".len(),
                 None => content.len(),
@@ -680,7 +734,9 @@ pub fn extract_calls(content: &str, tools: &[Tool]) -> (String, Vec<ToolCall>, V
         // no wrapper to look for, so it also ends at the next `<function=...>`
         // of an offered tool at the start of a line; a wrapped call does not
         // stop there, since its values may quote such a line as code.
-        let mut region_end = find_form_a(content, tag_end, Some(&names)).map(|a| a.tc_at).unwrap_or(content.len());
+        let mut region_end = find_form_a(content, tag_end, Some(&names))
+            .map(|a| a.tc_at)
+            .unwrap_or(content.len());
         if bare && let Some(b) = find_form_b(content, tag_end, &names) {
             region_end = region_end.min(b.at);
         }
@@ -688,7 +744,13 @@ pub fn extract_calls(content: &str, tools: &[Tool]) -> (String, Vec<ToolCall>, V
 
         match parse_params(region, &name, tools) {
             Ok((args, consumed)) => {
-                calls.push(ToolCall { id: None, function: FunctionCall { name, arguments: Value::Object(args) } });
+                calls.push(ToolCall {
+                    id: None,
+                    function: FunctionCall {
+                        name,
+                        arguments: Value::Object(args),
+                    },
+                });
                 pos = tag_end + consumed;
             }
             Err(e) => {
@@ -855,7 +917,10 @@ mod tests {
 
     #[test]
     fn only_the_first_system_message_wins() {
-        let prompt = render(&[Message::system("first"), Message::system("second"), Message::user("hi")], &[]);
+        let prompt = render(
+            &[Message::system("first"), Message::system("second"), Message::user("hi")],
+            &[],
+        );
         assert!(prompt.contains("first"));
         assert!(!prompt.contains("second"));
     }
@@ -877,7 +942,10 @@ mod tests {
 
     #[test]
     fn the_compact_json_helper_escapes_the_way_go_does() {
-        assert_eq!(go_json(&json!(["a<b", "c>d", "e&f"])), r#"["a\u003cb","c\u003ed","e\u0026f"]"#);
+        assert_eq!(
+            go_json(&json!(["a<b", "c>d", "e&f"])),
+            r#"["a\u003cb","c\u003ed","e\u0026f"]"#
+        );
     }
 
     fn call_args_tool() -> Vec<Tool> {
@@ -921,7 +989,8 @@ mod tests {
     fn the_toolprobe_case_4_shape_without_tool_call_is_still_read() {
         // Reconstructed from the probe's 60-char preview; only the part up to
         // `</pa` was actually captured.
-        let content = "<function=read_file>\n<parameter=path>\nC:\\temp\\notes.txt\n</parameter>\n</function>\n</tool_call>";
+        let content =
+            "<function=read_file>\n<parameter=path>\nC:\\temp\\notes.txt\n</parameter>\n</function>\n</tool_call>";
         let (text, calls, failures) = extract_calls(content, &small_tools());
         assert!(failures.is_empty());
         assert_eq!(calls.len(), 1);
@@ -951,12 +1020,16 @@ mod tests {
         let (_, calls, failures) = extract_calls(content, &small_tools());
         assert!(failures.is_empty(), "{failures:?}");
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].function.arguments["new_text"], "some </parameter>\n</function> text");
+        assert_eq!(
+            calls[0].function.arguments["new_text"],
+            "some </parameter>\n</function> text"
+        );
     }
 
     #[test]
     fn prose_after_the_call_is_kept() {
-        let content = "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>\nDone.";
+        let content =
+            "<tool_call>\n<function=read_file>\n<parameter=path>\na.rs\n</parameter>\n</function>\n</tool_call>\nDone.";
         let (text, calls, _) = extract_calls(content, &small_tools());
         assert_eq!(text, "Done.");
         assert_eq!(calls.len(), 1);
@@ -974,7 +1047,8 @@ mod tests {
 
     #[test]
     fn an_unknown_tool_inside_tool_call_is_a_failure() {
-        let content = "<tool_call>\n<function=delete_everything>\n<parameter=path>\n/\n</parameter>\n</function>\n</tool_call>";
+        let content =
+            "<tool_call>\n<function=delete_everything>\n<parameter=path>\n/\n</parameter>\n</function>\n</tool_call>";
         let (_, calls, failures) = extract_calls(content, &small_tools());
         assert!(calls.is_empty());
         assert_eq!(failures.len(), 1);
@@ -1018,7 +1092,8 @@ mod tests {
 
     #[test]
     fn only_one_leading_and_trailing_newline_is_stripped() {
-        let content = "<tool_call>\n<function=read_file>\n<parameter=path>\n\nx\n\n</parameter>\n</function>\n</tool_call>";
+        let content =
+            "<tool_call>\n<function=read_file>\n<parameter=path>\n\nx\n\n</parameter>\n</function>\n</tool_call>";
         let (_, calls, _) = extract_calls(content, &small_tools());
         assert_eq!(calls[0].function.arguments["path"], "\nx\n");
     }
@@ -1053,7 +1128,8 @@ null
 
     #[test]
     fn a_string_typed_param_keeps_a_numeric_looking_value_as_a_string() {
-        let content = "<tool_call>\n<function=read_file>\n<parameter=path>\n123\n</parameter>\n</function>\n</tool_call>";
+        let content =
+            "<tool_call>\n<function=read_file>\n<parameter=path>\n123\n</parameter>\n</function>\n</tool_call>";
         let (_, calls, _) = extract_calls(content, &small_tools());
         assert_eq!(calls[0].function.arguments["path"], json!("123"));
     }
@@ -1114,9 +1190,17 @@ null
             let (_, calls, _) = extract_calls(&format!("{edit}{after}"), &small_tools());
             assert_eq!(calls[0].function.arguments["new_text"], json!("y"), "edit + {after:?}");
             let (_, calls, _) = extract_calls(&format!("{twice}{after}"), &small_tools());
-            assert_eq!(calls[0].function.arguments["path"], json!("b.rs"), "repeated + {after:?}");
+            assert_eq!(
+                calls[0].function.arguments["path"],
+                json!("b.rs"),
+                "repeated + {after:?}"
+            );
             let (_, calls, _) = extract_calls(&format!("{bare}{after}"), &small_tools());
-            assert_eq!(calls[0].function.arguments["new_text"], json!("y"), "no wrapper + {after:?}");
+            assert_eq!(
+                calls[0].function.arguments["new_text"],
+                json!("y"),
+                "no wrapper + {after:?}"
+            );
         }
     }
 
@@ -1155,7 +1239,8 @@ src/a.rs
 fast
 </parameter>
 End";
-        let content = format!("<tool_call>
+        let content = format!(
+            "<tool_call>
 <function=edit_file>
 <parameter=path>
 a.rs
@@ -1167,7 +1252,8 @@ o
 {v}
 </parameter>
 </function>
-</tool_call>");
+</tool_call>"
+        );
         let (_, calls, failures) = extract_calls(&content, &small_tools());
         assert!(failures.is_empty(), "{failures:?}");
         assert_eq!(calls[0].function.arguments["new_text"], json!(v));
@@ -1182,7 +1268,8 @@ src/a.rs
 <parameter=mode>
 fast
 </parameter>";
-        let content = format!("<tool_call>
+        let content = format!(
+            "<tool_call>
 <function=edit_file>
 <parameter=path>
 a.rs
@@ -1194,7 +1281,8 @@ o
 {v}
 </parameter>
 </function>
-</tool_call>");
+</tool_call>"
+        );
         let (_, calls, failures) = extract_calls(&content, &small_tools());
         assert!(failures.is_empty(), "{failures:?}");
         assert_eq!(calls[0].function.arguments["new_text"], json!(v));
@@ -1204,7 +1292,9 @@ o
     fn an_unknown_parameter_tag_quoted_in_a_value_mid_line_stays_in_the_value() {
         // The closing tag sits mid-line, so this is code quoting the format.
         let v = "x </parameter>\n<parameter=zzz>\ny";
-        let content = format!("<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\no\n</parameter>\n<parameter=new_text>\n{v}\n</parameter>\n</function>\n</tool_call>");
+        let content = format!(
+            "<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\no\n</parameter>\n<parameter=new_text>\n{v}\n</parameter>\n</function>\n</tool_call>"
+        );
         let (_, calls, failures) = extract_calls(&content, &small_tools());
         assert!(failures.is_empty(), "{failures:?}");
         assert_eq!(calls[0].function.arguments["new_text"], json!(v));
@@ -1223,7 +1313,9 @@ o
     #[test]
     fn a_wrapped_value_quoting_a_function_line_is_not_split() {
         let v = "<function=read_file>\n<parameter=path>\nfoo\n</parameter>\n</function>";
-        let content = format!("<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\no\n</parameter>\n<parameter=new_text>\n{v}\n</parameter>\n</function>\n</tool_call>");
+        let content = format!(
+            "<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\no\n</parameter>\n<parameter=new_text>\n{v}\n</parameter>\n</function>\n</tool_call>"
+        );
         let (_, calls, failures) = extract_calls(&content, &small_tools());
         assert!(failures.is_empty(), "{failures:?}");
         assert_eq!(calls.len(), 1);
@@ -1245,7 +1337,9 @@ o
     #[test]
     fn a_quoted_example_function_tag_does_not_end_a_calls_region() {
         let v = "format:\n<tool_call>\n<function=example_function_name>\nvalue";
-        let content = format!("<tool_call>\n<function=edit_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=old_text>\nx\n</parameter>\n<parameter=new_text>\n{v}\n</parameter>\n</function>\n</tool_call>");
+        let content = format!(
+            "<tool_call>\n<function=edit_file>\n<parameter=path>\na.md\n</parameter>\n<parameter=old_text>\nx\n</parameter>\n<parameter=new_text>\n{v}\n</parameter>\n</function>\n</tool_call>"
+        );
         let (_, calls, failures) = extract_calls(&content, &small_tools());
         assert!(failures.is_empty(), "{failures:?}");
         assert_eq!(calls.len(), 1);
@@ -1263,14 +1357,20 @@ o
             let (_, calls, _) = extract_calls(&full[..cut], &small_tools());
             if let Some(c) = calls.first() {
                 for k in required {
-                    assert!(c.function.arguments.get(k).is_some(), "cut at {cut} accepted without {k}");
+                    assert!(
+                        c.function.arguments.get(k).is_some(),
+                        "cut at {cut} accepted without {k}"
+                    );
                 }
             }
         }
         // Cut after old_text: a failure that says what is missing, not a deletion.
         let cut = full.find("<parameter=new_text>").unwrap();
         let (_, calls, failures) = extract_calls(&full[..cut], &small_tools());
-        assert!(calls.is_empty() && failures[0].contains("required parameter new_text"), "{failures:?}");
+        assert!(
+            calls.is_empty() && failures[0].contains("required parameter new_text"),
+            "{failures:?}"
+        );
         // A closed call is the model's own words: a missing parameter is the tool layer's to judge.
         let closed = "<tool_call>\n<function=edit_file>\n<parameter=path>\na.rs\n</parameter>\n<parameter=old_text>\nx\n</parameter>\n</function>\n</tool_call>";
         assert_eq!(extract_calls(closed, &small_tools()).1.len(), 1);

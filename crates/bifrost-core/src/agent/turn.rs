@@ -49,8 +49,8 @@
 
 use serde::Serialize;
 
-use super::round::{round, Reply, Round};
-use super::run::{run_approved, Ran};
+use super::round::{Reply, Round, round};
+use super::run::{Ran, run_approved};
 use super::send::Calibration;
 use super::ticket::{DiffView, PendingCall};
 use crate::chat::{self, Message};
@@ -216,7 +216,10 @@ pub struct Patch {
 impl Patch {
     /// A patch that only moves the card to another state.
     pub fn state(state: CardState) -> Self {
-        Self { state: Some(state), ..Self::default() }
+        Self {
+            state: Some(state),
+            ..Self::default()
+        }
     }
 }
 
@@ -316,7 +319,13 @@ pub fn run_turn(
         tools::MAX_ROUNDS,
         &mut |messages, calibration, closing| {
             let cfg = config::load();
-            round(messages, model.unwrap_or(cfg.model.as_str()), &cfg, calibration, closing)
+            round(
+                messages,
+                model.unwrap_or(cfg.model.as_str()),
+                &cfg,
+                calibration,
+                closing,
+            )
         },
         &mut run_approved,
         fe,
@@ -362,7 +371,16 @@ pub fn run_turn_with(
     run: &mut Run<'_>,
     fe: &mut dyn Frontend,
 ) -> Result<(), String> {
-    let mut turn = Turn { convo, calibration, last_ran: false, check_failing: false, pushed_back: 0, ask, run, fe };
+    let mut turn = Turn {
+        convo,
+        calibration,
+        last_ran: false,
+        check_failing: false,
+        pushed_back: 0,
+        ask,
+        run,
+        fe,
+    };
     let result = turn.run(bound);
     // Over with the check still failing: the model was pushed back as often as it is
     // and ended the turn anyway, or a bound or its being stuck did. A frontend that
@@ -436,8 +454,15 @@ impl Turn<'_> {
         if self.fe.stopped() {
             return Ok(Flow::End);
         }
-        let Round { reply, prompt_eval_count, sent, recovered, fed_back, thinking, metrics: _ } =
-            (self.ask)(&self.convo[..], self.calibration, false)?;
+        let Round {
+            reply,
+            prompt_eval_count,
+            sent,
+            recovered,
+            fed_back,
+            thinking,
+            metrics: _,
+        } = (self.ask)(&self.convo[..], self.calibration, false)?;
         // The server is up now (if "Starting Ollama…" was showing, it is done).
         self.fe.status("");
         // `convo` must end up exactly what was sent, or the next round's prefix
@@ -498,7 +523,12 @@ impl Turn<'_> {
                 self.fe.error(&error);
                 Ok(Flow::End)
             }
-            Reply::Rejected { name, path, error, raw_call } => {
+            Reply::Rejected {
+                name,
+                path,
+                error,
+                raw_call,
+            } => {
                 // It could never have worked — an edit whose text is not in the file,
                 // say. Not a decision for the person, so it goes straight back to the
                 // model with the reason, and is shown here so nothing happens unseen.
@@ -509,7 +539,16 @@ impl Turn<'_> {
                 self.last_ran = false;
                 Ok(Flow::Again { free: false })
             }
-            Reply::Auto { name, path, range, result, ok, stopped, plan, raw_call } => {
+            Reply::Auto {
+                name,
+                path,
+                range,
+                result,
+                ok,
+                stopped,
+                plan,
+                raw_call,
+            } => {
                 // Already run, because the rule says a read, listing or search inside
                 // the project folder needs no approval. Shown as a ran card marked
                 // `auto` so nothing happens unseen, and sent back to the model
@@ -746,7 +785,7 @@ fn refusal_for(name: &str, path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::send::{compact_for_send, Sent};
+    use crate::agent::send::{Sent, compact_for_send};
     use serde_json::json;
     use std::cell::{Cell, RefCell};
     use std::collections::VecDeque;
@@ -809,12 +848,18 @@ mod tests {
         }
 
         fn deciding(decisions: &[Decision]) -> Self {
-            Self { decisions: decisions.iter().copied().collect(), ..Self::new() }
+            Self {
+                decisions: decisions.iter().copied().collect(),
+                ..Self::new()
+            }
         }
 
         /// A frontend that insists on a passing check, and allows what it is asked.
         fn insisting(allows: usize) -> Self {
-            Self { insist: true, ..Self::deciding(&vec![Decision::Allow; allows]) }
+            Self {
+                insist: true,
+                ..Self::deciding(&vec![Decision::Allow; allows])
+            }
         }
 
         fn events(&self) -> Vec<String> {
@@ -860,7 +905,10 @@ mod tests {
         }
 
         fn update(&mut self, card: usize, patch: Patch) {
-            self.say(format!("update:{card}:{}", patch.state.map_or("-".to_string(), |s| format!("{s:?}"))));
+            self.say(format!(
+                "update:{card}:{}",
+                patch.state.map_or("-".to_string(), |s| format!("{s:?}"))
+            ));
             let shown = &mut self.cards[card];
             if let Some(state) = patch.state {
                 shown.state = state;
@@ -884,7 +932,9 @@ mod tests {
             if self.stop_in_decide {
                 self.stop.set(true);
             }
-            self.decisions.pop_front().expect("a card asked and no decision was scripted")
+            self.decisions
+                .pop_front()
+                .expect("a card asked and no decision was scripted")
         }
 
         fn save(&mut self) {
@@ -933,12 +983,14 @@ mod tests {
             calibration,
             bound,
             &mut |messages: &[Message], calibration: Option<Calibration>, closing: bool| {
-                log.borrow_mut().push(format!("ask:{}", if closing { "closing" } else { "open" }));
+                log.borrow_mut()
+                    .push(format!("ask:{}", if closing { "closing" } else { "open" }));
                 if stop_in_ask || stop_at_ask == Some(asked.len()) {
                     stop.set(true);
                 }
                 asked.push((closing, messages.len(), calibration));
-                asks.pop_front().expect("the loop asked the model more often than the script allows")
+                asks.pop_front()
+                    .expect("the loop asked the model more often than the script allows")
             },
             &mut |name: &str, path: &str, token: &str| {
                 log.borrow_mut().push(format!("run:{name}:{path}:{token}"));
@@ -959,15 +1011,32 @@ mod tests {
     }
 
     fn round_of(reply: Reply) -> Result<Round, String> {
-        Ok(Round { reply, prompt_eval_count: 0, recovered: false, fed_back: false, thinking: None, metrics: Default::default(), sent: sent() })
+        Ok(Round {
+            reply,
+            prompt_eval_count: 0,
+            recovered: false,
+            fed_back: false,
+            thinking: None,
+            metrics: Default::default(),
+            sent: sent(),
+        })
     }
 
     fn raw(name: &str, arguments: serde_json::Value) -> chat::ToolCall {
-        chat::ToolCall { id: None, function: chat::FunctionCall { name: name.into(), arguments } }
+        chat::ToolCall {
+            id: None,
+            function: chat::FunctionCall {
+                name: name.into(),
+                arguments,
+            },
+        }
     }
 
     fn answer(text: &str) -> Result<Round, String> {
-        round_of(Reply::Answer { content: text.into(), eval_count: 7 })
+        round_of(Reply::Answer {
+            content: text.into(),
+            eval_count: 7,
+        })
     }
 
     fn rejected(n: usize) -> Result<Round, String> {
@@ -985,7 +1054,11 @@ mod tests {
             name: "search".into(),
             path: format!("\"x{n}\""),
             range: None,
-            result: if ok { format!("src/a.rs:{n}: x{n}") } else { "error: no such folder".into() },
+            result: if ok {
+                format!("src/a.rs:{n}: x{n}")
+            } else {
+                "error: no such folder".into()
+            },
             ok,
             stopped: false,
             plan: None,
@@ -1038,7 +1111,14 @@ mod tests {
         assert_eq!(asked, vec![(false, 1, None)]);
         assert_eq!(fe.answers, [("hello".to_string(), 0, 7)]);
         let prompt_chars = sent().prompt_chars();
-        let numbers = RoundNumbers { prompt_eval_count: 0, prompt_chars, set_aside: 0, fits: true, recovered: false, fed_back: false };
+        let numbers = RoundNumbers {
+            prompt_eval_count: 0,
+            prompt_chars,
+            set_aside: 0,
+            fits: true,
+            recovered: false,
+            fed_back: false,
+        };
         assert_eq!(fe.numbers, [numbers]);
         assert!(fe.errors.is_empty() && fe.cards.is_empty());
         assert_eq!(convo, vec![Message::user("hi")]);
@@ -1052,7 +1132,12 @@ mod tests {
     /// and the turn leaves none of it in the conversation, whichever way it ends.
     #[test]
     fn thinking_rides_the_paired_message_within_a_turn_and_is_gone_when_it_ends() {
-        let thought = |round: Result<Round, String>, text: &str| round.map(|r| Round { thinking: Some(text.into()), ..r });
+        let thought = |round: Result<Round, String>, text: &str| {
+            round.map(|r| Round {
+                thinking: Some(text.into()),
+                ..r
+            })
+        };
         let stale = Message {
             role: "assistant".into(),
             content: "an earlier answer".into(),
@@ -1092,16 +1177,35 @@ mod tests {
         // is sent what it was given.
         assert_eq!(seen.len(), 5);
         assert_eq!(seen[0], [none(), some("stale"), none()]);
-        let last = [none(), some("stale"), none(), some("t0"), none(), some("t1"), none(), some("t2"), none(), some("t3"), none()];
+        let last = [
+            none(),
+            some("stale"),
+            none(),
+            some("t0"),
+            none(),
+            some("t1"),
+            none(),
+            some("t2"),
+            none(),
+            some("t3"),
+            none(),
+        ];
         assert_eq!(seen[4], last);
         // And none of it is left.
         assert_eq!(convo.len(), 3 + 2 * 4);
         assert!(convo.iter().all(|m| m.thinking.is_none()), "{convo:?}");
-        assert_eq!(convo[3], assistant(raw("edit_file", json!({ "path": "f0.rs" }))), "the call itself is kept");
+        assert_eq!(
+            convo[3],
+            assistant(raw("edit_file", json!({ "path": "f0.rs" }))),
+            "the call itself is kept"
+        );
 
         // A turn that ends on a failed request clears it as well.
         let mut fe = Fake::new();
-        let mut asks = VecDeque::from(vec![thought(rejected(0), "t0"), Err("POST /api/chat: connection refused".to_string())]);
+        let mut asks = VecDeque::from(vec![
+            thought(rejected(0), "t0"),
+            Err("POST /api/chat: connection refused".to_string()),
+        ]);
         let mut convo = start();
         let result = run_turn_with(
             &mut convo,
@@ -1120,7 +1224,9 @@ mod tests {
     fn a_stuck_model_shows_its_error_and_gets_no_closing_request() {
         let mut fe = Fake::new();
         let mut convo = vec![Message::user("fix it")];
-        let stuck = round_of(Reply::Stuck { error: "the model kept repeating a call to edit_file".into() });
+        let stuck = round_of(Reply::Stuck {
+            error: "the model kept repeating a call to edit_file".into(),
+        });
         let (result, asked) = play(&mut convo, None, vec![stuck], vec![], &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(asked.len(), 1, "no closing request");
@@ -1151,18 +1257,32 @@ mod tests {
         assert_eq!(result, Ok(()));
         assert_eq!(asked.len(), 11);
         assert!(asked[..10].iter().all(|(closing, ..)| !closing));
-        assert_eq!(asked[10], (true, 21, None), "the closing request is sent everything the turn said");
+        assert_eq!(
+            asked[10],
+            (true, 21, None),
+            "the closing request is sent everything the turn said"
+        );
         // Every rejection is a card the person can see, in the state that says so, and
         // with no arguments to replay.
         assert_eq!(fe.cards.len(), 10);
-        assert!(fe.cards.iter().all(|c| c.state == CardState::Rejected && c.args.is_none() && !c.auto));
-        assert_eq!(fe.cards[3].error.as_deref(), Some("error: old_text 3 is not in the file"));
+        assert!(
+            fe.cards
+                .iter()
+                .all(|c| c.state == CardState::Rejected && c.args.is_none() && !c.auto)
+        );
+        assert_eq!(
+            fe.cards[3].error.as_deref(),
+            Some("error: old_text 3 is not in the file")
+        );
         // The closing words come first, then the banner; with nothing run, no suffix.
         assert_eq!(fe.answers, [("I could not make the edit.".to_string(), 0, 7)]);
         assert_eq!(fe.errors, ["Stopped after 10 tool rounds."]);
         // The pair for the first rejection: the model's own attempt, then the reason.
         assert_eq!(convo[1], assistant(raw("edit_file", json!({ "path": "f0.rs" }))));
-        assert_eq!(convo[2], Message::tool_result("edit_file", "error: old_text 0 is not in the file"));
+        assert_eq!(
+            convo[2],
+            Message::tool_result("edit_file", "error: old_text 0 is not in the file")
+        );
     }
 
     #[test]
@@ -1178,10 +1298,17 @@ mod tests {
         assert_eq!(asked.len(), 31);
         assert_eq!(asked[30], (true, 61, None));
         assert_eq!(fe.cards.len(), 30);
-        assert!(fe.cards.iter().all(|c| c.auto && c.state == CardState::Ran && c.ok == Some(true)));
+        assert!(
+            fe.cards
+                .iter()
+                .all(|c| c.auto && c.state == CardState::Ran && c.ok == Some(true))
+        );
         assert_eq!(fe.cards[0].args, Some(json!({ "text": "x0" })));
         assert_eq!(fe.answers, [("I looked at thirty things.".to_string(), 0, 7)]);
-        assert_eq!(fe.errors, ["Stopped after 30 tool calls. The last step ran — check the result."]);
+        assert_eq!(
+            fe.errors,
+            ["Stopped after 30 tool calls. The last step ran — check the result."]
+        );
         assert_eq!(convo.len(), 1 + 2 * 30);
         // Sent back exactly as an approved call would be.
         assert_eq!(convo[1], assistant(raw("search", json!({ "text": "x0" }))));
@@ -1197,7 +1324,11 @@ mod tests {
         let (result, asked) = play(&mut convo, None, asks, vec![], &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(asked.len(), 11);
-        assert!(fe.cards.iter().all(|c| c.state == CardState::Ran && c.ok == Some(false)));
+        assert!(
+            fe.cards
+                .iter()
+                .all(|c| c.state == CardState::Ran && c.ok == Some(false))
+        );
         // A blank closing answer is not shown; the banner is all there is.
         assert!(fe.answers.is_empty());
         assert_eq!(fe.errors, ["Stopped after 10 tool rounds."]);
@@ -1223,10 +1354,16 @@ mod tests {
     fn a_call_that_was_fed_back_is_counted_apart_from_a_recovered_one() {
         let mut fe = Fake::new();
         let mut convo = vec![Message::user("fix it")];
-        let fed = Round { fed_back: true, ..rejected(0).unwrap() };
+        let fed = Round {
+            fed_back: true,
+            ..rejected(0).unwrap()
+        };
         let (result, _) = play(&mut convo, None, vec![Ok(fed), answer("done")], vec![], &mut fe);
         assert_eq!(result, Ok(()));
-        assert_eq!(fe.numbers.iter().map(|n| (n.recovered, n.fed_back)).collect::<Vec<_>>(), [(false, true), (false, false)]);
+        assert_eq!(
+            fe.numbers.iter().map(|n| (n.recovered, n.fed_back)).collect::<Vec<_>>(),
+            [(false, true), (false, false)]
+        );
         assert_eq!(fe.answers.len(), 1);
     }
 
@@ -1256,7 +1393,10 @@ mod tests {
         let (result, asked) = play_bounded(3, &mut convo, None, asks, vec![], &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(asked.len(), 24, "twenty-three calls and the closing request");
-        assert_eq!(fe.errors, ["Stopped after 23 tool calls. The last step ran — check the result."]);
+        assert_eq!(
+            fe.errors,
+            ["Stopped after 23 tool calls. The last step ran — check the result."]
+        );
     }
 
     /// Ten approved calls, the last of which is `last`; whether it worked is `ok`.
@@ -1264,10 +1404,18 @@ mod tests {
     fn banner_after_ten(last: &str, ok: bool) -> String {
         let mut fe = Fake::deciding(&[Decision::Allow; 10]);
         let mut convo = vec![Message::user("go")];
-        let mut asks: Vec<_> = (0..10).map(|n| asks_about(if n == 9 { last } else { "edit_file" }, "f.rs")).collect();
+        let mut asks: Vec<_> = (0..10)
+            .map(|n| asks_about(if n == 9 { last } else { "edit_file" }, "f.rs"))
+            .collect();
         asks.push(answer(""));
         let mut runs: Vec<_> = (0..9).map(|_| ran("Edited f.rs: 1 line removed, 1 added.")).collect();
-        runs.push(Ok(Ran { result: "the last one".into(), ok, stopped: false, undo: None, check: None }));
+        runs.push(Ok(Ran {
+            result: "the last one".into(),
+            ok,
+            stopped: false,
+            undo: None,
+            check: None,
+        }));
         let (result, _) = play(&mut convo, None, asks, runs, &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(fe.errors.len(), 1);
@@ -1306,9 +1454,19 @@ mod tests {
     fn an_allowed_call_runs_and_a_denied_one_is_refused_to_the_model_in_so_many_words() {
         let mut fe = Fake::deciding(&[Decision::Allow, Decision::Deny]);
         let mut convo = vec![Message::user("fix it")];
-        let asks = vec![asks_about("edit_file", "a.rs"), asks_about("delete_file", "b.txt"), answer("Done.")];
+        let asks = vec![
+            asks_about("edit_file", "a.rs"),
+            asks_about("delete_file", "b.txt"),
+            answer("Done."),
+        ];
         let said = "Edited a.rs: 1 line removed, 1 added.";
-        let runs = vec![Ok(Ran { result: said.into(), ok: true, stopped: false, undo: Some("ab12".into()), check: None })];
+        let runs = vec![Ok(Ran {
+            result: said.into(),
+            ok: true,
+            stopped: false,
+            undo: Some("ab12".into()),
+            check: None,
+        })];
         let (result, asked) = play(&mut convo, None, asks, runs, &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(asked.len(), 3);
@@ -1342,7 +1500,10 @@ mod tests {
         );
         let first = &fe.cards[0];
         assert_eq!(first.state, CardState::Ran);
-        assert_eq!((first.ok, first.result.as_deref(), first.undo.as_deref()), (Some(true), Some(said), Some("ab12")));
+        assert_eq!(
+            (first.ok, first.result.as_deref(), first.undo.as_deref()),
+            (Some(true), Some(said), Some("ab12"))
+        );
         assert_eq!(first.args, Some(json!({ "path": "a.rs" })));
         assert_eq!(fe.cards[1].state, CardState::Denied);
 
@@ -1383,7 +1544,10 @@ mod tests {
         assert_eq!(fe.cards[0].state, CardState::Failed);
         assert_eq!(fe.cards[0].ok, Some(false));
         assert_eq!(fe.cards[0].error.as_deref(), Some("this call was not approved"));
-        assert_eq!(fe.events()[5..], ["update:0:Running", "run:edit_file:a.rs:t-a.rs", "update:0:Failed"]);
+        assert_eq!(
+            fe.events()[5..],
+            ["update:0:Running", "run:edit_file:a.rs:t-a.rs", "update:0:Failed"]
+        );
         // The model is told nothing: there is no result to send.
         assert_eq!(convo.len(), 1);
     }
@@ -1392,12 +1556,28 @@ mod tests {
     fn an_edit_refused_at_the_last_moment_is_failed_and_a_check_that_found_errors_is_not() {
         let mut fe = Fake::deciding(&[Decision::Allow, Decision::Allow]);
         let mut convo = vec![Message::user("go")];
-        let asks = vec![asks_about("edit_file", "a.rs"), asks_about("run_check", "cargo check"), answer("Hm.")];
+        let asks = vec![
+            asks_about("edit_file", "a.rs"),
+            asks_about("run_check", "cargo check"),
+            answer("Hm."),
+        ];
         let refused = "error: a.rs changed since the diff was shown";
         let broken = "cargo check failed: 2 errors";
         let runs = vec![
-            Ok(Ran { result: refused.into(), ok: false, stopped: false, undo: None, check: None }),
-            Ok(Ran { result: broken.into(), ok: false, stopped: false, undo: None, check: None }),
+            Ok(Ran {
+                result: refused.into(),
+                ok: false,
+                stopped: false,
+                undo: None,
+                check: None,
+            }),
+            Ok(Ran {
+                result: broken.into(),
+                ok: false,
+                stopped: false,
+                undo: None,
+                check: None,
+            }),
         ];
         let (result, _) = play(&mut convo, None, asks, runs, &mut fe);
         assert_eq!(result, Ok(()));
@@ -1418,18 +1598,30 @@ mod tests {
             token: "tk".into(),
             name: "create_file".into(),
             path: "src/new/mod.rs".into(),
-            diff: Some(DiffView { hunks: Vec::new(), added: 3, removed: 0, create: true }),
+            diff: Some(DiffView {
+                hunks: Vec::new(),
+                added: 3,
+                removed: 0,
+                create: true,
+            }),
             range: Some(tools::Lines { start: 2, end: None }),
             changed_build_files: vec!["Cargo.toml".into()],
             to: Some("src/other.rs".into()),
             folders: vec!["src/new/".into()],
             size: Some(0),
         };
-        let reply = Reply::Call { call, raw_call: raw("create_file", serde_json::Value::Null) };
+        let reply = Reply::Call {
+            call,
+            raw_call: raw("create_file", serde_json::Value::Null),
+        };
         let _ = play(&mut convo, None, vec![round_of(reply), answer("ok")], vec![], &mut fe);
         let card = &fe.cards[0];
         assert_eq!(card.state, CardState::Denied);
-        assert_eq!(card.args, Some(json!({})), "a call with no arguments is replayed as {{}}");
+        assert_eq!(
+            card.args,
+            Some(json!({})),
+            "a call with no arguments is replayed as {{}}"
+        );
         let diff = card.diff.as_ref().expect("the diff to approve");
         assert_eq!((diff.added, diff.removed, diff.create), (3, 0, true));
         assert_eq!(card.range, Some(tools::Lines { start: 2, end: None }));
@@ -1442,10 +1634,19 @@ mod tests {
 
     #[test]
     fn what_the_person_declined_is_told_to_the_model_in_terms_of_what_it_asked_for() {
-        assert_eq!(refusal_for("delete_file", "b.txt"), "The user declined to delete b.txt. Nothing was deleted.");
-        assert_eq!(refusal_for("move_file", "a.txt"), "The user declined to move a.txt. Nothing was moved.");
+        assert_eq!(
+            refusal_for("delete_file", "b.txt"),
+            "The user declined to delete b.txt. Nothing was deleted."
+        );
+        assert_eq!(
+            refusal_for("move_file", "a.txt"),
+            "The user declined to move a.txt. Nothing was moved."
+        );
         for name in ["edit_file", "create_file"] {
-            assert_eq!(refusal_for(name, "a.rs"), "The user declined this change to a.rs. Nothing was written.");
+            assert_eq!(
+                refusal_for(name, "a.rs"),
+                "The user declined this change to a.rs. Nothing was written."
+            );
         }
         assert_eq!(
             refusal_for("run_check", "cargo check"),
@@ -1528,7 +1729,13 @@ mod tests {
         fe.stop_in_run = true;
         let mut convo = vec![Message::user("check it")];
         let result = "`cargo check` was stopped by the user";
-        let stopped_check = Ran { result: result.into(), ok: false, stopped: true, undo: None, check: None };
+        let stopped_check = Ran {
+            result: result.into(),
+            ok: false,
+            stopped: true,
+            undo: None,
+            check: None,
+        };
         let asks = vec![asks_about("run_check", "cargo check")];
         let (done, asked) = play(&mut convo, None, asks, vec![Ok(stopped_check)], &mut fe);
         assert_eq!(done, Ok(()));
@@ -1544,8 +1751,20 @@ mod tests {
         let mut fe = Fake::deciding(&[Decision::Allow]);
         fe.stop_in_run = true;
         let mut convo = vec![Message::user("fix it")];
-        let written = Ran { result: "Edited a.rs".into(), ok: true, stopped: false, undo: Some("ab12".into()), check: None };
-        let (result, _) = play(&mut convo, None, vec![asks_about("edit_file", "a.rs")], vec![Ok(written)], &mut fe);
+        let written = Ran {
+            result: "Edited a.rs".into(),
+            ok: true,
+            stopped: false,
+            undo: Some("ab12".into()),
+            check: None,
+        };
+        let (result, _) = play(
+            &mut convo,
+            None,
+            vec![asks_about("edit_file", "a.rs")],
+            vec![Ok(written)],
+            &mut fe,
+        );
         assert_eq!(result, Ok(()));
         assert_eq!(fe.cards[0].state, CardState::Ran);
         assert_eq!(fe.cards[0].undo.as_deref(), Some("ab12"));
@@ -1648,7 +1867,14 @@ mod tests {
 
     /// The assistant's words, as the loop puts them in the conversation.
     fn said(text: &str) -> Message {
-        Message { role: "assistant".into(), content: text.into(), images: None, tool_calls: None, tool_name: None, thinking: None }
+        Message {
+            role: "assistant".into(),
+            content: text.into(),
+            images: None,
+            tool_calls: None,
+            tool_name: None,
+            thinking: None,
+        }
     }
 
     /// The model runs the check once for each of `checks`, then answers "answer 1",
@@ -1698,7 +1924,10 @@ mod tests {
     #[test]
     fn the_push_back_tells_the_model_the_work_is_not_done_and_what_to_do() {
         let note = tools::CHECK_FAILED_NOTE;
-        assert!(note.starts_with("The last check failed, so the work is not done."), "{note}");
+        assert!(
+            note.starts_with("The last check failed, so the work is not done."),
+            "{note}"
+        );
         assert!(note.contains("Fix the code and run the check again."), "{note}");
         assert!(note.contains("say plainly that it is not done and why"), "{note}");
     }
@@ -1736,13 +1965,20 @@ mod tests {
             asks_about("run_check", "cargo test"),
             answer("Passes now."),
         ];
-        let runs = vec![check_failed(), ran("Edited a.rs: 1 line removed, 1 added."), check_passed()];
+        let runs = vec![
+            check_failed(),
+            ran("Edited a.rs: 1 line removed, 1 added."),
+            check_passed(),
+        ];
         let (result, asked) = play(&mut convo, None, asks, runs, &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(asked.len(), 5);
         // "Edited it." was pushed back: the edit did not make the check pass.
         assert_eq!(answers_shown(&fe), ["Passes now."]);
-        assert_eq!(convo.iter().filter(|m| m.content == tools::CHECK_FAILED_NOTE).count(), 1);
+        assert_eq!(
+            convo.iter().filter(|m| m.content == tools::CHECK_FAILED_NOTE).count(),
+            1
+        );
     }
 
     #[test]
@@ -1777,7 +2013,10 @@ mod tests {
         let (fe, convo, asked) = play_checks(true, vec![check_cut_short()]);
         assert_eq!(asked.len(), 5);
         assert_eq!(answers_shown(&fe), ["answer 4"]);
-        assert_eq!(convo.iter().filter(|m| m.content == tools::CHECK_FAILED_NOTE).count(), MAX_PUSH_BACKS);
+        assert_eq!(
+            convo.iter().filter(|m| m.content == tools::CHECK_FAILED_NOTE).count(),
+            MAX_PUSH_BACKS
+        );
         assert_eq!(fe.unfinished, 1);
         // ...and a later check that really passes clears it.
         let (fe, _, _) = play_checks(true, vec![check_cut_short(), check_passed()]);
@@ -1841,11 +2080,18 @@ mod tests {
         let mut fe = Fake::insisting(1);
         fe.stop_at_ask = Some(2);
         let mut convo = vec![Message::user("fix it")];
-        let asks = vec![asks_about("run_check", "cargo test"), answer("Done."), answer("Really done.")];
+        let asks = vec![
+            asks_about("run_check", "cargo test"),
+            answer("Done."),
+            answer("Really done."),
+        ];
         let (result, asked) = play(&mut convo, None, asks, vec![check_failed()], &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(asked.len(), 3, "no closing request");
-        assert!(fe.answers.is_empty() && fe.errors.is_empty(), "what comes back after Stop is not shown");
+        assert!(
+            fe.answers.is_empty() && fe.errors.is_empty(),
+            "what comes back after Stop is not shown"
+        );
         assert_eq!(fe.unfinished, 0, "the person ended it");
         // What was pushed back before the Stop stays in the conversation the turn leaves.
         assert_eq!(convo[3], said("Done."));
@@ -1857,7 +2103,13 @@ mod tests {
         fe.stop_in_run = true;
         let mut convo = vec![Message::user("fix it")];
         let stopped = checked(Ended::Stopped, None);
-        let (result, asked) = play(&mut convo, None, vec![asks_about("run_check", "cargo test")], vec![stopped], &mut fe);
+        let (result, asked) = play(
+            &mut convo,
+            None,
+            vec![asks_about("run_check", "cargo test")],
+            vec![stopped],
+            &mut fe,
+        );
         assert_eq!(result, Ok(()));
         assert_eq!(asked.len(), 1);
         assert_eq!(fe.unfinished, 0);
@@ -1867,7 +2119,12 @@ mod tests {
     #[test]
     fn a_check_that_never_judged_the_code_neither_fails_the_turn_nor_clears_a_failure() {
         let timed_out = || checked(Ended::TimedOut, None);
-        let blocked = || checked(Ended::Exited(Some(1)), Some("Smart App Control blocked build_script_build.exe"));
+        let blocked = || {
+            checked(
+                Ended::Exited(Some(1)),
+                Some("Smart App Control blocked build_script_build.exe"),
+            )
+        };
         let could_not_start = || ran("error: program not found");
         // The checks the model ran, and whether an answer after them is pushed back.
         let cases: Vec<(Vec<Result<Ran, String>>, bool)> = vec![
@@ -1892,7 +2149,12 @@ mod tests {
     fn a_blank_answer_after_a_failed_check_is_pushed_back_without_putting_the_blank_in_the_conversation() {
         let mut fe = Fake::insisting(2);
         let mut convo = vec![Message::user("fix it")];
-        let asks = vec![asks_about("run_check", "cargo test"), answer("  "), asks_about("run_check", "cargo test"), answer("ok")];
+        let asks = vec![
+            asks_about("run_check", "cargo test"),
+            answer("  "),
+            asks_about("run_check", "cargo test"),
+            answer("ok"),
+        ];
         let (result, asked) = play(&mut convo, None, asks, vec![check_failed(), check_passed()], &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(asked[2].1, 4, "only the loop's reply was added");
@@ -1904,23 +2166,39 @@ mod tests {
     fn a_push_back_is_a_round_so_the_bound_still_ends_the_turn() {
         let mut fe = Fake::insisting(1);
         let mut convo = vec![Message::user("fix it")];
-        let asks = vec![asks_about("run_check", "cargo test"), answer("one"), answer("two"), answer("closing words")];
+        let asks = vec![
+            asks_about("run_check", "cargo test"),
+            answer("one"),
+            answer("two"),
+            answer("closing words"),
+        ];
         let (result, asked) = play_bounded(3, &mut convo, None, asks, vec![check_failed()], &mut fe);
         assert_eq!(result, Ok(()));
         assert_eq!(asked.len(), 4, "three rounds and the closing request");
         assert_eq!(asked[3], (true, 7, None));
         // The closing words are the model's last, pushed back or not, and the banner follows.
         assert_eq!(answers_shown(&fe), ["closing words"]);
-        assert_eq!(fe.errors, ["Stopped after 3 tool rounds. The last step ran — check the result."]);
+        assert_eq!(
+            fe.errors,
+            ["Stopped after 3 tool rounds. The last step ran — check the result."]
+        );
         let events = fe.events();
-        assert_eq!(events[events.len() - 2..], ["error:Stopped after 3 tool rounds. The last step ran — check the result.", "unfinished"]);
+        assert_eq!(
+            events[events.len() - 2..],
+            [
+                "error:Stopped after 3 tool rounds. The last step ran — check the result.",
+                "unfinished"
+            ]
+        );
     }
 
     #[test]
     fn a_stuck_model_with_its_check_failing_is_said_to_have_ended_unfinished() {
         let mut fe = Fake::insisting(1);
         let mut convo = vec![Message::user("fix it")];
-        let stuck = round_of(Reply::Stuck { error: "the model kept repeating a call to edit_file".into() });
+        let stuck = round_of(Reply::Stuck {
+            error: "the model kept repeating a call to edit_file".into(),
+        });
         let asks = vec![asks_about("run_check", "cargo test"), stuck];
         let (result, _) = play(&mut convo, None, asks, vec![check_failed()], &mut fe);
         assert_eq!(result, Ok(()));
@@ -1932,7 +2210,10 @@ mod tests {
     fn a_turn_that_fails_to_run_is_not_said_to_have_ended_unfinished() {
         let mut fe = Fake::insisting(1);
         let mut convo = vec![Message::user("fix it")];
-        let asks = vec![asks_about("run_check", "cargo test"), Err("POST /api/chat: connection refused".to_string())];
+        let asks = vec![
+            asks_about("run_check", "cargo test"),
+            Err("POST /api/chat: connection refused".to_string()),
+        ];
         let (result, _) = play(&mut convo, None, asks, vec![check_failed()], &mut fe);
         assert_eq!(result, Err("POST /api/chat: connection refused".to_string()));
         assert_eq!(fe.unfinished, 0, "the error is what the person is shown");
@@ -1965,7 +2246,14 @@ mod tests {
         assert_eq!(result, Ok(()));
         let cal = Some(Calibration::new(chars, 4321));
         assert_eq!(asked.iter().map(|a| a.2).collect::<Vec<_>>(), [start, cal, cal]);
-        let numbers = RoundNumbers { prompt_eval_count: 4321, prompt_chars: chars, set_aside: aside, fits: true, recovered: false, fed_back: false };
+        let numbers = RoundNumbers {
+            prompt_eval_count: 4321,
+            prompt_chars: chars,
+            set_aside: aside,
+            fits: true,
+            recovered: false,
+            fed_back: false,
+        };
         assert_eq!(fe.numbers[0], numbers);
         // `convo` is what was sent: the stubs, not the 6000 characters.
         assert_eq!(convo[..9], copy[..]);
@@ -1987,7 +2275,10 @@ mod tests {
         card.changed_build_files = vec!["Cargo.toml".into()];
         card.range = Some(tools::Lines { start: 1, end: None });
         card.auto = true;
-        card.plan = Some(vec![tools::PlanStep { text: "a".into(), status: tools::PlanStatus::Doing }]);
+        card.plan = Some(vec![tools::PlanStep {
+            text: "a".into(),
+            status: tools::PlanStatus::Doing,
+        }]);
         assert_eq!(
             serde_json::to_value(&card).unwrap(),
             json!({
@@ -2008,7 +2299,10 @@ mod tests {
 
     #[test]
     fn a_patch_names_only_what_changed() {
-        assert_eq!(serde_json::to_value(Patch::state(CardState::Running)).unwrap(), json!({ "state": "running" }));
+        assert_eq!(
+            serde_json::to_value(Patch::state(CardState::Running)).unwrap(),
+            json!({ "state": "running" })
+        );
         let failed = Patch {
             state: Some(CardState::Failed),
             ok: Some(false),

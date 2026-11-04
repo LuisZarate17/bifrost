@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
-use tauri::Manager;
 use tauri::tray::TrayIconBuilder;
+use tauri::Manager;
 use tauri::{AppHandle, Runtime};
 
 use bifrost_core::{config, ollama, vram};
@@ -281,7 +281,9 @@ fn picker_tick(id: &str, configured: &str) -> bool {
 /// whatever the handler then decides, so every outcome that does not rebuild the list must
 /// call this. It is local (no network, no rebuild), so it is safe on the main thread.
 fn sync_ticks<R: Runtime>(app: &AppHandle<R>, configured: &str) {
-    let Some(items) = app.try_state::<TrayItems<R>>() else { return };
+    let Some(items) = app.try_state::<TrayItems<R>>() else {
+        return;
+    };
     let Ok(all) = items.models.items() else { return };
     for kind in all {
         if let MenuItemKind::Check(c) = kind {
@@ -570,7 +572,10 @@ fn tray_icon_size(scale: f64) -> u32 {
 fn tray_icon<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Image<'static>> {
     let scale = app.primary_monitor().ok().flatten().map_or(1.0, |m| m.scale_factor());
     let size = tray_icon_size(scale);
-    let bytes = TRAY_ICONS.iter().find(|(s, _)| *s == size).map_or(TRAY_ICONS[3].1, |(_, b)| *b);
+    let bytes = TRAY_ICONS
+        .iter()
+        .find(|(s, _)| *s == size)
+        .map_or(TRAY_ICONS[3].1, |(_, b)| *b);
     Image::from_bytes(bytes)
 }
 
@@ -631,7 +636,11 @@ fn create_startup_shortcut() -> Result<(), String> {
     let dir = target.parent().unwrap_or(Path::new(".")).to_path_buf();
     run_ps(
         WRITE_SHORTCUT,
-        &[("BIFROST_LNK", &lnk), ("BIFROST_TARGET", &target), ("BIFROST_DIR", &dir)],
+        &[
+            ("BIFROST_LNK", &lnk),
+            ("BIFROST_TARGET", &target),
+            ("BIFROST_DIR", &dir),
+        ],
     )?;
     if lnk.exists() {
         Ok(())
@@ -650,12 +659,17 @@ fn shortcut_is_stale(read: &str, exe: &Path) -> bool {
 /// start nothing at login; point it at the running exe. No shortcut means the user turned
 /// it off, so none is made.
 fn repair_startup_shortcut() {
-    let Some(lnk) = startup_shortcut().filter(|p| p.exists()) else { return };
+    let Some(lnk) = startup_shortcut().filter(|p| p.exists()) else {
+        return;
+    };
     let Ok(exe) = std::env::current_exe() else { return };
     match run_ps(READ_SHORTCUT, &[("BIFROST_LNK", &lnk)]) {
         Ok(read) if !shortcut_is_stale(&read, &exe) => {}
         Ok(read) => match create_startup_shortcut() {
-            Ok(()) => println!("[vidar] start at login: repaired the shortcut ({read} -> {})", exe.display()),
+            Ok(()) => println!(
+                "[vidar] start at login: repaired the shortcut ({read} -> {})",
+                exe.display()
+            ),
             Err(e) => eprintln!("[vidar] could not repair the startup shortcut: {e}"),
         },
         Err(e) => eprintln!("[vidar] could not read the startup shortcut: {e}"),
@@ -679,7 +693,11 @@ fn toggle_login() {
         return;
     }
     let there = startup_shortcut().is_some_and(|p| p.exists());
-    let result = if there { remove_startup_shortcut() } else { create_startup_shortcut() };
+    let result = if there {
+        remove_startup_shortcut()
+    } else {
+        create_startup_shortcut()
+    };
     match result {
         Ok(()) => {
             println!("[vidar] start at login: {}", if there { "off" } else { "on" });
@@ -722,7 +740,11 @@ fn beside_exe(name: &str) -> Option<PathBuf> {
 
 /// Where `hugin-launch.exe` is: the installed copy in the bin folder under the local app
 /// data folder, else the one beside the running exe.
-fn hugin_launcher(local_appdata: Option<&Path>, beside: Option<PathBuf>, exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+fn hugin_launcher(
+    local_appdata: Option<&Path>,
+    beside: Option<PathBuf>,
+    exists: impl Fn(&Path) -> bool,
+) -> Option<PathBuf> {
     local_appdata
         .map(|l| l.join("bifrost").join("bin").join("hugin-launch.exe"))
         .filter(|p| exists(p))
@@ -747,7 +769,9 @@ fn spawn_detached(program: &Path) {
 /// Start Hugin's launcher, never waiting on it. Used by the menu and by Ctrl+Alt+H.
 pub fn open_hugin() {
     let local = std::env::var_os("LOCALAPPDATA");
-    match hugin_launcher(local.as_deref().map(Path::new), beside_exe("hugin-launch.exe"), |p| p.exists()) {
+    match hugin_launcher(local.as_deref().map(Path::new), beside_exe("hugin-launch.exe"), |p| {
+        p.exists()
+    }) {
         Some(p) => spawn_detached(&p),
         None => eprintln!("[vidar] cannot find hugin-launch.exe"),
     }
@@ -932,7 +956,10 @@ mod tests {
         let e = picker_entries(None, "vl:8b");
         assert_eq!(e.len(), 2);
         assert_eq!((e[0].label.as_str(), e[0].checked, e[0].enabled), ("vl:8b", true, true));
-        assert_eq!((e[1].label.as_str(), e[1].checked, e[1].enabled), (PICKER_HINT, false, false));
+        assert_eq!(
+            (e[1].label.as_str(), e[1].checked, e[1].enabled),
+            (PICKER_HINT, false, false)
+        );
     }
 
     #[test]
@@ -983,7 +1010,10 @@ mod tests {
         let local = Path::new(r"C:\L");
         let beside = Some(PathBuf::from(r"C:\app\hugin-launch.exe"));
         let installed = PathBuf::from(r"C:\L\bifrost\bin\hugin-launch.exe");
-        assert_eq!(hugin_launcher(Some(local), beside.clone(), |p| p == installed), Some(installed.clone()));
+        assert_eq!(
+            hugin_launcher(Some(local), beside.clone(), |p| p == installed),
+            Some(installed.clone())
+        );
         assert_eq!(hugin_launcher(Some(local), beside.clone(), |_| false), beside);
         assert_eq!(hugin_launcher(None, beside.clone(), |_| true), beside);
     }

@@ -36,7 +36,12 @@ use bifrost_core::{check, claude, config, edit, instructions, ollama, store, vra
 /// arrives all at once instead of streaming. The `Result` carries success or
 /// failure; the tokens come through here.
 #[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "event", content = "data")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "event",
+    content = "data"
+)]
 enum StreamEvent {
     /// Ollama was not running, so this request is paying to start it.
     StartingOllama,
@@ -90,11 +95,7 @@ async fn start_ollama(on_event: Option<&Channel<StreamEvent>>) -> Result<(), Str
 /// context fills. That keeps the trimming visible in one place instead of split
 /// across two.
 #[tauri::command]
-async fn send(
-    messages: Vec<Message>,
-    model: Option<String>,
-    on_event: Channel<StreamEvent>,
-) -> Result<(), String> {
+async fn send(messages: Vec<Message>, model: Option<String>, on_event: Channel<StreamEvent>) -> Result<(), String> {
     let id = next_stop();
 
     // Every bifrost_core call goes off the async worker. It is blocking by design,
@@ -113,9 +114,7 @@ async fn send(
     // not have expired yet.
     let tag = model.clone();
     let resident = tauri::async_runtime::spawn_blocking(move || {
-        ollama::ps()
-            .map(|m| ollama::find(&m, &tag).is_some())
-            .unwrap_or(false)
+        ollama::ps().map(|m| ollama::find(&m, &tag).is_some()).unwrap_or(false)
     })
     .await
     .unwrap_or(false);
@@ -290,17 +289,18 @@ async fn models() -> Result<Vec<ModelInfo>, String> {
                     roles.push("Hugin".to_string());
                 }
                 let best_at: Vec<String> = ollama::best_at(&m.name).into_iter().map(String::from).collect();
-                let custom_tags = cfg.tags_for(&m.name).into_iter().filter(|t| !best_at.contains(t)).collect();
+                let custom_tags = cfg
+                    .tags_for(&m.name)
+                    .into_iter()
+                    .filter(|t| !best_at.contains(t))
+                    .collect();
                 ModelInfo {
                     best_at,
                     custom_tags,
                     roles,
                     is_current: m.name == cfg.model,
                     is_resident: resident.is_some(),
-                    resident_mib: resident
-                        .and_then(|r| r.size_vram)
-                        .map(|b| b / 1_048_576)
-                        .unwrap_or(0),
+                    resident_mib: resident.and_then(|r| r.size_vram).map(|b| b / 1_048_576).unwrap_or(0),
                     capabilities: detail.as_ref().map(|d| d.capabilities.clone()).unwrap_or_default(),
                     max_context: detail.as_ref().and_then(|d| d.max_context),
                     name: m.name,
@@ -394,13 +394,21 @@ fn offer_for(cfg: &config::Config, installed: &[String]) -> Option<ModelOffer> {
         && !same_tag(&cfg.model, &cfg.coding_model)
         && has(&cfg.coding_model)
     {
-        return Some(ModelOffer { kind: "coding", from: cfg.model.clone(), to: cfg.coding_model.clone() });
+        return Some(ModelOffer {
+            kind: "coding",
+            from: cfg.model.clone(),
+            to: cfg.coding_model.clone(),
+        });
     }
 
     if cfg.workspace.is_none() && !cfg.coding_model.is_empty() && same_tag(&cfg.model, &cfg.coding_model) {
         if let Some(prev) = cfg.model_before_coding.as_ref() {
             if !same_tag(prev, &cfg.coding_model) && has(prev) {
-                return Some(ModelOffer { kind: "back", from: cfg.model.clone(), to: prev.clone() });
+                return Some(ModelOffer {
+                    kind: "back",
+                    from: cfg.model.clone(),
+                    to: prev.clone(),
+                });
             }
         }
     }
@@ -418,7 +426,10 @@ async fn model_offer() -> Result<Option<ModelOffer>, String> {
         let cfg = config::load();
         // Nothing could be offered even if every model were installed: leave
         // Ollama alone.
-        let assumed = [cfg.coding_model.clone(), cfg.model_before_coding.clone().unwrap_or_default()];
+        let assumed = [
+            cfg.coding_model.clone(),
+            cfg.model_before_coding.clone().unwrap_or_default(),
+        ];
         if offer_for(&cfg, &assumed).is_none() {
             return Ok(None);
         }
@@ -473,7 +484,10 @@ async fn accept_model_offer(kind: String) -> Result<f64, String> {
 
         let _ = ollama::unload(&offer.from);
         ollama::load(&offer.to, num_ctx).map(|d| d.as_secs_f64()).map_err(|e| {
-            format!("Switched to {}, but loading it failed: {e}. It will load with the next question.", offer.to)
+            format!(
+                "Switched to {}, but loading it failed: {e}. It will load with the next question.",
+                offer.to
+            )
         })
     })
     .await
@@ -546,7 +560,10 @@ async fn save_conversation(conversation: store::Conversation) -> Result<store::C
     tauri::async_runtime::spawn_blocking(move || {
         let mut c = conversation;
         if c.id.is_empty() {
-            c = store::Conversation { id: store::Conversation::new().id, ..c };
+            c = store::Conversation {
+                id: store::Conversation::new().id,
+                ..c
+            };
         }
 
         // **Merge, never overwrite blindly.** The caller sends the messages it
@@ -594,15 +611,29 @@ async fn delete_conversation(id: String) -> Result<bool, String> {
 /// things. Sent through a `Channel` like [`StreamEvent`], and applied by the
 /// window strictly one after another.
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "event", content = "data")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "event",
+    content = "data"
+)]
 enum TurnEvent {
     /// What the turn is waiting for, such as `Starting Ollama…`; empty clears it.
     Status { text: String },
     /// What a round cost: the meter, the calibration the next turn starts from, and
     /// how many old results were set aside to fit **this** round.
-    Round { prompt_eval_count: u32, prompt_chars: u64, set_aside: usize, fits: bool },
+    Round {
+        prompt_eval_count: u32,
+        prompt_chars: u64,
+        set_aside: usize,
+        fits: bool,
+    },
     /// The model's words.
-    Answer { content: String, prompt_eval_count: u32, eval_count: u32 },
+    Answer {
+        content: String,
+        prompt_eval_count: u32,
+        eval_count: u32,
+    },
     /// Something to tell the person: why the turn stopped, or the bound it hit.
     Error { text: String },
     /// A tool card to show. `id` is how `Update` and [`decide`] name it.
@@ -622,8 +653,7 @@ enum TurnEvent {
 /// The card a tool turn is waiting on, and where to send what the person decides.
 /// One for the whole process, like the ticket it guards: a turn waits on one card
 /// at a time.
-static WAITING: std::sync::Mutex<Option<(usize, std::sync::mpsc::Sender<Decision>)>> =
-    std::sync::Mutex::new(None);
+static WAITING: std::sync::Mutex<Option<(usize, std::sync::mpsc::Sender<Decision>)>> = std::sync::Mutex::new(None);
 
 /// Card ids, for the whole process rather than per turn, so a click on a card from
 /// an earlier turn can never answer a new one.
@@ -670,16 +700,25 @@ impl Frontend for Webview {
     }
 
     fn answer(&mut self, content: &str, prompt_eval_count: u32, eval_count: u32) {
-        let _ = self.events.send(TurnEvent::Answer { content: content.to_string(), prompt_eval_count, eval_count });
+        let _ = self.events.send(TurnEvent::Answer {
+            content: content.to_string(),
+            prompt_eval_count,
+            eval_count,
+        });
     }
 
     fn error(&mut self, message: &str) {
-        let _ = self.events.send(TurnEvent::Error { text: message.to_string() });
+        let _ = self.events.send(TurnEvent::Error {
+            text: message.to_string(),
+        });
     }
 
     fn card(&mut self, card: Card) -> usize {
         let id = CARD_IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let _ = self.events.send(TurnEvent::Card { id, card: Box::new(card) });
+        let _ = self.events.send(TurnEvent::Card {
+            id,
+            card: Box::new(card),
+        });
         id
     }
 
@@ -728,7 +767,12 @@ async fn run_turn(
     // Taken before anything is awaited, so a Stop pressed at once still reaches it.
     let stop = next_stop();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut window = Webview { events: on_event, stop, page, request };
+        let mut window = Webview {
+            events: on_event,
+            stop,
+            page,
+            request,
+        };
         let mut convo = messages;
         let done = turn::run_turn(&mut convo, model.as_deref(), calibration, &mut window);
         let _ = window.events.send(TurnEvent::End);
@@ -777,7 +821,9 @@ const MAX_TURN_UNDO: usize = 64;
 #[tauri::command]
 async fn undo_turn(ids: Vec<String>) -> Result<edit::TurnUndo, String> {
     if ids.len() > MAX_TURN_UNDO {
-        return Err(format!("a turn of more than {MAX_TURN_UNDO} edits cannot be undone at once"));
+        return Err(format!(
+            "a turn of more than {MAX_TURN_UNDO} edits cannot be undone at once"
+        ));
     }
     tauri::async_runtime::spawn_blocking(move || {
         let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
@@ -817,8 +863,17 @@ fn folder(ws: &edit::Workspace, cfg: &config::Config) -> Folder {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.clone());
     let check = cfg.check_for(&path).map(|argv| check::label(argv));
-    let notes = instructions::find(ws).map(|n| NotesView { on: cfg.instructions_for(&path), name: n.name, cut: n.cut });
-    Folder { path, name, check, notes }
+    let notes = instructions::find(ws).map(|n| NotesView {
+        on: cfg.instructions_for(&path),
+        name: n.name,
+        cut: n.cut,
+    });
+    Folder {
+        path,
+        name,
+        check,
+        notes,
+    }
 }
 
 /// The folder edits are confined to, or `None` when editing is off.
@@ -843,14 +898,19 @@ async fn choose_project_folder(app: tauri::AppHandle) -> Result<Option<Folder>, 
     use tauri_plugin_dialog::DialogExt;
 
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog().file().set_title("Choose the folder Mimir may edit").blocking_pick_folder()
+        app.dialog()
+            .file()
+            .set_title("Choose the folder Mimir may edit")
+            .blocking_pick_folder()
     })
     .await
     .map_err(|e| format!("the folder picker failed: {e}"))?;
     let Some(picked) = picked else {
         return Ok(None);
     };
-    let dir = picked.into_path().map_err(|e| format!("that is not a folder on this machine: {e}"))?;
+    let dir = picked
+        .into_path()
+        .map_err(|e| format!("that is not a folder on this machine: {e}"))?;
 
     tauri::async_runtime::spawn_blocking(move || {
         let ws = edit::Workspace::open(&dir)?;
@@ -1015,11 +1075,9 @@ async fn set_notes(on: bool) -> Result<Folder, String> {
 /// Turn editing off. Reads keep working, one approved file at a time.
 #[tauri::command]
 async fn clear_project_folder() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        config::update(|cfg| cfg.workspace = None)
-    })
-    .await
-    .map_err(|e| format!("clearing the project folder failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(|| config::update(|cfg| cfg.workspace = None))
+        .await
+        .map_err(|e| format!("clearing the project folder failed: {e}"))?
 }
 
 // ── Check with Claude ───────────────────────────────────────────────────────
@@ -1044,7 +1102,10 @@ async fn claude_status(probe: bool) -> Result<ClaudeStatus, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let cfg = config::load();
         let command = (probe && cfg.claude_checks).then(|| claude::status(cfg.claude_command.as_deref()));
-        ClaudeStatus { checks: cfg.claude_checks, command }
+        ClaudeStatus {
+            checks: cfg.claude_checks,
+            command,
+        }
     })
     .await
     .map_err(|e| format!("reading the Claude status failed: {e}"))
@@ -1075,7 +1136,9 @@ struct ClaudePreview {
 /// is built here for the preview and again at send time, from the same function.
 fn prepare_claude(question: &str, ids: &[String]) -> Result<claude::Prepared, String> {
     if ids.len() > MAX_TURN_UNDO {
-        return Err(format!("a turn of more than {MAX_TURN_UNDO} edits cannot be checked at once"));
+        return Err(format!(
+            "a turn of more than {MAX_TURN_UNDO} edits cannot be checked at once"
+        ));
     }
     let backups = edit::backups_dir().ok_or("APPDATA is not set")?;
     let _edits = edits_lock();
@@ -1087,7 +1150,12 @@ fn prepare_claude(question: &str, ids: &[String]) -> Result<claude::Prepared, St
 async fn claude_preview(question: String, undo_ids: Vec<String>) -> Result<ClaudePreview, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let p = prepare_claude(&question, &undo_ids)?;
-        Ok(ClaudePreview { files: p.files, bytes: p.bytes, question_cut: p.question_cut, hash: p.hash })
+        Ok(ClaudePreview {
+            files: p.files,
+            bytes: p.bytes,
+            question_cut: p.question_cut,
+            hash: p.hash,
+        })
     })
     .await
     .map_err(|e| format!("building the preview failed: {e}"))?
@@ -1186,11 +1254,9 @@ async fn put_attachment(data: String, ext: String) -> Result<String, String> {
 /// Read a stored attachment back as base64, for redisplay and for re-sending.
 #[tauri::command]
 async fn get_attachment(name: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        store::get_attachment(&name).map(|b| BASE64_STANDARD.encode(b))
-    })
-    .await
-    .map_err(|e| format!("reading the attachment failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || store::get_attachment(&name).map(|b| BASE64_STANDARD.encode(b)))
+        .await
+        .map_err(|e| format!("reading the attachment failed: {e}"))?
 }
 
 // ── appearance ──────────────────────────────────────────────────────────────
@@ -1256,11 +1322,7 @@ fn redirect_log_to_file() -> Option<std::path::PathBuf> {
     use windows::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
 
     let path = std::env::temp_dir().join("mimir.log");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok()?;
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(&path).ok()?;
 
     let handle = HANDLE(file.as_raw_handle());
     // SAFETY: a valid handle to a file this process just opened.
@@ -1396,7 +1458,10 @@ mod tests {
         assert!(claude_request_stopped("page-c", 2) && claude_request_stopped("page-c", 1));
         assert!(!claude_request_stopped("page-c", 3) && !claude_request_stopped("page-d", 2));
         stop_all();
-        assert!(!claude_request_stopped("page-c", 3), "a turn's Stop does not stop a check");
+        assert!(
+            !claude_request_stopped("page-c", 3),
+            "a turn's Stop does not stop a check"
+        );
         let n = next_stop();
         claude_name_stopped("page-c".into(), 3);
         assert!(!stopped(n), "a check's Stop does not stop a turn");
@@ -1409,7 +1474,11 @@ mod tests {
     const CODER: &str = config::DEFAULT_CODING_MODEL;
 
     fn cfg_with_folder() -> config::Config {
-        config::Config { model: VISION.into(), workspace: Some(r"C:\work\demo".into()), ..Default::default() }
+        config::Config {
+            model: VISION.into(),
+            workspace: Some(r"C:\work\demo".into()),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1417,7 +1486,11 @@ mod tests {
         let cfg = cfg_with_folder();
         assert_eq!(
             offer_for(&cfg, &[VISION.into(), CODER.into()]),
-            Some(ModelOffer { kind: "coding", from: VISION.into(), to: CODER.into() })
+            Some(ModelOffer {
+                kind: "coding",
+                from: VISION.into(),
+                to: CODER.into()
+            })
         );
     }
 
@@ -1443,24 +1516,38 @@ mod tests {
 
     #[test]
     fn clearing_the_folder_while_on_the_coder_offers_to_switch_back() {
-        let cfg =
-            config::Config { model: CODER.into(), model_before_coding: Some(VISION.into()), ..Default::default() };
+        let cfg = config::Config {
+            model: CODER.into(),
+            model_before_coding: Some(VISION.into()),
+            ..Default::default()
+        };
         assert_eq!(
             offer_for(&cfg, &[VISION.into(), CODER.into()]),
-            Some(ModelOffer { kind: "back", from: CODER.into(), to: VISION.into() })
+            Some(ModelOffer {
+                kind: "back",
+                from: CODER.into(),
+                to: VISION.into()
+            })
         );
     }
 
     #[test]
     fn no_switch_back_when_the_previous_model_is_gone() {
-        let cfg =
-            config::Config { model: CODER.into(), model_before_coding: Some(VISION.into()), ..Default::default() };
+        let cfg = config::Config {
+            model: CODER.into(),
+            model_before_coding: Some(VISION.into()),
+            ..Default::default()
+        };
         assert_eq!(offer_for(&cfg, &[CODER.into()]), None);
     }
 
     #[test]
     fn no_switch_back_with_nothing_to_switch_back_to() {
-        let cfg = config::Config { model: CODER.into(), model_before_coding: None, ..Default::default() };
+        let cfg = config::Config {
+            model: CODER.into(),
+            model_before_coding: None,
+            ..Default::default()
+        };
         assert_eq!(offer_for(&cfg, &[VISION.into(), CODER.into()]), None);
     }
 

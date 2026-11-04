@@ -36,7 +36,15 @@ pub struct Fe<'a> {
 
 impl<'a> Fe<'a> {
     pub fn new(ui: &'a mut dyn Ui, stopper: &'a Stopper, shell: Shell, allowed: &'a mut HashSet<String>) -> Self {
-        Self { ui, stopper, shell, allowed, cards: Vec::new(), calibration: None, answer: None }
+        Self {
+            ui,
+            stopper,
+            shell,
+            allowed,
+            cards: Vec::new(),
+            calibration: None,
+            answer: None,
+        }
     }
 
     /// The card's line, or the task list for `update_plan`.
@@ -104,7 +112,10 @@ impl Frontend for Fe<'_> {
         if patch.undo.is_some() {
             shown.undo = patch.undo;
         }
-        if matches!(shown.state, CardState::Ran | CardState::Failed | CardState::Denied | CardState::Stopped) {
+        if matches!(
+            shown.state,
+            CardState::Ran | CardState::Failed | CardState::Denied | CardState::Stopped
+        ) {
             self.show(card);
         }
     }

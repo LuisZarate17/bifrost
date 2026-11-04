@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use super::env::Env;
 use super::stop::stopped;
-use super::ticket::{plan_name, redeem, Find, Payload};
+use super::ticket::{Find, Payload, plan_name, redeem};
 use crate::{check, edit, search, tools};
 
 /// What running an approved call produced.
@@ -43,7 +43,13 @@ impl Ran {
     /// itself begins that way is given a header so it does not.
     pub fn text(result: String) -> Self {
         let ok = !result.trim_start().starts_with("error:");
-        Self { result, ok, stopped: false, undo: None, check: None }
+        Self {
+            result,
+            ok,
+            stopped: false,
+            undo: None,
+            check: None,
+        }
     }
 }
 
@@ -69,7 +75,10 @@ pub fn run_find(root: &str, find: &Find, stop: u64) -> Ran {
         Find::Search { text, pattern } => search::search(&ws, text, pattern.as_deref(), || stopped(stop)),
     };
     match found {
-        Ok(text) => Ran { stopped: stopped(stop), ..Ran::text(text) },
+        Ok(text) => Ran {
+            stopped: stopped(stop),
+            ..Ran::text(text)
+        },
         Err(e) => Ran::text(format!("error: {e}")),
     }
 }
@@ -91,14 +100,29 @@ pub fn run_auto(
         }
         tools::Auto::List { pattern } => {
             let shown = search::describe_list(pattern.as_deref());
-            Some(("list_files", shown, None, run_find(&ws.root_display(), &Find::List { pattern }, stop)))
+            Some((
+                "list_files",
+                shown,
+                None,
+                run_find(&ws.root_display(), &Find::List { pattern }, stop),
+            ))
         }
         tools::Auto::Search { text, pattern } => {
             let shown = search::describe_search(&text, pattern.as_deref());
-            Some(("search", shown, None, run_find(&ws.root_display(), &Find::Search { text, pattern }, stop)))
+            Some((
+                "search",
+                shown,
+                None,
+                run_find(&ws.root_display(), &Find::Search { text, pattern }, stop),
+            ))
         }
         // Answered by the caller before it gets here: it needs no folder.
-        tools::Auto::Plan { steps } => Some(("update_plan", String::new(), None, Ran::text(tools::plan_message(&steps)))),
+        tools::Auto::Plan { steps } => Some((
+            "update_plan",
+            String::new(),
+            None,
+            Ran::text(tools::plan_message(&steps)),
+        )),
     }
 }
 
@@ -132,14 +156,21 @@ pub fn run_approved_in(name: &str, path: &str, token: &str, env: &Env) -> Result
             if plan_name(&plan) != name {
                 return Err(format!("this approval was for {}, not {name}", plan_name(&plan)));
             }
-            let backups = env.backups.clone().or_else(edit::backups_dir).ok_or("APPDATA is not set")?;
+            let backups = env
+                .backups
+                .clone()
+                .or_else(edit::backups_dir)
+                .ok_or("APPDATA is not set")?;
             let _edits = edits_lock();
             // A file changed since the diff was shown is refused, not written:
             // the model is told, and can read it again.
             Ok(match edit::apply(&plan, &backups) {
                 Ok(done) => {
                     let said = tools::applied_message(&done);
-                    Ran { undo: Some(done.id), ..Ran::text(said) }
+                    Ran {
+                        undo: Some(done.id),
+                        ..Ran::text(said)
+                    }
                 }
                 Err(e) => Ran::text(format!("error: {e}")),
             })
@@ -155,18 +186,30 @@ pub fn run_approved_in(name: &str, path: &str, token: &str, env: &Env) -> Result
                 });
             }
             let root = std::path::PathBuf::from(root);
-            Ok(match check::run(&root, &argv, check::timeout_for(&argv), &env.check_env, || stopped(stop)) {
-                Ok(o) => Ran {
-                    result: check::for_model(&argv, &o),
-                    ok: o.passed(),
-                    stopped: o.ended == check::Ended::Stopped,
-                    undo: None,
-                    check: Some(o),
+            Ok(
+                match check::run(&root, &argv, check::timeout_for(&argv), &env.check_env, || {
+                    stopped(stop)
+                }) {
+                    Ok(o) => Ran {
+                        result: check::for_model(&argv, &o),
+                        ok: o.passed(),
+                        stopped: o.ended == check::Ended::Stopped,
+                        undo: None,
+                        check: Some(o),
+                    },
+                    Err(e) => Ran::text(format!("error: {e}")),
                 },
-                Err(e) => Ran::text(format!("error: {e}")),
-            })
+            )
         }
-        ("run_command", Some(Payload::Command { root, shell, command, stop })) => {
+        (
+            "run_command",
+            Some(Payload::Command {
+                root,
+                shell,
+                command,
+                stop,
+            }),
+        ) => {
             if stopped(stop) {
                 return Ok(Ran {
                     result: format!("`{command}` was stopped by the user before it ran."),
@@ -177,16 +220,20 @@ pub fn run_approved_in(name: &str, path: &str, token: &str, env: &Env) -> Result
                 });
             }
             let root = std::path::PathBuf::from(root);
-            Ok(match check::run_shell(&root, shell, &command, env.command_timeout, &env.check_env, || stopped(stop)) {
-                Ok(o) => Ran {
-                    result: check::for_command(shell, &command, &o),
-                    ok: o.passed(),
-                    stopped: o.ended == check::Ended::Stopped,
-                    undo: None,
-                    check: Some(o),
+            Ok(
+                match check::run_shell(&root, shell, &command, env.command_timeout, &env.check_env, || {
+                    stopped(stop)
+                }) {
+                    Ok(o) => Ran {
+                        result: check::for_command(shell, &command, &o),
+                        ok: o.passed(),
+                        stopped: o.ended == check::Ended::Stopped,
+                        undo: None,
+                        check: Some(o),
+                    },
+                    Err(e) => Ran::text(format!("error: {e}")),
                 },
-                Err(e) => Ran::text(format!("error: {e}")),
-            })
+            )
         }
         ("list_files" | "search", Some(Payload::Find { root, find, stop })) => Ok(run_find(&root, &find, stop)),
         (other, _) => Err(format!("no such tool: {other}")),
@@ -211,7 +258,7 @@ pub fn edits_lock() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::stop::{next_stop, STREAMS_STOPPED};
+    use crate::agent::stop::{STREAMS_STOPPED, next_stop};
     use std::sync::atomic::Ordering;
 
     /// The lock is what keeps two writers off one file, so a second taker must
@@ -220,7 +267,10 @@ mod tests {
     fn the_edits_lock_is_exclusive_and_survives_a_panicking_holder() {
         {
             let _held = edits_lock();
-            assert!(EDITS.try_lock().is_err(), "a second writer got in while the lock was held");
+            assert!(
+                EDITS.try_lock().is_err(),
+                "a second writer got in while the lock was held"
+            );
         }
         let _ = std::thread::spawn(|| {
             let _held = edits_lock();
@@ -256,12 +306,26 @@ mod tests {
         let root = edit::Workspace::open(&dir).unwrap().root_display();
         let stop = next_stop();
         STREAMS_STOPPED.fetch_max(stop, Ordering::SeqCst);
-        let ran = run_find(&root, &Find::Search { text: "needle".into(), pattern: None }, stop);
+        let ran = run_find(
+            &root,
+            &Find::Search {
+                text: "needle".into(),
+                pattern: None,
+            },
+            stop,
+        );
         assert!(ran.stopped);
         assert!(!ran.result.contains("a.txt:1"), "{}", ran.result);
         assert!(ran.result.contains("stopped"), "{}", ran.result);
         // And a number taken after the Stop is not caught by it.
-        let later = run_find(&root, &Find::Search { text: "needle".into(), pattern: None }, next_stop());
+        let later = run_find(
+            &root,
+            &Find::Search {
+                text: "needle".into(),
+                pattern: None,
+            },
+            next_stop(),
+        );
         assert!(!later.stopped && later.result.contains("a.txt:1"), "{}", later.result);
         let _ = std::fs::remove_dir_all(dir);
     }

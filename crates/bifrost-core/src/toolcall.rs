@@ -191,7 +191,10 @@ fn from_value(v: &Value) -> Option<ToolCall> {
         Some(a) => a.clone(),
         None => Value::Object(Map::new()),
     };
-    Some(ToolCall { id: None, function: FunctionCall { name, arguments } })
+    Some(ToolCall {
+        id: None,
+        function: FunctionCall { name, arguments },
+    })
 }
 
 /// The tool's argument names, from its JSON schema.
@@ -279,7 +282,9 @@ fn find_bare_key(s: &str, key: &str, from: usize) -> Option<(usize, Value)> {
 /// The arguments the schema types as numbers — the only ones [`repair`] will
 /// read without quotes.
 fn numeric_names<'a>(tools: &'a [Tool], name: &str) -> Vec<&'a str> {
-    let Some(tool) = tools.iter().find(|t| t.function.name == name) else { return Vec::new() };
+    let Some(tool) = tools.iter().find(|t| t.function.name == name) else {
+        return Vec::new();
+    };
     let Some(props) = tool.function.parameters.get("properties").and_then(Value::as_object) else {
         return Vec::new();
     };
@@ -335,12 +340,18 @@ fn repair(block: &str, tools: &[Tool]) -> Result<ToolCall, String> {
     };
 
     let (_, name_start) = find_key(block, "name", 0).ok_or_else(|| fail("no tool name"))?;
-    let name_end = block[name_start..].find('"').ok_or_else(|| fail("unterminated tool name"))? + name_start;
+    let name_end = block[name_start..]
+        .find('"')
+        .ok_or_else(|| fail("unterminated tool name"))?
+        + name_start;
     let name = block[name_start..name_end].to_string();
     let keys = arg_names(tools, &name).ok_or_else(|| fail(&format!("no such tool: {name}")))?;
 
     let args_at = block.find("\"arguments\"").ok_or_else(|| fail("no arguments"))?;
-    let brace = block[args_at..].find('{').ok_or_else(|| fail("arguments are not an object"))? + args_at;
+    let brace = block[args_at..]
+        .find('{')
+        .ok_or_else(|| fail("arguments are not an object"))?
+        + args_at;
 
     // Every argument we can find, in the order it appears. A string argument is
     // anchored on its quote; one the schema types as a number may instead be a
@@ -418,7 +429,13 @@ fn repair(block: &str, tools: &[Tool]) -> Result<ToolCall, String> {
         );
     }
 
-    Ok(ToolCall { id: None, function: FunctionCall { name, arguments: Value::Object(args) } })
+    Ok(ToolCall {
+        id: None,
+        function: FunctionCall {
+            name,
+            arguments: Value::Object(args),
+        },
+    })
 }
 
 #[cfg(test)]
@@ -532,12 +549,22 @@ mod tests {
     #[test]
     fn garbage_is_reported_rather_than_guessed() {
         assert!(parse_call("not a call at all", &tools()).is_err());
-        assert!(parse_call(r#"{"name": "edit_file", "arguments": {"path": "a", "old_text": "x""#, &tools()).is_err());
+        assert!(
+            parse_call(
+                r#"{"name": "edit_file", "arguments": {"path": "a", "old_text": "x""#,
+                &tools()
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn arguments_sent_as_a_string_of_json_are_unwrapped() {
-        let c = parse_call(r#"{"name": "read_file", "arguments": "{\"path\": \"a.rs\"}"}"#, &tools()).unwrap();
+        let c = parse_call(
+            r#"{"name": "read_file", "arguments": "{\"path\": \"a.rs\"}"}"#,
+            &tools(),
+        )
+        .unwrap();
         assert_eq!(arg(&c, "path"), "a.rs");
     }
 
@@ -553,7 +580,10 @@ mod tests {
     #[test]
     fn a_reply_without_calls_is_just_text() {
         let (text, calls, failures) = extract_calls("The port is 8080.", &tools());
-        assert_eq!((text.as_str(), calls.len(), failures.len()), ("The port is 8080.", 0, 0));
+        assert_eq!(
+            (text.as_str(), calls.len(), failures.len()),
+            ("The port is 8080.", 0, 0)
+        );
     }
 
     #[test]
@@ -565,8 +595,10 @@ mod tests {
 
     #[test]
     fn a_call_cut_off_before_its_closing_tag_is_still_read() {
-        let (_, calls, _) =
-            extract_calls("<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a\"}}", &tools());
+        let (_, calls, _) = extract_calls(
+            "<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"a\"}}",
+            &tools(),
+        );
         assert_eq!(calls.len(), 1);
     }
 
@@ -577,7 +609,10 @@ mod tests {
             images: None,
             tool_calls: Some(vec![ToolCall {
                 id: None,
-                function: FunctionCall { name: "read_file".into(), arguments: json!({ "path": path }) },
+                function: FunctionCall {
+                    name: "read_file".into(),
+                    arguments: json!({ "path": path }),
+                },
             }]),
             tool_name: None,
             thinking: None,
@@ -631,7 +666,10 @@ mod tests {
 
     #[test]
     fn spaced_json_matches_how_the_template_writes_it() {
-        assert_eq!(spaced(&json!({ "a": 1, "b": [true, null], "c": { "d": "e" } })), r#"{"a": 1, "b": [true, null], "c": {"d": "e"}}"#);
+        assert_eq!(
+            spaced(&json!({ "a": 1, "b": [true, null], "c": { "d": "e" } })),
+            r#"{"a": 1, "b": [true, null], "c": {"d": "e"}}"#
+        );
         assert_eq!(spaced(&json!("q\"uote")), r#""q\"uote""#);
     }
 }

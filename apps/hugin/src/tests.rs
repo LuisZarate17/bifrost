@@ -84,7 +84,10 @@ impl Write for Tap {
             let next = self.prompts.pop_front().unwrap_or_else(|| "/exit".into());
             let _ = self.tx.send(format!("{next}\n"));
         } else if text.ends_with("approve? [y/n/a] ") {
-            let next = self.answers.pop_front().expect("an approval asked and no answer was scripted");
+            let next = self
+                .answers
+                .pop_front()
+                .expect("an approval asked and no answer was scripted");
             let _ = self.tx.send(format!("{next}\n"));
         }
         Ok(bytes.len())
@@ -104,7 +107,16 @@ fn tap(prompts: &[&str], answers: &[&str]) -> (Tap, Feed, Sender<String>, Arc<Mu
         answers: answers.iter().map(|s| s.to_string()).collect(),
         tx: tx.clone(),
     };
-    (out, Feed { rx, buf: Vec::new(), at: 0 }, tx, text)
+    (
+        out,
+        Feed {
+            rx,
+            buf: Vec::new(),
+            at: 0,
+        },
+        tx,
+        text,
+    )
 }
 
 // ── what the model says ─────────────────────────────────────────────────────
@@ -114,7 +126,15 @@ pub(crate) fn sent() -> Sent {
 }
 
 pub(crate) fn round_with(reply: Reply, prompt_eval_count: u32) -> Result<Round, String> {
-    Ok(Round { reply, prompt_eval_count, recovered: false, fed_back: false, thinking: None, metrics: Default::default(), sent: sent() })
+    Ok(Round {
+        reply,
+        prompt_eval_count,
+        recovered: false,
+        fed_back: false,
+        thinking: None,
+        metrics: Default::default(),
+        sent: sent(),
+    })
 }
 
 pub(crate) fn round_of(reply: Reply) -> Result<Round, String> {
@@ -122,11 +142,20 @@ pub(crate) fn round_of(reply: Reply) -> Result<Round, String> {
 }
 
 pub(crate) fn raw(name: &str, arguments: serde_json::Value) -> chat::ToolCall {
-    chat::ToolCall { id: None, function: chat::FunctionCall { name: name.into(), arguments } }
+    chat::ToolCall {
+        id: None,
+        function: chat::FunctionCall {
+            name: name.into(),
+            arguments,
+        },
+    }
 }
 
 pub(crate) fn answer(text: &str) -> Result<Round, String> {
-    round_of(Reply::Answer { content: text.into(), eval_count: 7 })
+    round_of(Reply::Answer {
+        content: text.into(),
+        eval_count: 7,
+    })
 }
 
 pub(crate) fn auto_search(result: &str) -> Result<Round, String> {
@@ -143,7 +172,13 @@ pub(crate) fn auto_search(result: &str) -> Result<Round, String> {
 }
 
 pub(crate) fn plan_update(steps: &[(&str, PlanStatus)]) -> Result<Round, String> {
-    let plan = steps.iter().map(|(t, s)| PlanStep { text: t.to_string(), status: *s }).collect();
+    let plan = steps
+        .iter()
+        .map(|(t, s)| PlanStep {
+            text: t.to_string(),
+            status: *s,
+        })
+        .collect();
     round_of(Reply::Auto {
         name: "update_plan".into(),
         path: String::new(),
@@ -157,18 +192,35 @@ pub(crate) fn plan_update(steps: &[(&str, PlanStatus)]) -> Result<Round, String>
 }
 
 pub(crate) fn dl(tag: &str, text: &str) -> DiffLine {
-    DiffLine { tag: tag.into(), text: text.into(), old: None, new: None }
+    DiffLine {
+        tag: tag.into(),
+        text: text.into(),
+        old: None,
+        new: None,
+    }
 }
 
 /// An edit of `a.rs` that replaces `old` with `new`, waiting for a decision.
 pub(crate) fn edit() -> Result<Round, String> {
-    let hunk = Hunk { lines: vec![dl(" ", "fn a() {"), dl("-", "    old();"), dl("+", "    new();"), dl(" ", "}")] };
+    let hunk = Hunk {
+        lines: vec![
+            dl(" ", "fn a() {"),
+            dl("-", "    old();"),
+            dl("+", "    new();"),
+            dl(" ", "}"),
+        ],
+    };
     round_of(Reply::Call {
         call: PendingCall {
             token: "t-a.rs".into(),
             name: "edit_file".into(),
             path: "a.rs".into(),
-            diff: Some(DiffView { hunks: vec![hunk], added: 1, removed: 1, create: false }),
+            diff: Some(DiffView {
+                hunks: vec![hunk],
+                added: 1,
+                removed: 1,
+                create: false,
+            }),
             range: None,
             changed_build_files: Vec::new(),
             to: None,
@@ -215,7 +267,13 @@ fn checked(code: i32) -> Result<Ran, String> {
         unfinished_tests: 0,
     };
     let result = format!("`cargo test` exited with code {code}.");
-    Ok(Ran { result, ok: outcome.passed(), stopped: false, undo: None, check: Some(outcome) })
+    Ok(Ran {
+        result,
+        ok: outcome.passed(),
+        stopped: false,
+        undo: None,
+        check: Some(outcome),
+    })
 }
 
 // ── the harness ─────────────────────────────────────────────────────────────
@@ -286,7 +344,14 @@ pub(crate) fn header() -> Event {
 
 /// Play a session to its end.
 fn play(script: Script) -> Played {
-    let Script { prompts, answers, asks, runs, mut during, notices } = script;
+    let Script {
+        prompts,
+        answers,
+        asks,
+        runs,
+        mut during,
+        notices,
+    } = script;
     let (out, input, tx, text) = tap(&prompts, &answers);
 
     let (asks, runs) = (RefCell::new(VecDeque::from(asks)), RefCell::new(VecDeque::from(runs)));
@@ -303,14 +368,18 @@ fn play(script: Script) -> Played {
                 asked.borrow_mut().push((closing, messages.len(), calibration));
                 during(n.get(), &tx);
                 n.set(n.get() + 1);
-                asks.borrow_mut().pop_front().expect("the loop asked the model more often than the script allows")
+                asks.borrow_mut()
+                    .pop_front()
+                    .expect("the loop asked the model more often than the script allows")
             }
         }),
         Box::new({
             let ran = ran.clone();
             move |name: &str, path: &str, token: &str| {
                 ran.borrow_mut().push(format!("{name}:{path}:{token}"));
-                runs.borrow_mut().pop_front().expect("the loop ran a call the script did not expect")
+                runs.borrow_mut()
+                    .pop_front()
+                    .expect("the loop ran a call the script did not expect")
             }
         }),
         Box::new({
@@ -330,11 +399,24 @@ fn play(script: Script) -> Played {
 
     let out = text.lock().unwrap().clone();
     let (asked, ran, saved) = (asked.borrow().clone(), ran.borrow().clone(), saved.borrow().clone());
-    Played { out, saved, asked, ran, convo: session.conversation().to_vec() }
+    Played {
+        out,
+        saved,
+        asked,
+        ran,
+        convo: session.conversation().to_vec(),
+    }
 }
 
 pub(crate) fn assistant(call: chat::ToolCall) -> Message {
-    Message { role: "assistant".into(), content: String::new(), images: None, tool_calls: Some(vec![call]), tool_name: None, thinking: None }
+    Message {
+        role: "assistant".into(),
+        content: String::new(),
+        images: None,
+        tool_calls: Some(vec![call]),
+        tool_name: None,
+        thinking: None,
+    }
 }
 
 // ── the tests ───────────────────────────────────────────────────────────────
@@ -346,12 +428,18 @@ fn an_answer_is_echoed_and_shown_after_the_header() {
     assert_eq!(p.asked, [(false, 1, None)]);
     // The answer is part of the conversation, so the next turn can see it.
     assert_eq!(p.convo.len(), 2);
-    assert_eq!((p.convo[1].role.as_str(), p.convo[1].content.as_str()), ("assistant", "hello"));
+    assert_eq!(
+        (p.convo[1].role.as_str(), p.convo[1].content.as_str()),
+        ("assistant", "hello")
+    );
 }
 
 #[test]
 fn an_automatic_search_is_one_line_with_its_first_line_of_result() {
-    let p = play(Script::new(&["find x"]).model(vec![auto_search("6 matches for \"x\" in 2 files:\nsrc/a.rs:3: x"), answer("Found it.")]));
+    let p = play(Script::new(&["find x"]).model(vec![
+        auto_search("6 matches for \"x\" in 2 files:\nsrc/a.rs:3: x"),
+        answer("Found it."),
+    ]));
     assert!(p.out.contains("● search \"x\" → 6 hits\n"), "{}", p.out);
     assert!(p.out.contains("Found it.\n"));
     assert!(p.ran.is_empty(), "an automatic call is not run again");
@@ -359,15 +447,28 @@ fn an_automatic_search_is_one_line_with_its_first_line_of_result() {
 
 #[test]
 fn the_task_list_is_shown_as_checkboxes() {
-    let steps = [("read it", PlanStatus::Done), ("change it", PlanStatus::Doing), ("check it", PlanStatus::Pending)];
+    let steps = [
+        ("read it", PlanStatus::Done),
+        ("change it", PlanStatus::Doing),
+        ("check it", PlanStatus::Pending),
+    ];
     let p = play(Script::new(&["go"]).model(vec![plan_update(&steps), answer("ok")]));
-    assert!(p.out.contains("[x] read it\n[ ] change it\n[ ] check it\n"), "{}", p.out);
+    assert!(
+        p.out.contains("[x] read it\n[ ] change it\n[ ] check it\n"),
+        "{}",
+        p.out
+    );
     assert!(!p.out.contains("update_plan"));
 }
 
 #[test]
 fn an_edit_approved_with_y_shows_its_diff_then_what_was_applied() {
-    let p = play(Script::new(&["fix it"]).answering(&["y"]).model(vec![edit(), answer("Done.")]).running(vec![edited()]));
+    let p = play(
+        Script::new(&["fix it"])
+            .answering(&["y"])
+            .model(vec![edit(), answer("Done.")])
+            .running(vec![edited()]),
+    );
     let want = "› fix it\n\
                 ? edit a.rs +1 −1\n\
                 \x20\x20 fn a() {\n\
@@ -384,13 +485,24 @@ fn an_edit_approved_with_y_shows_its_diff_then_what_was_applied() {
 
 #[test]
 fn an_edit_declined_with_n_is_declined_and_the_model_is_told() {
-    let p = play(Script::new(&["fix it"]).answering(&["n"]).model(vec![edit(), answer("Understood.")]));
-    assert!(p.out.contains("approve? [y/n/a] n\n● edit a.rs +1 −1 → declined\n"), "{}", p.out);
+    let p = play(
+        Script::new(&["fix it"])
+            .answering(&["n"])
+            .model(vec![edit(), answer("Understood.")]),
+    );
+    assert!(
+        p.out.contains("approve? [y/n/a] n\n● edit a.rs +1 −1 → declined\n"),
+        "{}",
+        p.out
+    );
     assert!(p.ran.is_empty());
     assert_eq!(p.convo[1], assistant(raw("edit_file", json!({ "path": "a.rs" }))));
     assert_eq!(
         p.convo[2],
-        Message::tool_result("edit_file", "The user declined this change to a.rs. Nothing was written.")
+        Message::tool_result(
+            "edit_file",
+            "The user declined this change to a.rs. Nothing was written."
+        )
     );
 }
 
@@ -400,28 +512,50 @@ fn a_model_that_says_done_after_a_failed_check_is_pushed_back_and_not_believed()
     // answer is taken, and the turn says plainly that the work is not done.
     let script = Script::new(&["fix it"])
         .answering(&["y"])
-        .model(vec![check_call(), answer("Done!"), answer("Really done!"), answer("Done, I swear."), answer("It still fails.")])
+        .model(vec![
+            check_call(),
+            answer("Done!"),
+            answer("Really done!"),
+            answer("Done, I swear."),
+            answer("It still fails."),
+        ])
         .running(vec![checked(101)]);
     let p = play(script);
     assert_eq!(p.asked.len(), 5, "the check and four answers");
-    assert!(p.out.contains("It still fails.\n✗ the check failed — not done\n"), "{}", p.out);
+    assert!(
+        p.out.contains("It still fails.\n✗ the check failed — not done\n"),
+        "{}",
+        p.out
+    );
     // The answers it was pushed back from were not shown as answers.
     for pushed in ["Done!", "Really done!", "Done, I swear."] {
         assert!(!p.out.contains(pushed), "{pushed} was shown: {}", p.out);
     }
     // They are in the conversation, each with the loop's reply, and the final answer after them.
-    let notes = p.convo.iter().filter(|m| m.role == "user" && m.content == bifrost_core::tools::CHECK_FAILED_NOTE).count();
+    let notes = p
+        .convo
+        .iter()
+        .filter(|m| m.role == "user" && m.content == bifrost_core::tools::CHECK_FAILED_NOTE)
+        .count();
     assert_eq!(notes, 3);
     assert_eq!(p.convo[3].content, "Done!");
     let last = p.convo.last().unwrap();
-    assert_eq!((last.role.as_str(), last.content.as_str()), ("assistant", "It still fails."));
+    assert_eq!(
+        (last.role.as_str(), last.content.as_str()),
+        ("assistant", "It still fails.")
+    );
 }
 
 #[test]
 fn a_failed_check_the_model_then_fixes_ends_the_turn_without_a_word_of_it() {
     let script = Script::new(&["fix it"])
         .answering(&["y", "y"])
-        .model(vec![check_call(), answer("Done!"), check_call(), answer("Fixed, and it passes.")])
+        .model(vec![
+            check_call(),
+            answer("Done!"),
+            check_call(),
+            answer("Fixed, and it passes."),
+        ])
         .running(vec![checked(101), checked(0)]);
     let p = play(script);
     assert_eq!(p.asked.len(), 4);
@@ -431,7 +565,12 @@ fn a_failed_check_the_model_then_fixes_ends_the_turn_without_a_word_of_it() {
 
 #[test]
 fn a_turn_whose_check_never_failed_says_nothing_about_one() {
-    let p = play(Script::new(&["fix it"]).answering(&["y"]).model(vec![check_call(), answer("All green.")]).running(vec![checked(0)]));
+    let p = play(
+        Script::new(&["fix it"])
+            .answering(&["y"])
+            .model(vec![check_call(), answer("All green.")])
+            .running(vec![checked(0)]),
+    );
     assert_eq!(p.asked.len(), 2);
     assert!(p.out.contains("All green.\n"), "{}", p.out);
     assert!(!p.out.contains('✗'), "{}", p.out);
@@ -439,7 +578,12 @@ fn a_turn_whose_check_never_failed_says_nothing_about_one() {
 
 #[test]
 fn a_runs_the_call_and_anything_else_asks_again() {
-    let p = play(Script::new(&["fix it"]).answering(&["maybe", "a"]).model(vec![edit(), answer("Done.")]).running(vec![edited()]));
+    let p = play(
+        Script::new(&["fix it"])
+            .answering(&["maybe", "a"])
+            .model(vec![edit(), answer("Done.")])
+            .running(vec![edited()]),
+    );
     assert_eq!(p.out.matches("approve? [y/n/a] ").count(), 2);
     assert!(p.out.contains("→ applied"));
     assert_eq!(p.ran.len(), 1);
@@ -450,7 +594,11 @@ fn a_allows_for_the_session_when_asked_directly() {
     let (out, input, _tx, _text) = tap(&[], &["yes", "a", "no"]);
     let stopper = crate::stop::Stopper::default();
     let mut ui = Line::new(out, line::feed(input, stopper.clone()), stopper, true);
-    let ask = Approval { name: "run_check".into(), target: "cargo check".into(), detail: vec!["cargo check".into()] };
+    let ask = Approval {
+        name: "run_check".into(),
+        target: "cargo check".into(),
+        detail: vec!["cargo check".into()],
+    };
     assert_eq!(ui.approve(&ask), bifrost_core::agent::turn::Decision::Allow);
     assert_eq!(ui.approve(&ask), bifrost_core::agent::turn::Decision::AllowForSession);
     assert_eq!(ui.approve(&ask), bifrost_core::agent::turn::Decision::Deny);
@@ -462,7 +610,12 @@ fn stop_at_an_approval_denies_it_and_ends_the_turn() {
     let p = play(Script::new(&["fix it"]).answering(&["/stop"]).model(vec![edit()]));
     // The reading thread takes `/stop` the moment it arrives, so the question is
     // answered by the flag, not by a line.
-    assert!(p.out.contains("approve? [y/n/a] \n● edit a.rs +1 −1 → declined\n· stopped\n"), "{}", p.out);
+    assert!(
+        p.out
+            .contains("approve? [y/n/a] \n● edit a.rs +1 −1 → declined\n· stopped\n"),
+        "{}",
+        p.out
+    );
     assert!(p.ran.is_empty());
     assert_eq!(p.asked.len(), 1);
 }
@@ -538,7 +691,10 @@ fn the_header_names_the_branch_only_inside_a_repository() {
         });
         shown.push(text.lock().unwrap().clone());
     }
-    assert_eq!(shown, ["hugin · demo · main, 0 changed · qwen\n", "hugin · demo · qwen\n"]);
+    assert_eq!(
+        shown,
+        ["hugin · demo · main, 0 changed · qwen\n", "hugin · demo · qwen\n"]
+    );
 }
 
 #[test]
@@ -560,15 +716,36 @@ fn the_session_is_saved_after_every_turn_as_hugins_with_its_title_from_the_first
     assert_eq!(first.app.as_deref(), Some("hugin"));
     assert_eq!(first.title, "Why is the build red?");
     assert_eq!(first.messages.len(), 2);
-    assert_eq!((first.id.as_str(), second.title.as_str()), (second.id.as_str(), "Why is the build red?"));
-    let roles: Vec<_> = second.messages.iter().map(|m| (m.role.as_str(), m.content.as_str())).collect();
-    assert_eq!(roles, [("user", "Why is the build red?"), ("assistant", "a"), ("user", "and now?"), ("assistant", "b")]);
+    assert_eq!(
+        (first.id.as_str(), second.title.as_str()),
+        (second.id.as_str(), "Why is the build red?")
+    );
+    let roles: Vec<_> = second
+        .messages
+        .iter()
+        .map(|m| (m.role.as_str(), m.content.as_str()))
+        .collect();
+    assert_eq!(
+        roles,
+        [
+            ("user", "Why is the build red?"),
+            ("assistant", "a"),
+            ("user", "and now?"),
+            ("assistant", "b")
+        ]
+    );
     assert_eq!(second.messages[3].model, "m");
 }
 
 #[test]
 fn calibration_from_one_turn_is_given_to_the_next() {
-    let measured = round_with(Reply::Answer { content: "a".into(), eval_count: 1 }, 500);
+    let measured = round_with(
+        Reply::Answer {
+            content: "a".into(),
+            eval_count: 1,
+        },
+        500,
+    );
     let p = play(Script::new(&["one", "two"]).model(vec![measured, answer("b")]));
     assert_eq!(p.asked[0].2, None);
     assert_eq!(p.asked[1].2, Some(Calibration::new(sent().prompt_chars(), 500)));
@@ -578,7 +755,9 @@ fn calibration_from_one_turn_is_given_to_the_next() {
 
 #[test]
 fn a_turn_that_fails_is_shown_and_the_session_goes_on() {
-    let p = play(Script::new(&["one", "two"]).model(vec![Err("POST /api/chat: connection refused".into()), answer("fine")]));
+    let p = play(
+        Script::new(&["one", "two"]).model(vec![Err("POST /api/chat: connection refused".into()), answer("fine")]),
+    );
     assert!(p.out.contains("! POST /api/chat: connection refused\n"), "{}", p.out);
     assert!(p.out.contains("› two\nfine\n"));
     assert_eq!(p.saved.len(), 2);
@@ -624,7 +803,13 @@ fn command(text: &str) -> Result<Round, String> {
 /// What running `text` came to, worded as `check::for_command` words it.
 fn command_ran(text: &str, how: &str) -> Result<Ran, String> {
     let result = format!("`{text}` {how}");
-    Ok(Ran { ok: how.starts_with("exited 0"), result, stopped: false, undo: None, check: None })
+    Ok(Ran {
+        ok: how.starts_with("exited 0"),
+        result,
+        stopped: false,
+        undo: None,
+        check: None,
+    })
 }
 
 #[test]
@@ -647,10 +832,16 @@ fn a_command_shows_every_line_then_one_line_of_how_it_ended() {
 
 #[test]
 fn a_command_that_fails_times_out_or_is_stopped_says_so() {
-    let ends = [("exited 1 (0.1 s).", "exited 1"), ("ran for 120 s, past its time limit, and was stopped.", "timed out")];
+    let ends = [
+        ("exited 1 (0.1 s).", "exited 1"),
+        ("ran for 120 s, past its time limit, and was stopped.", "timed out"),
+    ];
     for (how, line) in ends {
         let p = play(
-            Script::new(&["go"]).answering(&["y"]).model(vec![command("make"), answer("ok")]).running(vec![command_ran("make", how)]),
+            Script::new(&["go"])
+                .answering(&["y"])
+                .model(vec![command("make"), answer("ok")])
+                .running(vec![command_ran("make", how)]),
         );
         assert!(p.out.contains(&format!("● command make → {line}\n")), "{}", p.out);
     }
@@ -658,10 +849,17 @@ fn a_command_that_fails_times_out_or_is_stopped_says_so() {
 
 #[test]
 fn a_command_is_declined_with_n() {
-    let p = play(Script::new(&["go"]).answering(&["n"]).model(vec![command("make"), answer("ok")]));
+    let p = play(
+        Script::new(&["go"])
+            .answering(&["n"])
+            .model(vec![command("make"), answer("ok")]),
+    );
     assert!(p.out.contains("● command make → declined\n"), "{}", p.out);
     assert!(p.ran.is_empty());
-    assert_eq!(p.convo[2], Message::tool_result("run_command", "The user declined to run `make`. Nothing was run."));
+    assert_eq!(
+        p.convo[2],
+        Message::tool_result("run_command", "The user declined to run `make`. Nothing was run.")
+    );
 }
 
 /// **`a` allows that exact string for the session**: the same string again is run without a
@@ -679,14 +877,24 @@ fn a_allows_that_exact_command_for_the_session_and_nothing_else() {
             ]),
     );
     assert_eq!(p.out.matches("approve? [y/n/a] ").count(), 2, "{}", p.out);
-    assert_eq!(p.out.matches("? command (Windows PowerShell)\n  make\n  allowed for this session\n").count(), 1, "{}", p.out);
+    assert_eq!(
+        p.out
+            .matches("? command (Windows PowerShell)\n  make\n  allowed for this session\n")
+            .count(),
+        1,
+        "{}",
+        p.out
+    );
     assert_eq!(p.ran.len(), 3);
 }
 
 #[test]
 fn a_on_something_that_is_not_a_command_allows_that_one_call() {
     let p = play(
-        Script::new(&["go"]).answering(&["a", "y"]).model(vec![edit(), edit(), answer("ok")]).running(vec![edited(), edited()]),
+        Script::new(&["go"])
+            .answering(&["a", "y"])
+            .model(vec![edit(), edit(), answer("ok")])
+            .running(vec![edited(), edited()]),
     );
     assert_eq!(p.out.matches("approve? [y/n/a] ").count(), 2);
     assert!(!p.out.contains("allowed for this session"));

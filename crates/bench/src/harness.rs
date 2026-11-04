@@ -23,7 +23,12 @@ pub fn git(dir: Option<&Path>, args: &[&str]) -> Result<std::process::Output, St
 }
 
 pub fn first_line(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string()
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 /// A detached worktree at a commit, removed and pruned on drop unless `keep` is set.
@@ -43,7 +48,10 @@ impl Worktree {
         if !out.status.success() {
             return Err(format!("could not check out {treeish}: {}", first_line(&out.stderr)));
         }
-        Ok(Self { path: at.to_path_buf(), keep })
+        Ok(Self {
+            path: at.to_path_buf(),
+            keep,
+        })
     }
 
     /// Back to the commit: tracked files restored, files that are not tracked removed. Git-ignored
@@ -97,7 +105,8 @@ impl Sandbox {
             std::fs::create_dir_all(dir).map_err(|e| format!("could not make {}: {e}", dir.display()))?;
         }
         let config = appdata.join("bifrost").join("config.json");
-        std::fs::write(&config, sandbox_config(model, think)).map_err(|e| format!("could not write {}: {e}", config.display()))?;
+        std::fs::write(&config, sandbox_config(model, think))
+            .map_err(|e| format!("could not write {}: {e}", config.display()))?;
         let show = |p: &Path| p.to_string_lossy().into_owned();
         Ok(Self {
             local: local.clone(),
@@ -138,7 +147,11 @@ pub fn copy_hugin(target: &Path, scratch: &Path) -> Result<PathBuf, String> {
 /// is its `:latest`.
 pub fn model_installed(installed: &[String], model: &str) -> bool {
     let want = model.trim().to_ascii_lowercase();
-    let latest = if want.contains(':') { want.clone() } else { format!("{want}:latest") };
+    let latest = if want.contains(':') {
+        want.clone()
+    } else {
+        format!("{want}:latest")
+    };
     installed.iter().any(|n| {
         let n = n.to_ascii_lowercase();
         n == want || n == latest
@@ -150,10 +163,16 @@ pub fn require_installed(installed: &[String], model: &str) -> Result<(), String
     if model_installed(installed, model) {
         Ok(())
     } else {
-        Err(format!("{model} is not installed in Ollama (ollama pull {model}); installed: {}", installed.join(", ")))
+        Err(format!(
+            "{model} is not installed in Ollama (ollama pull {model}); installed: {}",
+            installed.join(", ")
+        ))
     }
 }
 
 pub fn unix_now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default()
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default()
 }

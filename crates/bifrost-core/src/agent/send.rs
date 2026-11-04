@@ -77,7 +77,9 @@ pub fn compact_for_send(
     let mut replacements = Vec::new();
     for &i in &plan.set_aside {
         // The call that produced a result sits just before it.
-        let call = i.checked_sub(1).and_then(|p| messages[p].tool_calls.as_deref()?.first().cloned());
+        let call = i
+            .checked_sub(1)
+            .and_then(|p| messages[p].tool_calls.as_deref()?.first().cloned());
         compact::set_aside(&mut messages[i], call.as_ref());
         replacements.push(messages[i].clone());
     }

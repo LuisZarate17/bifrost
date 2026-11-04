@@ -105,7 +105,13 @@ mod tests {
     #[test]
     fn the_default_is_the_app() {
         let env = Env::default();
-        assert!(env.options.is_none() && env.offered.is_none() && env.system.is_none() && env.identity.is_none() && env.backups.is_none());
+        assert!(
+            env.options.is_none()
+                && env.offered.is_none()
+                && env.system.is_none()
+                && env.identity.is_none()
+                && env.backups.is_none()
+        );
         assert!(env.recover && env.compact);
         assert!(env.check_env.is_empty());
         assert!(env.commands.is_none(), "Mimir must not offer run_command");

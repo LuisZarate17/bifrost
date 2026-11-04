@@ -112,7 +112,12 @@ impl Worker {
             }
         });
         let stopper = stop_rx.recv().unwrap_or_default();
-        Worker { prompts, events, stopper, handle }
+        Worker {
+            prompts,
+            events,
+            stopper,
+            handle,
+        }
     }
 }
 
@@ -142,7 +147,11 @@ pub struct Crossterm;
 
 impl Keys for Crossterm {
     fn next(&mut self, wait: Duration, _at: At) -> io::Result<Option<Term>> {
-        if crossterm::event::poll(wait)? { crossterm::event::read().map(Some) } else { Ok(None) }
+        if crossterm::event::poll(wait)? {
+            crossterm::event::read().map(Some)
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -151,10 +160,17 @@ impl Keys for Crossterm {
 enum Phase {
     Idle,
     /// A turn is running: what it waits for, since when.
-    Turn { what: String, since: Instant },
+    Turn {
+        what: String,
+        since: Instant,
+    },
     /// An approval on screen. `armed` is when it starts taking answers: keys typed
     /// before it showed, still on their way, must not answer something nobody has seen.
-    Approval { ask: Approval, reply: Sender<Decision>, armed: Instant },
+    Approval {
+        ask: Approval,
+        reply: Sender<Decision>,
+        armed: Instant,
+    },
 }
 
 /// How long an approval ignores y, n and a after it arrives. Long enough for keys typed
@@ -206,7 +222,10 @@ impl App {
     fn working(&mut self, what: &str) {
         let same = matches!(&self.phase, Phase::Turn { what: w, .. } if w == what);
         if !same {
-            self.phase = Phase::Turn { what: what.to_string(), since: Instant::now() };
+            self.phase = Phase::Turn {
+                what: what.to_string(),
+                since: Instant::now(),
+            };
         }
     }
 
@@ -237,7 +256,11 @@ impl App {
                 self.transcript.push(Said::Ask(ask.clone()));
                 // The card is at the end, and what it asks cannot be answered unseen.
                 self.scroll = 0;
-                self.phase = Phase::Approval { ask, reply, armed: Instant::now() + ARMING };
+                self.phase = Phase::Approval {
+                    ask,
+                    reply,
+                    armed: Instant::now() + ARMING,
+                };
             }
         }
     }
@@ -247,8 +270,15 @@ impl App {
         if let Phase::Approval { ask, reply, .. } = std::mem::replace(&mut self.phase, Phase::Idle) {
             let _ = reply.send(decision);
             let running = ask.name == "check" && decision != Decision::Deny;
-            let what = if running { format!("running {}", ask.target) } else { THINKING.to_string() };
-            self.phase = Phase::Turn { what, since: Instant::now() };
+            let what = if running {
+                format!("running {}", ask.target)
+            } else {
+                THINKING.to_string()
+            };
+            self.phase = Phase::Turn {
+                what,
+                since: Instant::now(),
+            };
         }
     }
 
@@ -309,7 +339,10 @@ impl App {
                         self.stopper.begin();
                         // What was asked is at the end, with the answer to come.
                         self.scroll = 0;
-                        self.phase = Phase::Turn { what: THINKING.into(), since: Instant::now() };
+                        self.phase = Phase::Turn {
+                            what: THINKING.into(),
+                            since: Instant::now(),
+                        };
                         self.stop_asked = false;
                         if self.prompts.send(prompt).is_err() {
                             self.quit = true;
@@ -360,7 +393,6 @@ impl App {
     }
 }
 
-
 /// Run the interface until the person leaves. `header` and `notices` (a failed warm-up, say)
 /// are the first things said.
 pub fn run<B: Backend, K: Keys>(
@@ -372,7 +404,12 @@ pub fn run<B: Backend, K: Keys>(
     worker: Worker,
 ) -> io::Result<()> {
     let mut terminal = Terminal::new(backend).map_err(io_err)?;
-    let Worker { prompts, events, stopper, handle } = worker;
+    let Worker {
+        prompts,
+        events,
+        stopper,
+        handle,
+    } = worker;
     let mut app = App {
         input: Input::default(),
         phase: Phase::Idle,
@@ -490,5 +527,12 @@ pub fn start(
         crossterm::event::EnableMouseCapture,
         crossterm::event::EnableBracketedPaste
     )?;
-    run(CrosstermBackend::new(io::stdout()), &mut Crossterm, theme, Some(header), notices, worker)
+    run(
+        CrosstermBackend::new(io::stdout()),
+        &mut Crossterm,
+        theme,
+        Some(header),
+        notices,
+        worker,
+    )
 }

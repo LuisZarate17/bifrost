@@ -154,7 +154,10 @@ impl Git {
     /// This git, with no command given longer than there is until `deadline` — but never less
     /// than [`MIN_LIMIT`], so that a run that has used its time can still make its patch.
     pub fn until(&self, deadline: Instant) -> Self {
-        Self { deadline: Some(deadline), ..self.clone() }
+        Self {
+            deadline: Some(deadline),
+            ..self.clone()
+        }
     }
 
     /// How long a command may run now: [`GIT_TIMEOUT`], or the time left if that is less.
@@ -176,7 +179,13 @@ impl Git {
     /// from asking or downloading.
     fn run(&self, dir: &Path, args: &[&str]) -> Result<Out, String> {
         let hooks = format!("core.hooksPath={NO_HOOKS}");
-        let mut all = vec!["--no-optional-locks", "-c", "core.safecrlf=false", "-c", "core.fsmonitor=false"];
+        let mut all = vec![
+            "--no-optional-locks",
+            "-c",
+            "core.safecrlf=false",
+            "-c",
+            "core.fsmonitor=false",
+        ];
         all.extend(["-c", "core.longpaths=true", "-c", &hooks]);
         all.extend(args);
         self.exec(dir, &all)
@@ -185,13 +194,21 @@ impl Git {
     /// [`Git::run`], and `Err` with git's own complaint when it exits with anything but 0.
     fn ok(&self, dir: &Path, args: &[&str]) -> Result<Out, String> {
         let out = self.run(dir, args)?;
-        if out.ok() { Ok(out) } else { Err(format!("git {}: {}", args.first().unwrap_or(&""), out.complaint())) }
+        if out.ok() {
+            Ok(out)
+        } else {
+            Err(format!("git {}: {}", args.first().unwrap_or(&""), out.complaint()))
+        }
     }
 
     /// The command exactly as given, with only the environment of [`Git`] around it.
     fn exec(&self, dir: &Path, args: &[&str]) -> Result<Out, String> {
         let mut cmd = Command::new("git");
-        cmd.args(args).current_dir(dir).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.args(args)
+            .current_dir(dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         for name in CLEARED {
             cmd.env_remove(name);
         }
@@ -200,7 +217,9 @@ impl Git {
             cmd.env(name, value);
         }
         check::no_window(&mut cmd);
-        let mut child = cmd.spawn().map_err(|e| format!("could not run git: {e} (is git installed?)"))?;
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("could not run git: {e} (is git installed?)"))?;
         let (stdout, stderr) = (drain(child.stdout.take()), drain(child.stderr.take()));
         let (started, limit) = (Instant::now(), self.limit());
         let code = loop {
@@ -208,8 +227,14 @@ impl Git {
                 Ok(Some(status)) => break status.code(),
                 Ok(None) if started.elapsed() >= limit => {
                     kill_tree(&mut child);
-                    let name = args.iter().find(|a| !a.starts_with('-') && !a.contains('=')).unwrap_or(&"");
-                    return Err(format!("git {name} did not finish within {:.0} seconds", limit.as_secs_f64()));
+                    let name = args
+                        .iter()
+                        .find(|a| !a.starts_with('-') && !a.contains('='))
+                        .unwrap_or(&"");
+                    return Err(format!(
+                        "git {name} did not finish within {:.0} seconds",
+                        limit.as_secs_f64()
+                    ));
                 }
                 Ok(None) => std::thread::sleep(POLL),
                 Err(e) => return Err(format!("could not wait for git: {e}")),
@@ -287,8 +312,16 @@ struct Found {
 
 impl Found {
     fn of(git: &Git, folder: &Path) -> Result<Self, String> {
-        let not_git = || format!("{} is not in a git repository; hugin -p works on git folders only", folder.display());
-        let out = git.run(folder, &["rev-parse", "--show-toplevel", "--git-common-dir", "--show-prefix"])?;
+        let not_git = || {
+            format!(
+                "{} is not in a git repository; hugin -p works on git folders only",
+                folder.display()
+            )
+        };
+        let out = git.run(
+            folder,
+            &["rev-parse", "--show-toplevel", "--git-common-dir", "--show-prefix"],
+        )?;
         if !out.ok() {
             // Git has more to say than "no" when the folder is a repository it will not open.
             let said = out.complaint();
@@ -301,18 +334,30 @@ impl Found {
         // Three lines, and the last is empty at the top of the repository: split, never trim.
         let text = String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n");
         let mut lines = text.split('\n').map(str::trim);
-        let (top, common, prefix) = (lines.next().unwrap_or(""), lines.next().unwrap_or(""), lines.next().unwrap_or(""));
+        let (top, common, prefix) = (
+            lines.next().unwrap_or(""),
+            lines.next().unwrap_or(""),
+            lines.next().unwrap_or(""),
+        );
         if top.is_empty() || common.is_empty() {
             return Err(not_git());
         }
         // Printed relative to the folder it was run in, or absolute for a linked worktree.
         let common = PathBuf::from(common);
-        let common = if common.is_absolute() { common } else { folder.join(common) };
+        let common = if common.is_absolute() {
+            common
+        } else {
+            folder.join(common)
+        };
         let git_dir = std::fs::canonicalize(&common)
             .map(|p| PathBuf::from(edit::plain(&p)))
             .map_err(|e| format!("cannot find the repository's git folder {}: {e}", common.display()))?;
         // Git prints forward slashes; the path is shown to people and handed to cargo as Windows writes it.
-        let root = PathBuf::from(if cfg!(windows) { top.replace('/', "\\") } else { top.to_string() });
+        let root = PathBuf::from(if cfg!(windows) {
+            top.replace('/', "\\")
+        } else {
+            top.to_string()
+        });
 
         let head = git.run(&root, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])?;
         if !head.ok() {
@@ -330,7 +375,12 @@ impl Found {
                 ));
             }
         }
-        Ok(Self { root, git_dir, prefix: prefix.to_string(), base })
+        Ok(Self {
+            root,
+            git_dir,
+            prefix: prefix.to_string(),
+            base,
+        })
     }
 }
 
@@ -383,7 +433,12 @@ impl Scratch {
 
     /// The copy of the repository `found` describes, in a new folder under `work`.
     fn make(git: &Git, work: &Path, found: Found) -> Result<Scratch, String> {
-        let run = work.join(format!("run-{}-{}-{}", file_stamp(), std::process::id(), RUNS.fetch_add(1, Ordering::Relaxed)));
+        let run = work.join(format!(
+            "run-{}-{}-{}",
+            file_stamp(),
+            std::process::id(),
+            RUNS.fetch_add(1, Ordering::Relaxed)
+        ));
         let copy = run.join("copy");
         std::fs::create_dir_all(&copy).map_err(|e| format!("could not make {}: {e}", copy.display()))?;
         // From here the folder is removed if anything fails, by the drop.
@@ -429,7 +484,18 @@ impl Scratch {
         // holds every object it needs and borrows none (see the module). The remote the clone
         // makes is taken away at once, so that nothing run in the copy can reach the original.
         let (url, into) = (file_url(&found.root), copy.to_string_lossy().into_owned());
-        let clone = ["clone", "--quiet", "--no-checkout", "--depth", "1", "--no-tags", "--no-local", "--template=", "--origin", "source"];
+        let clone = [
+            "clone",
+            "--quiet",
+            "--no-checkout",
+            "--depth",
+            "1",
+            "--no-tags",
+            "--no-local",
+            "--template=",
+            "--origin",
+            "source",
+        ];
         git.ok(&self.run, &[&clone[..], &[&url, &into]].concat())?;
         git.ok(&copy, &["remote", "remove", "source"])?;
         let head = git.ok(&copy, &["rev-parse", "--verify", "HEAD^{commit}"])?;
@@ -475,7 +541,13 @@ impl Scratch {
     fn carry(&mut self, found: &Found) -> Result<(), String> {
         let status = self.git.ok(
             &found.root,
-            &["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"],
+            &[
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--no-renames",
+                "--untracked-files=all",
+            ],
         )?;
         let (mut total, mut seen) = (0u64, HashSet::new());
         let (mut unnamed, mut links, mut named) = (0usize, HashMap::new(), HashSet::new());
@@ -494,7 +566,8 @@ impl Scratch {
             // a junction as a folder, and lists what is beyond it as if it were here. Named once.
             if let Some(link) = link_in(&found.root, rel, &mut links) {
                 if named.insert(link.clone()) {
-                    self.skipped.push(format!("{link} (a link or junction: what it leads to is not carried)"));
+                    self.skipped
+                        .push(format!("{link} (a link or junction: what it leads to is not carried)"));
                 }
                 continue;
             }
@@ -504,10 +577,14 @@ impl Scratch {
                 Err(e) => self.skipped.push(format!("{rel} (could not be read: {e})")),
                 Ok(m) if m.is_dir() => self.skipped.push(format!("{rel} (a nested repository or submodule)")),
                 Ok(m) if m.len() > MAX_FILE_BYTES => {
-                    self.skipped.push(format!("{rel} (over {} MB)", MAX_FILE_BYTES / 1024 / 1024));
+                    self.skipped
+                        .push(format!("{rel} (over {} MB)", MAX_FILE_BYTES / 1024 / 1024));
                 }
                 Ok(m) if total + m.len() > MAX_COPY_BYTES => {
-                    self.skipped.push(format!("{rel} (over the {} MB limit for uncommitted files)", MAX_COPY_BYTES / 1024 / 1024));
+                    self.skipped.push(format!(
+                        "{rel} (over the {} MB limit for uncommitted files)",
+                        MAX_COPY_BYTES / 1024 / 1024
+                    ));
                 }
                 Ok(m) => {
                     total += m.len();
@@ -525,7 +602,8 @@ impl Scratch {
             }
         }
         if unnamed > 0 {
-            self.skipped.push(format!("{unnamed} file(s) whose names are not valid UTF-8"));
+            self.skipped
+                .push(format!("{unnamed} file(s) whose names are not valid UTF-8"));
         }
         Ok(())
     }
@@ -544,24 +622,32 @@ impl Scratch {
         for entry in listing.stdout.split(|b| *b == 0).filter(|e| !e.is_empty()) {
             // `<mode> <type> <object> <size>\t<path>`
             let text = String::from_utf8_lossy(entry);
-            let Some((meta, path)) = text.split_once('\t') else { continue };
+            let Some((meta, path)) = text.split_once('\t') else {
+                continue;
+            };
             let mut parts = meta.split_whitespace();
             let (mode, _kind, _object, size) = (parts.next(), parts.next(), parts.next(), parts.next());
             if mode == Some("160000") {
                 // A submodule with changes was named already, as the folder it is.
                 if !self.skipped.iter().any(|s| s.starts_with(&format!("{path} "))) {
-                    self.skipped.push(format!("{path} (a submodule: its files are not in the copy)"));
+                    self.skipped
+                        .push(format!("{path} (a submodule: its files are not in the copy)"));
                 }
                 continue;
             }
             // A pointer is a short file: `version …`, `oid sha256:…`, `size …`.
-            let small = size.and_then(|s| s.parse::<u64>().ok()).is_some_and(|n| (100..=300).contains(&n));
+            let small = size
+                .and_then(|s| s.parse::<u64>().ok())
+                .is_some_and(|n| (100..=300).contains(&n));
             if small && checked < 5000 {
                 checked += 1;
                 let mut head = [0u8; 64];
-                let read = std::fs::File::open(self.copy.join(path)).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
+                let read = std::fs::File::open(self.copy.join(path))
+                    .and_then(|mut f| f.read(&mut head))
+                    .unwrap_or(0);
                 if head[..read].starts_with(b"version https://git-lfs.github.com/spec/") {
-                    self.skipped.push(format!("{path} (a Git LFS pointer: the real file is not in the copy)"));
+                    self.skipped
+                        .push(format!("{path} (a Git LFS pointer: the real file is not in the copy)"));
                 }
             }
         }
@@ -618,7 +704,12 @@ impl Scratch {
             .collect();
         found.retain(|p| !tracked.contains(p));
         // Named and excluded already, by an earlier snapshot.
-        found.retain(|p| !self.skipped.iter().any(|s| s.starts_with(&format!("{p} (a link or junction made during the run"))));
+        found.retain(|p| {
+            !self
+                .skipped
+                .iter()
+                .any(|s| s.starts_with(&format!("{p} (a link or junction made during the run")))
+        });
         found.sort();
         if found.is_empty() {
             return Ok(());
@@ -632,9 +723,14 @@ impl Scratch {
             .map_err(|e| format!("could not write {}: {e}", exclude.display()))?;
         for link in &found {
             // Anchored to the copy's top, with what a pattern reads as more than a name escaped.
-            let escaped: String = link.chars().flat_map(|c| if "*?[]\\".contains(c) { vec!['\\', c] } else { vec![c] }).collect();
+            let escaped: String = link
+                .chars()
+                .flat_map(|c| if "*?[]\\".contains(c) { vec!['\\', c] } else { vec![c] })
+                .collect();
             writeln!(file, "\n/{escaped}").map_err(|e| format!("could not write {}: {e}", exclude.display()))?;
-            self.skipped.push(format!("{link} (a link or junction made during the run: not in the patch)"));
+            self.skipped.push(format!(
+                "{link} (a link or junction made during the run: not in the patch)"
+            ));
         }
         Ok(())
     }
@@ -652,7 +748,15 @@ impl Scratch {
         let show = ["diff-tree", "-r", "-M", "--no-color", "--no-ext-diff", "--no-textconv"];
         let (start, end) = (self.start.as_str(), end);
         let mut args = show.to_vec();
-        args.extend(["-p", "--binary", "--full-index", "--src-prefix=a/", "--dst-prefix=b/", start, end]);
+        args.extend([
+            "-p",
+            "--binary",
+            "--full-index",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            start,
+            end,
+        ]);
         let bytes = self.git.ok(&self.copy, &args)?.stdout;
 
         // How many lines each file gained and lost. `-` for a binary file, read as no count.
@@ -660,19 +764,31 @@ impl Scratch {
         args.extend(["-z", "--numstat", start, end]);
         let stat = self.git.ok(&self.copy, &args)?.stdout;
         let mut counts: HashMap<String, (Option<u64>, Option<u64>)> = HashMap::new();
-        let mut tokens = stat.split(|b| *b == 0).filter(|t| !t.is_empty()).map(|t| String::from_utf8_lossy(t).into_owned());
+        let mut tokens = stat
+            .split(|b| *b == 0)
+            .filter(|t| !t.is_empty())
+            .map(|t| String::from_utf8_lossy(t).into_owned());
         while let Some(token) = tokens.next() {
             let mut parts = token.splitn(3, '\t');
-            let (Some(added), Some(deleted), Some(path)) = (parts.next(), parts.next(), parts.next()) else { continue };
+            let (Some(added), Some(deleted), Some(path)) = (parts.next(), parts.next(), parts.next()) else {
+                continue;
+            };
             // A rename has no path on its own line: the old name and the new one follow.
-            let path = if path.is_empty() { tokens.nth(1).unwrap_or_default() } else { path.to_string() };
+            let path = if path.is_empty() {
+                tokens.nth(1).unwrap_or_default()
+            } else {
+                path.to_string()
+            };
             counts.insert(path, (added.parse().ok(), deleted.parse().ok()));
         }
 
         let mut args = show.to_vec();
         args.extend(["-z", "--name-status", start, end]);
         let listing = self.git.ok(&self.copy, &args)?.stdout;
-        let mut names = listing.split(|b| *b == 0).filter(|n| !n.is_empty()).map(|n| String::from_utf8_lossy(n).into_owned());
+        let mut names = listing
+            .split(|b| *b == 0)
+            .filter(|n| !n.is_empty())
+            .map(|n| String::from_utf8_lossy(n).into_owned());
         let mut files = Vec::new();
         while let Some(code) = names.next() {
             let Some(path) = names.next() else { break };
@@ -687,7 +803,13 @@ impl Scratch {
                 _ => (path, None, "modified"),
             };
             let (added, deleted) = counts.get(&path).copied().unwrap_or_default();
-            files.push(Change { path, from, status, added, deleted });
+            files.push(Change {
+                path,
+                from,
+                status,
+                added,
+                deleted,
+            });
         }
         Ok(Patch { bytes, files })
     }
@@ -720,7 +842,13 @@ fn tree(git: &Git, copy: &Path) -> Result<String, String> {
 /// plain (a space, `%`, `#`, a letter with an accent) written as `%XX`, which git reads back.
 fn file_url(path: &Path) -> String {
     let text = path.to_string_lossy().replace('\\', "/");
-    let mut url = String::from(if text.starts_with("//") { "file:" } else if text.starts_with('/') { "file://" } else { "file:///" });
+    let mut url = String::from(if text.starts_with("//") {
+        "file:"
+    } else if text.starts_with('/') {
+        "file://"
+    } else {
+        "file:///"
+    });
     for byte in text.bytes() {
         if byte.is_ascii_alphanumeric() || b"-._~/:".contains(&byte) {
             url.push(byte as char);
@@ -853,7 +981,13 @@ impl Lock {
 #[cfg(windows)]
 fn open_exclusive(path: &Path) -> std::io::Result<Option<std::fs::File>> {
     use std::os::windows::fs::OpenOptionsExt;
-    std::fs::OpenOptions::new().write(true).create(true).truncate(false).share_mode(0).open(path).map(Some)
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .share_mode(0)
+        .open(path)
+        .map(Some)
 }
 
 /// Elsewhere there is no such hold, and runs are not kept apart.
@@ -937,7 +1071,10 @@ mod tests {
                 ("GIT_CONFIG_GLOBAL".to_string(), config.to_string_lossy().into_owned()),
                 ("GIT_CONFIG_NOSYSTEM".to_string(), "1".to_string()),
             ];
-            World { dir, git: Git::with_env(env) }
+            World {
+                dir,
+                git: Git::with_env(env),
+            }
         }
 
         /// A world whose global configuration is written to get in the way: a diff with no
@@ -956,7 +1093,11 @@ mod tests {
                 std::fs::write(folder.join(hook), body).unwrap();
             }
             let external = world.dir.join("ext.sh");
-            std::fs::write(&external, format!("#!/bin/sh\necho ran > \"{}\"\n", slash(&marker("external")))).unwrap();
+            std::fs::write(
+                &external,
+                format!("#!/bin/sh\necho ran > \"{}\"\n", slash(&marker("external"))),
+            )
+            .unwrap();
             let global = format!(
                 "[user]\n\tname = t\n\temail = t@t\n\
                  [diff]\n\tnoprefix = true\n\tmnemonicPrefix = true\n\texternal = {}\n\trenames = false\n\
@@ -975,7 +1116,10 @@ mod tests {
         fn repo(&self, name: &str) -> Repo {
             let root = self.dir.join(name);
             std::fs::create_dir_all(&root).unwrap();
-            let repo = Repo { root, env: self.git.env.clone() };
+            let repo = Repo {
+                root,
+                env: self.git.env.clone(),
+            };
             repo.git(&["init", "-q", "-b", "main"]);
             repo.git(&["config", "core.autocrlf", "true"]);
             repo
@@ -1010,7 +1154,11 @@ mod tests {
                 cmd.env(k, v);
             }
             let out = cmd.output().expect("git runs");
-            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
             String::from_utf8_lossy(&out.stdout).into_owned()
         }
 
@@ -1039,7 +1187,11 @@ mod tests {
     fn unchanged(dir: &Path, before: &BTreeMap<String, Print>, when: &str) {
         let now = fingerprints(dir).unwrap();
         let mut differ: Vec<String> = Vec::new();
-        for key in before.keys().chain(now.keys()).collect::<std::collections::BTreeSet<_>>() {
+        for key in before
+            .keys()
+            .chain(now.keys())
+            .collect::<std::collections::BTreeSet<_>>()
+        {
             let (was, is) = (before.get(key), now.get(key));
             if was != is {
                 let how = match (was, is) {
@@ -1071,7 +1223,12 @@ mod tests {
             let was_read_only = permissions.readonly();
             permissions.set_readonly(false);
             std::fs::set_permissions(&path, permissions.clone()).unwrap();
-            std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_modified(old).unwrap();
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
             permissions.set_readonly(was_read_only);
             std::fs::set_permissions(&path, permissions).unwrap();
         }
@@ -1080,14 +1237,22 @@ mod tests {
     /// Whether anything named `name` is anywhere under `dir`.
     fn has_entry(dir: &Path, name: &str) -> bool {
         std::fs::read_dir(dir).into_iter().flatten().flatten().any(|e| {
-            e.file_name().to_string_lossy() == name || (e.file_type().is_ok_and(|k| k.is_dir()) && has_entry(&e.path(), name))
+            e.file_name().to_string_lossy() == name
+                || (e.file_type().is_ok_and(|k| k.is_dir()) && has_entry(&e.path(), name))
         })
     }
 
     /// A junction `link` to the folder `target`: what `mklink /J` makes, and needs no privilege.
     #[cfg(windows)]
     fn junction(link: &Path, target: &Path) {
-        let made = Command::new("cmd").arg("/C").arg("mklink").arg("/J").arg(link).arg(target).output().unwrap();
+        let made = Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(link)
+            .arg(target)
+            .output()
+            .unwrap();
         assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stdout));
     }
 
@@ -1163,17 +1328,34 @@ mod tests {
 
         let mut s = w.scratch(&repo.root).unwrap();
         let copy = |rel: &str| std::fs::read(s.folder().join(rel));
-        assert_eq!(copy("crlf.txt").unwrap(), b"one\r\nTWO\r\n", "CRLF as the folder has it");
+        assert_eq!(
+            copy("crlf.txt").unwrap(),
+            b"one\r\nTWO\r\n",
+            "CRLF as the folder has it"
+        );
         assert_eq!(copy("lf.txt").unwrap(), b"x\nY\n", "LF in a CRLF checkout");
         assert_eq!(copy("staged.txt").unwrap(), b"staged change\n");
         assert_eq!(copy("untracked/new.txt").unwrap(), b"new\r\n");
         assert_eq!(copy("data.bin").unwrap(), [9, 0, 9, 0, 13, 10, 255], "binary bytes");
         assert_eq!(copy("elsewhere.txt").unwrap(), b"m\n");
-        assert_eq!(copy("same.txt").unwrap(), b"same\r\n", "a file the user did not touch is HEAD's, checked out as the repository does");
-        for gone in ["gone.txt", "moved.txt", "sub/deep/gone-too.txt", "ignored.txt", "excluded.txt"] {
+        assert_eq!(
+            copy("same.txt").unwrap(),
+            b"same\r\n",
+            "a file the user did not touch is HEAD's, checked out as the repository does"
+        );
+        for gone in [
+            "gone.txt",
+            "moved.txt",
+            "sub/deep/gone-too.txt",
+            "ignored.txt",
+            "excluded.txt",
+        ] {
             assert!(!s.folder().join(gone).exists(), "{gone}");
         }
-        assert!(!s.folder().join("sub").exists(), "a folder emptied by deletions goes too");
+        assert!(
+            !s.folder().join("sub").exists(),
+            "a folder emptied by deletions goes too"
+        );
         assert!(s.skipped.is_empty(), "{:?}", s.skipped);
         assert_eq!(s.base, repo.git(&["rev-parse", "HEAD"]).trim());
 
@@ -1196,7 +1378,10 @@ mod tests {
         repo.write("big.txt", &vec![b'x'; MAX_FILE_BYTES as usize + 1]);
         repo.write("untracked-big.txt", &vec![b'y'; MAX_FILE_BYTES as usize + 5]);
         // A nested repository shows up in `git status` as one untracked folder.
-        let nested = Repo { root: repo.root.join("inner"), env: repo.env.clone() };
+        let nested = Repo {
+            root: repo.root.join("inner"),
+            env: repo.env.clone(),
+        };
         std::fs::create_dir_all(&nested.root).unwrap();
         nested.git(&["init", "-q"]);
         nested.write("x.txt", b"x\n");
@@ -1228,7 +1413,15 @@ mod tests {
         repo.write("a.txt", b"a\n");
         repo.commit_all();
         let lib_path = lib.root.to_string_lossy().into_owned();
-        repo.git(&["-c", "protocol.file.allow=always", "submodule", "add", "-q", &lib_path, "sub"]);
+        repo.git(&[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            &lib_path,
+            "sub",
+        ]);
         repo.commit_all();
 
         let s = w.scratch(&repo.root).unwrap();
@@ -1241,7 +1434,11 @@ mod tests {
         std::fs::write(repo.root.join("sub/lib.txt"), b"changed\n").unwrap();
         let s = w.scratch(&repo.root).unwrap();
         assert_eq!(s.skipped.len(), 1, "{:?}", s.skipped);
-        assert!(s.skipped[0].starts_with("sub (a nested repository or submodule)"), "{:?}", s.skipped);
+        assert!(
+            s.skipped[0].starts_with("sub (a nested repository or submodule)"),
+            "{:?}",
+            s.skipped
+        );
     }
 
     #[test]
@@ -1298,7 +1495,10 @@ mod tests {
         let text = String::from_utf8(patch.bytes.clone()).unwrap();
         assert!(text.starts_with("diff --git a/"), "{text}");
         assert!(!text.contains('\u{1b}'), "no colour");
-        assert!(text.contains("--- a/a.txt\n+++ b/a.txt\n") && text.contains("-three\n+THREE\n"), "{text}");
+        assert!(
+            text.contains("--- a/a.txt\n+++ b/a.txt\n") && text.contains("-three\n+THREE\n"),
+            "{text}"
+        );
         assert!(text.contains("--- /dev/null\n+++ b/created/new.txt\n"), "{text}");
         assert!(text.contains("+++ /dev/null\n"), "{text}");
         assert!(text.contains("rename from old.txt\nrename to new.txt"), "{text}");
@@ -1321,7 +1521,14 @@ mod tests {
         let counts: Vec<(Option<u64>, Option<u64>)> = patch.files.iter().map(|c| (c.added, c.deleted)).collect();
         assert_eq!(
             counts,
-            [(Some(1), Some(1)), (Some(1), Some(0)), (Some(0), Some(1)), (Some(1), Some(0)), (Some(0), Some(0)), (Some(1), Some(0))]
+            [
+                (Some(1), Some(1)),
+                (Some(1), Some(0)),
+                (Some(0), Some(1)),
+                (Some(1), Some(0)),
+                (Some(0), Some(0)),
+                (Some(1), Some(0))
+            ]
         );
 
         // Nothing has touched the user's folder yet, its .git/index included.
@@ -1333,11 +1540,20 @@ mod tests {
         w.git.apply(&repo.root, &file, false).unwrap();
         // Git turns line endings as the repository's settings say: the CRLF file stays CRLF.
         assert_eq!(repo.read("a.txt"), b"one\r\nTWO\r\nTHREE\r\n");
-        assert_eq!(String::from_utf8_lossy(&repo.read("lf.txt")).replace("\r\n", "\n"), "x\ny\nz\n");
-        assert_eq!(String::from_utf8_lossy(&repo.read("created/new.txt")).replace("\r\n", "\n"), "fresh\n");
+        assert_eq!(
+            String::from_utf8_lossy(&repo.read("lf.txt")).replace("\r\n", "\n"),
+            "x\ny\nz\n"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&repo.read("created/new.txt")).replace("\r\n", "\n"),
+            "fresh\n"
+        );
         assert!(!repo.root.join("gone.txt").exists() && !repo.root.join("old.txt").exists());
         assert!(repo.root.join("new.txt").exists());
-        assert_eq!(String::from_utf8_lossy(&repo.read("untracked.txt")).replace("\r\n", "\n"), "u\nmore\n");
+        assert_eq!(
+            String::from_utf8_lossy(&repo.read("untracked.txt")).replace("\r\n", "\n"),
+            "u\nmore\n"
+        );
     }
 
     #[test]
@@ -1350,11 +1566,19 @@ mod tests {
         repo.write("data.bin", &[0, 1, 2, 3, 4, 5, 6, 7, 0, 0, 255]);
         repo.commit_all();
         let mut s = w.scratch(&repo.root).unwrap();
-        std::fs::write(s.folder().join("data.bin"), [0, 9, 9, 9, 4, 5, 6, 7, 0, 0, 255, 13, 10, 0]).unwrap();
+        std::fs::write(
+            s.folder().join("data.bin"),
+            [0, 9, 9, 9, 4, 5, 6, 7, 0, 0, 255, 13, 10, 0],
+        )
+        .unwrap();
         std::fs::write(s.folder().join("added.bin"), [0, 1, 0, 1, 0]).unwrap();
         let patch = s.finish().unwrap();
         assert!(String::from_utf8_lossy(&patch.bytes).contains("GIT binary patch"));
-        assert!(patch.files.iter().all(|c| c.added.is_none() && c.deleted.is_none()), "no line counts for a file that is not text: {:?}", patch.files);
+        assert!(
+            patch.files.iter().all(|c| c.added.is_none() && c.deleted.is_none()),
+            "no line counts for a file that is not text: {:?}",
+            patch.files
+        );
         let file = patch_file(&w, &patch);
         w.git.apply(&repo.root, &file, false).unwrap();
         assert_eq!(repo.read("data.bin"), [0, 9, 9, 9, 4, 5, 6, 7, 0, 0, 255, 13, 10, 0]);
@@ -1397,7 +1621,10 @@ mod tests {
         // A file whose time no longer matches the index makes `git status` want to refresh the
         // index, which it writes unless told not to: the case this is about.
         let old = SystemTime::now() - Duration::from_secs(3600);
-        let stale = std::fs::OpenOptions::new().write(true).open(repo.root.join("sub/b.txt")).unwrap();
+        let stale = std::fs::OpenOptions::new()
+            .write(true)
+            .open(repo.root.join("sub/b.txt"))
+            .unwrap();
         stale.set_modified(old).unwrap();
         drop(stale);
         // Packed, with its refs, and every file of the git folder made old: its objects, packs,
@@ -1408,7 +1635,11 @@ mod tests {
         for kept in [".git/index", ".git/config", ".git/packed-refs", ".git/HEAD"] {
             assert!(before.contains_key(kept), "{kept} is part of what is compared");
         }
-        assert!(before.keys().any(|k| k.starts_with(".git/objects/pack/pack-") && k.ends_with(".pack")));
+        assert!(
+            before
+                .keys()
+                .any(|k| k.starts_with(".git/objects/pack/pack-") && k.ends_with(".pack"))
+        );
 
         let run;
         {
@@ -1442,7 +1673,10 @@ mod tests {
 
         let mut s = w.scratch(&sub).unwrap();
         assert_eq!(s.prefix, "crates/x/");
-        assert_eq!(s.repo_root, PathBuf::from(edit::plain(&std::fs::canonicalize(&repo.root).unwrap())));
+        assert_eq!(
+            s.repo_root,
+            PathBuf::from(edit::plain(&std::fs::canonicalize(&repo.root).unwrap()))
+        );
         assert_eq!(s.folder(), s.copy_root().join("crates/x/"));
         assert!(s.folder().join("src/lib.rs").is_file());
         // The copy is the whole repository, uncommitted work included, so a check run from here sees it.
@@ -1457,7 +1691,10 @@ mod tests {
         assert_eq!(patch.files.len(), 1);
         assert_eq!(patch.files[0].path, "crates/x/src/lib.rs");
         w.git.apply(&repo.root, &patch_file(&w, &patch), false).unwrap();
-        assert_eq!(String::from_utf8_lossy(&repo.read("crates/x/src/lib.rs")).replace("\r\n", "\n"), "pub fn x() { 1; }\n");
+        assert_eq!(
+            String::from_utf8_lossy(&repo.read("crates/x/src/lib.rs")).replace("\r\n", "\n"),
+            "pub fn x() { 1; }\n"
+        );
     }
 
     #[test]
@@ -1474,7 +1711,10 @@ mod tests {
         // The linked worktree is on the earlier commit: its HEAD is its own.
         let linked = w.dir.join("linked");
         repo.git(&["worktree", "add", "-q", "--detach", &linked.to_string_lossy(), "HEAD~1"]);
-        let tree = Repo { root: linked.clone(), env: repo.env.clone() };
+        let tree = Repo {
+            root: linked.clone(),
+            env: repo.env.clone(),
+        };
         tree.write("a.txt", b"one\ntwo\nuncommitted\n");
         tree.write("extra.txt", b"extra\n");
         age(&repo.root.join(".git"), Duration::from_secs(3600));
@@ -1482,21 +1722,40 @@ mod tests {
         let admin_before = fingerprints(&repo.root.join(".git")).unwrap();
 
         let mut s = w.scratch(&linked).unwrap();
-        assert!(s.git_dir.ends_with(".git") && s.git_dir.join("worktrees").is_dir(), "{:?}", s.git_dir);
+        assert!(
+            s.git_dir.ends_with(".git") && s.git_dir.join("worktrees").is_dir(),
+            "{:?}",
+            s.git_dir
+        );
         let head = tree.git(&["rev-parse", "HEAD"]).trim().to_string();
         assert_eq!(s.base, head, "the worktree's commit, not the main repository's");
         assert_ne!(s.base, repo.git(&["rev-parse", "HEAD"]).trim());
         assert!(!s.folder().join("later.txt").exists());
-        let in_copy = Repo { root: s.copy_root().to_path_buf(), env: repo.env.clone() };
-        assert_eq!(in_copy.git(&["rev-parse", "HEAD"]).trim(), head, "the copy has a real HEAD");
+        let in_copy = Repo {
+            root: s.copy_root().to_path_buf(),
+            env: repo.env.clone(),
+        };
+        assert_eq!(
+            in_copy.git(&["rev-parse", "HEAD"]).trim(),
+            head,
+            "the copy has a real HEAD"
+        );
         assert_eq!(std::fs::read(s.folder().join("extra.txt")).unwrap(), b"extra\n");
         std::fs::write(s.folder().join("a.txt"), b"one\ntwo\nuncommitted\nmore\n").unwrap();
         let patch = s.finish().unwrap();
         assert_eq!(patch.files.len(), 1, "{:?}", patch.files);
         unchanged(&linked, &before, "");
-        unchanged(&repo.root.join(".git"), &admin_before, "the main repository's .git is untouched");
+        unchanged(
+            &repo.root.join(".git"),
+            &admin_before,
+            "the main repository's .git is untouched",
+        );
         w.git.apply(&linked, &patch_file(&w, &patch), false).unwrap();
-        assert!(String::from_utf8_lossy(&tree.read("a.txt")).replace("\r\n", "\n").ends_with("uncommitted\nmore\n"));
+        assert!(
+            String::from_utf8_lossy(&tree.read("a.txt"))
+                .replace("\r\n", "\n")
+                .ends_with("uncommitted\nmore\n")
+        );
     }
 
     // ── the repository is only read ─────────────────────────────────────────
@@ -1521,7 +1780,14 @@ mod tests {
         repo.write("a.txt", b"one\r\ntwo\r\nthree\r\n");
         repo.git(&["add", "a.txt"]);
         repo.write("copy-of-b.txt", b"same text\n");
-        assert!(std::fs::read_dir(repo.root.join(".git/objects/pack")).unwrap().flatten().count() >= 2, "packed");
+        assert!(
+            std::fs::read_dir(repo.root.join(".git/objects/pack"))
+                .unwrap()
+                .flatten()
+                .count()
+                >= 2,
+            "packed"
+        );
         age(&repo.root.join(".git"), Duration::from_secs(3 * 3600));
         let before = fingerprints(&repo.root).unwrap();
 
@@ -1563,13 +1829,23 @@ mod tests {
         let second = repo.git(&["rev-parse", "HEAD"]).trim().to_string();
 
         let check = |s: &Scratch, want: &str, text: &str| {
-            let copy = Repo { root: s.copy_root().to_path_buf(), env: repo.env.clone() };
+            let copy = Repo {
+                root: s.copy_root().to_path_buf(),
+                env: repo.env.clone(),
+            };
             assert_eq!(s.base, want);
             assert_eq!(copy.git(&["rev-parse", "HEAD"]).trim(), want, "the copy's HEAD");
             assert!(copy.git(&["remote"]).trim().is_empty(), "no remote");
-            assert_eq!(String::from_utf8_lossy(&std::fs::read(s.folder().join("a.txt")).unwrap()).replace("\r\n", "\n"), text);
+            assert_eq!(
+                String::from_utf8_lossy(&std::fs::read(s.folder().join("a.txt")).unwrap()).replace("\r\n", "\n"),
+                text
+            );
             // The copy's working tree is clean against its own HEAD apart from what was carried.
-            assert!(copy.git(&["status", "--porcelain"]).trim().is_empty(), "{}", copy.git(&["status", "--porcelain"]));
+            assert!(
+                copy.git(&["status", "--porcelain"]).trim().is_empty(),
+                "{}",
+                copy.git(&["status", "--porcelain"])
+            );
         };
         check(&w.scratch(&repo.root).unwrap(), &second, "one\ntwo\n");
 
@@ -1606,11 +1882,17 @@ mod tests {
         junction(&link, &outside);
         // The premise: git does list what is beyond the junction.
         let listed = repo.git(&["status", "--porcelain", "--untracked-files=all"]);
-        assert!(listed.contains("link/secret.txt") || listed.contains("link/"), "{listed}");
+        assert!(
+            listed.contains("link/secret.txt") || listed.contains("link/"),
+            "{listed}"
+        );
 
         let result = w.scratch(&repo.root);
         let s = result.as_ref().unwrap();
-        assert!(!s.copy_root().join("link").exists(), "nothing of the junction is in the copy");
+        assert!(
+            !s.copy_root().join("link").exists(),
+            "nothing of the junction is in the copy"
+        );
         assert!(!has_entry(s.copy_root(), "secret.txt") && !has_entry(s.copy_root(), "more.txt"));
         assert_eq!(s.skipped.len(), 1, "{:?}", s.skipped);
         assert!(s.skipped[0].starts_with("link (a link or junction"), "{:?}", s.skipped);
@@ -1639,18 +1921,31 @@ mod tests {
         let made = s.folder().join("made[1]");
         junction(&made, &outside);
         // The premise: left to itself, git adds what is beyond the junction.
-        let in_copy = Repo { root: s.copy_root().to_path_buf(), env: repo.env.clone() };
-        assert!(in_copy.git(&["add", "-A", "-n"]).contains("secret.txt"), "git does not follow the junction");
+        let in_copy = Repo {
+            root: s.copy_root().to_path_buf(),
+            env: repo.env.clone(),
+        };
+        assert!(
+            in_copy.git(&["add", "-A", "-n"]).contains("secret.txt"),
+            "git does not follow the junction"
+        );
 
         let patch = s.finish().unwrap();
         let files: Vec<&str> = patch.files.iter().map(|c| c.path.as_str()).collect();
         assert_eq!(files, ["a.txt"]);
         assert!(!String::from_utf8_lossy(&patch.bytes).contains("secret"));
         assert_eq!(s.skipped.len(), 1, "{:?}", s.skipped);
-        assert!(s.skipped[0].starts_with("made[1] (a link or junction made during the run"), "{:?}", s.skipped);
+        assert!(
+            s.skipped[0].starts_with("made[1] (a link or junction made during the run"),
+            "{:?}",
+            s.skipped
+        );
         drop(s);
         let _ = std::fs::remove_dir(&made);
-        assert!(outside.join("secret.txt").exists(), "what the junction led to is still there");
+        assert!(
+            outside.join("secret.txt").exists(),
+            "what the junction led to is still there"
+        );
     }
 
     /// A copy that was never given a link names none.
@@ -1673,21 +1968,39 @@ mod tests {
     #[test]
     fn a_command_is_given_no_more_than_the_time_that_is_left_and_no_less_than_a_floor() {
         assert_eq!(Git::new().limit(), GIT_TIMEOUT);
-        assert_eq!(Git::new().until(Instant::now() + Duration::from_secs(3600)).limit(), GIT_TIMEOUT);
+        assert_eq!(
+            Git::new().until(Instant::now() + Duration::from_secs(3600)).limit(),
+            GIT_TIMEOUT
+        );
         let soon = Git::new().until(Instant::now() + Duration::from_secs(30)).limit();
-        assert!(soon <= Duration::from_secs(30) && soon > Duration::from_secs(25), "{soon:?}");
+        assert!(
+            soon <= Duration::from_secs(30) && soon > Duration::from_secs(25),
+            "{soon:?}"
+        );
         // Out of time: still enough to finish a patch.
         assert_eq!(Git::new().until(Instant::now()).limit(), MIN_LIMIT);
-        assert_eq!(Git::new().until(Instant::now() - Duration::from_secs(5)).limit(), MIN_LIMIT);
+        assert_eq!(
+            Git::new().until(Instant::now() - Duration::from_secs(5)).limit(),
+            MIN_LIMIT
+        );
         // A shorter limit of its own wins.
-        let short = Git { timeout: Some(Duration::from_secs(1)), ..Git::new() };
-        assert_eq!(short.until(Instant::now() + Duration::from_secs(60)).limit(), Duration::from_secs(1));
+        let short = Git {
+            timeout: Some(Duration::from_secs(1)),
+            ..Git::new()
+        };
+        assert_eq!(
+            short.until(Instant::now() + Duration::from_secs(60)).limit(),
+            Duration::from_secs(1)
+        );
     }
 
     #[test]
     fn a_file_url_is_made_of_plain_bytes_git_reads_back() {
         assert_eq!(file_url(Path::new(r"C:\Users\you\repo")), "file:///C:/Users/you/repo");
-        assert_eq!(file_url(Path::new(r"C:\a b\c#d%e\é")), "file:///C:/a%20b/c%23d%25e/%C3%A9");
+        assert_eq!(
+            file_url(Path::new(r"C:\a b\c#d%e\é")),
+            "file:///C:/a%20b/c%23d%25e/%C3%A9"
+        );
         assert_eq!(file_url(Path::new(r"\\server\share\x y")), "file://server/share/x%20y");
         assert_eq!(file_url(Path::new("/home/me/repo")), "file:///home/me/repo");
     }
@@ -1703,7 +2016,13 @@ mod tests {
         if !have_git() {
             return;
         }
-        let hooks = ["pre-commit", "post-checkout", "post-merge", "post-index-change", "reference-transaction"];
+        let hooks = [
+            "pre-commit",
+            "post-checkout",
+            "post-merge",
+            "post-index-change",
+            "reference-transaction",
+        ];
         let (w, marker) = World::hostile("hostile", &hooks);
 
         // The configuration is hostile: ordinary git runs the hooks and the external diff, and colours.
@@ -1713,7 +2032,10 @@ mod tests {
         probe.git(&["add", "-A"]);
         probe.git(&["commit", "-q", "-m", "x"]);
         probe.write("p.txt", b"q\r\n");
-        assert!(probe.git(&["diff", "--no-ext-diff"]).contains('\u{1b}'), "colour is on for ordinary git");
+        assert!(
+            probe.git(&["diff", "--no-ext-diff"]).contains('\u{1b}'),
+            "colour is on for ordinary git"
+        );
         probe.git(&["diff"]);
         probe.git(&["add", "-A"]);
         for live in ["pre-commit", "post-index-change", "external"] {
@@ -1831,12 +2153,24 @@ mod tests {
         if !have_git() {
             return;
         }
-        let git = Git { timeout: Some(Duration::from_millis(400)), ..Git::new() };
+        let git = Git {
+            timeout: Some(Duration::from_millis(400)),
+            ..Git::new()
+        };
         let started = Instant::now();
         // An alias that is a shell command, which runs `ping` for half a minute.
-        let e = git.exec(&std::env::temp_dir(), &["-c", "alias.slow=!ping -n 30 127.0.0.1", "slow"]).unwrap_err();
+        let e = git
+            .exec(
+                &std::env::temp_dir(),
+                &["-c", "alias.slow=!ping -n 30 127.0.0.1", "slow"],
+            )
+            .unwrap_err();
         assert!(e.contains("slow did not finish"), "{e}");
-        assert!(started.elapsed() < Duration::from_secs(10), "took {:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

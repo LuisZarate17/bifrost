@@ -77,9 +77,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
     let mut i = 0;
     while i < args.len() {
         let value = |i: usize, what: &str| -> Result<String, String> {
-            args.get(i + 1)
-                .cloned()
-                .ok_or_else(|| format!("{what} needs a value"))
+            args.get(i + 1).cloned().ok_or_else(|| format!("{what} needs a value"))
         };
         match args[i].as_str() {
             "--models" => {
@@ -259,19 +257,11 @@ fn run(args: &Args) -> Result<(), String> {
                     ollama::unload(model)?;
                     let baseline = card.as_ref().ok().and_then(|c| c.sample().ok());
 
-                    print!(
-                        "  {model} · {image_name} · {prompt_name} · rep {rep}/{} … ",
-                        args.reps
-                    );
+                    print!("  {model} · {image_name} · {prompt_name} · rep {rep}/{} … ", args.reps);
                     let _ = std::io::stdout().flush();
 
-                    let attempt = ollama::generate_measured(
-                        model,
-                        prompt_text,
-                        Some(image_b64),
-                        NUM_CTX,
-                        GENERATE_TIMEOUT,
-                    );
+                    let attempt =
+                        ollama::generate_measured(model, prompt_text, Some(image_b64), NUM_CTX, GENERATE_TIMEOUT);
 
                     // One bad cell must not destroy a matrix that has been
                     // running for an hour, and must not be written down as if
@@ -314,8 +304,7 @@ fn run(args: &Args) -> Result<(), String> {
                     // and prefill is the one comparable with A2, whose harness
                     // paid the load outside the measurement by warming up on a
                     // synthetic image first.
-                    prefills
-                        .push((m.ttft.as_secs_f64() - m.load_ns as f64 / 1e9).max(0.0) * 1000.0);
+                    prefills.push((m.ttft.as_secs_f64() - m.load_ns as f64 / 1e9).max(0.0) * 1000.0);
                     totals.push(m.total.as_secs_f64());
                     tps.push(m.decode_tps());
                     chars = m.answer.len();
@@ -361,9 +350,7 @@ fn run(args: &Args) -> Result<(), String> {
             r.prefill_ms,
             r.total_s,
             r.decode_tps,
-            r.resident_mib
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "-".into()),
+            r.resident_mib.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
             r.chars,
         );
     }
@@ -423,7 +410,10 @@ fn run(args: &Args) -> Result<(), String> {
     // Said last and said plainly. A benchmark that hides its failures is a
     // benchmark you will quote without knowing what is missing from it.
     if !failures.is_empty() {
-        println!("\n{} run(s) produced no usable numbers and were NOT recorded:", failures.len());
+        println!(
+            "\n{} run(s) produced no usable numbers and were NOT recorded:",
+            failures.len()
+        );
         for f in &failures {
             println!("  {f}");
         }
@@ -465,8 +455,7 @@ fn selftest_shuffle() -> std::process::ExitCode {
     }
 
     // And the clock-driven path must vary too, which is the bit that broke.
-    let live: std::collections::BTreeSet<Vec<usize>> =
-        (0..200).map(|_| report::shuffled(N)).collect();
+    let live: std::collections::BTreeSet<Vec<usize>> = (0..200).map(|_| report::shuffled(N)).collect();
     println!("  clock-seeded distinct permutations over 200 calls: {}", live.len());
     if live.len() < 2 {
         eprintln!("  FAIL: every clock-seeded shuffle returned the same order");

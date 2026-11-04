@@ -94,7 +94,11 @@ fn main() {
 
     let cases: Vec<Case> = vec![
         // ---- should call a tool -------------------------------------------
-        Case { prompt: "What time is it right now?", want: Some("get_time"), check: any },
+        Case {
+            prompt: "What time is it right now?",
+            want: Some("get_time"),
+            check: any,
+        },
         Case {
             prompt: "Add 847 and 1259 for me.",
             want: Some("add"),
@@ -115,19 +119,30 @@ fn main() {
             want: Some("read_file"),
             check: |a| a["path"].as_str().is_some_and(|p| p.contains("README.md")),
         },
-        Case { prompt: "What is today's date?", want: Some("get_time"), check: any },
-
+        Case {
+            prompt: "What is today's date?",
+            want: Some("get_time"),
+            check: any,
+        },
         // ---- must NOT call a tool -----------------------------------------
         // A model that reaches for a tool here is unusable: every one of these
         // is answerable from what it already knows, and a spurious call costs a
         // round trip and puts made-up data in the conversation.
-        Case { prompt: "What is the capital of France?", want: None, check: any },
+        Case {
+            prompt: "What is the capital of France?",
+            want: None,
+            check: any,
+        },
         Case {
             prompt: "Explain in one sentence what a borrow checker does.",
             want: None,
             check: any,
         },
-        Case { prompt: "Write a haiku about rain.", want: None, check: any },
+        Case {
+            prompt: "Write a haiku about rain.",
+            want: None,
+            check: any,
+        },
         Case {
             prompt: "What does the Rust keyword 'impl' mean? Answer in one sentence.",
             want: None,
@@ -138,10 +153,18 @@ fn main() {
     println!("G0 — tool-call probe");
     println!("model:  {model}");
     println!("think:  {}", think.map_or("unset (the model's own)", Think::name));
-    println!("path:   {}", if recover { "recover (the app's: native, then the raw retry)" } else { "native" });
+    println!(
+        "path:   {}",
+        if recover {
+            "recover (the app's: native, then the raw retry)"
+        } else {
+            "native"
+        }
+    );
     println!("ctx:    {}", cfg.num_ctx);
     println!("temp:   0 - a verdict that moves between runs is not a measurement");
-    println!("cases:  {} ({} expect a call, {} expect none)\n",
+    println!(
+        "cases:  {} ({} expect a call, {} expect none)\n",
         cases.len(),
         cases.iter().filter(|c| c.want.is_some()).count(),
         cases.iter().filter(|c| c.want.is_none()).count(),
@@ -177,7 +200,10 @@ fn main() {
         let got = calls.first();
         let verdict = match (case.want, got) {
             // Wanted none, got none.
-            (None, None) => { correct += 1; "ok    no call, correctly".to_string() }
+            (None, None) => {
+                correct += 1;
+                "ok    no call, correctly".to_string()
+            }
             // Wanted none, got one. The failure that nothing else catches.
             (None, Some(c)) => {
                 spurious += 1;
@@ -187,8 +213,10 @@ fn main() {
             (Some(w), None) => {
                 missed += 1;
                 let prose = reply.message.content.trim().replace('\n', " ");
-                format!("MISSED    wanted {w}, answered in prose: \"{}\"",
-                    prose.chars().take(60).collect::<String>())
+                format!(
+                    "MISSED    wanted {w}, answered in prose: \"{}\"",
+                    prose.chars().take(60).collect::<String>()
+                )
             }
             (Some(w), Some(c)) if c.function.name != w => {
                 wrong_tool += 1;
@@ -198,7 +226,10 @@ fn main() {
                 bad_args += 1;
                 format!("BAD ARGS  {w} called with {}", c.function.arguments)
             }
-            (Some(w), Some(_)) => { correct += 1; format!("ok    {w}, correct arguments") }
+            (Some(w), Some(_)) => {
+                correct += 1;
+                format!("ok    {w}, correct arguments")
+            }
         };
 
         println!("{:>2}. {verdict}", i + 1);
@@ -222,7 +253,9 @@ fn main() {
         println!("  recovered      {recovered}     <- needed the raw retry or a passed-through call read back out");
     }
     if fed_back > 0 {
-        println!("  fed back       {fed_back}     <- Ollama could not read the call; judged above as a wrong or spurious call");
+        println!(
+            "  fed back       {fed_back}     <- Ollama could not read the call; judged above as a wrong or spurious call"
+        );
     }
     println!("\n  pass rate: {:.0}%", 100.0 * correct as f64 / total as f64);
 }

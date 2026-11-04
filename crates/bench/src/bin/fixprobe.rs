@@ -97,10 +97,14 @@ fn main() {
 ";
 
 fn project(main_rs: &str) -> Files {
-    [("Cargo.toml", CARGO_TOML), ("src/config.rs", CONFIG_RS), ("src/main.rs", main_rs)]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
+    [
+        ("Cargo.toml", CARGO_TOML),
+        ("src/config.rs", CONFIG_RS),
+        ("src/main.rs", main_rs),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
 }
 
 fn crlf(s: &str) -> Vec<u8> {
@@ -345,9 +349,28 @@ fn run(model: &str, task: &Task, variant: Variant, opts: Options, scratch: &Path
 
     let with = variant == Variant::With;
     let offered = tools::available(true, with.then(|| check::label(&cargo.argv)).as_deref());
-    let mut messages = vec![Message::system(tools::system_prompt(&ws, with)), Message::user(task.prompt)];
-    let setup = Setup { ws: &ws, backups: &backups, check: with.then_some(cargo), confine_reads: false, compact: true, commands: None, unattended: false };
-    let r = probe::run_loop(model, &mut messages, &offered, opts, Transport::Recover, PROBE_ROUNDS, &setup);
+    let mut messages = vec![
+        Message::system(tools::system_prompt(&ws, with)),
+        Message::user(task.prompt),
+    ];
+    let setup = Setup {
+        ws: &ws,
+        backups: &backups,
+        check: with.then_some(cargo),
+        confine_reads: false,
+        compact: true,
+        commands: None,
+        unattended: false,
+    };
+    let r = probe::run_loop(
+        model,
+        &mut messages,
+        &offered,
+        opts,
+        Transport::Recover,
+        PROBE_ROUNDS,
+        &setup,
+    );
 
     let mut out = Outcome {
         verdict: Verdict::Fail,
@@ -383,7 +406,12 @@ fn run(model: &str, task: &Task, variant: Variant, opts: Options, scratch: &Path
                 out.why = format!("the final check did not finish ({:?}) — environment", o.ended);
             }
             Ok(o) if !o.passed() => {
-                let first = o.output.lines().find(|l| l.starts_with("error")).unwrap_or("").to_string();
+                let first = o
+                    .output
+                    .lines()
+                    .find(|l| l.starts_with("error"))
+                    .unwrap_or("")
+                    .to_string();
                 out.why = format!("does not build: {first}");
             }
             Ok(_) => match (task.done)(&tree(&dir)) {
@@ -408,7 +436,10 @@ fn run(model: &str, task: &Task, variant: Variant, opts: Options, scratch: &Path
 // ── main ────────────────────────────────────────────────────────────────────
 
 fn arg(args: &[String], key: &str) -> Option<String> {
-    args.iter().position(|a| a == key).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == key)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn main() {
@@ -422,14 +453,19 @@ fn main() {
         Some("without") => vec![Variant::Without],
         _ => vec![Variant::With, Variant::Without],
     };
-    let tasks: Vec<Task> =
-        tasks().into_iter().filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o))).collect();
+    let tasks: Vec<Task> = tasks()
+        .into_iter()
+        .filter(|t| only.as_deref().is_none_or(|o| t.id.starts_with(o)))
+        .collect();
 
     let scratch_root = std::env::temp_dir().join(format!("bifrost-fixprobe-{}", std::process::id()));
     let cargo = Check {
         argv: vec!["cargo".into(), "check".into()],
         env: vec![
-            ("CARGO_TARGET_DIR".into(), scratch_root.join("target").to_string_lossy().into_owned()),
+            (
+                "CARGO_TARGET_DIR".into(),
+                scratch_root.join("target").to_string_lossy().into_owned(),
+            ),
             ("CARGO_NET_OFFLINE".into(), "true".into()),
         ],
     };
@@ -439,7 +475,10 @@ fn main() {
     println!("ctx:    {}", cfg.num_ctx);
     println!("tasks:  {} · each one's obvious edit breaks the build", tasks.len());
     println!("runs:   {runs} at the app's own settings, plus 1 at temperature 0");
-    println!("bound:  {PROBE_ROUNDS} rounds (the app stops at {})\n", tools::MAX_ROUNDS);
+    println!(
+        "bound:  {PROBE_ROUNDS} rounds (the app stops at {})\n",
+        tools::MAX_ROUNDS
+    );
 
     // The shared target directory, built once — and the place to find out now,
     // not forty runs in, that this machine will not build the fixture at all.
@@ -469,8 +508,10 @@ fn main() {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or_default();
-    let settings: Vec<(&str, Options, usize)> =
-        vec![("app", Options::new(cfg.num_ctx), runs), ("t=0", Options::measured(cfg.num_ctx), 1)];
+    let settings: Vec<(&str, Options, usize)> = vec![
+        ("app", Options::new(cfg.num_ctx), runs),
+        ("t=0", Options::measured(cfg.num_ctx), 1),
+    ];
 
     let mut rows = Vec::new();
     let mut json = Vec::new();
@@ -498,7 +539,11 @@ fn main() {
                     secs += o.secs;
                     checks += o.checks;
                     over += o.over_app_bound as usize;
-                    let shown = if o.verdict == Verdict::Pass && o.over_app_bound { "LATE" } else { o.verdict.label() };
+                    let shown = if o.verdict == Verdict::Pass && o.over_app_bound {
+                        "LATE"
+                    } else {
+                        o.verdict.label()
+                    };
                     line.push_str(&format!("{shown:<5} "));
                     if o.verdict != Verdict::Pass {
                         println!("    {} run {}: {} — {}", task.id, i + 1, o.verdict.label(), o.why);
@@ -563,7 +608,11 @@ mod tests {
     #[test]
     fn each_task_is_not_already_done_by_the_untouched_fixture() {
         for t in tasks() {
-            assert!((t.done)(&project(t.start)).is_err(), "{} would pass with no change", t.id);
+            assert!(
+                (t.done)(&project(t.start)).is_err(),
+                "{} would pass with no change",
+                t.id
+            );
         }
     }
 
@@ -571,7 +620,11 @@ mod tests {
     #[test]
     fn the_broken_task_accepts_a_typed_let() {
         let t = tasks().into_iter().find(|t| t.id == "f05-broken").unwrap();
-        for typed in [r#"let name: &str = "world";"#, r#"let  name :&str="world" ;"#, r#"let name = "world";"#] {
+        for typed in [
+            r#"let name: &str = "world";"#,
+            r#"let  name :&str="world" ;"#,
+            r#"let name = "world";"#,
+        ] {
             let fixed = MAIN_RS_BROKEN.replace(r#"let name = "world""#, typed);
             assert!((t.done)(&project(&fixed)).is_ok(), "{typed}");
         }

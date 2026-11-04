@@ -74,7 +74,11 @@ fn resolve_in(
         let p = PathBuf::from(p);
         return p.is_file().then_some(p);
     }
-    let names: &[&str] = if cfg!(windows) { &["claude.exe", "claude.cmd"] } else { &["claude"] };
+    let names: &[&str] = if cfg!(windows) {
+        &["claude.exe", "claude.cmd"]
+    } else {
+        &["claude"]
+    };
     let in_dir = |dir: &Path| names.iter().map(|n| dir.join(n)).find(|p| p.is_file());
     let on_path = path
         .into_iter()
@@ -104,7 +108,12 @@ pub struct Status {
 /// That makes no model call, so asking costs nothing.
 pub fn status(configured: Option<&str>) -> Status {
     let Some(path) = resolve(configured) else {
-        return Status { found: false, path: None, signed_in: false, email: None };
+        return Status {
+            found: false,
+            path: None,
+            signed_in: false,
+            email: None,
+        };
     };
     let shown = path.display().to_string();
     let ask = || -> Option<serde_json::Value> {
@@ -127,9 +136,18 @@ pub fn status(configured: Option<&str>) -> Status {
 /// else whatever lies between the first `{` and the last `}`. Output and errors share
 /// one pipe, so a warning may come before or after it.
 fn json_object(output: &str) -> Option<serde_json::Value> {
-    let object = |s: &str| serde_json::from_str::<serde_json::Value>(s.trim()).ok().filter(|v| v.is_object());
+    let object = |s: &str| {
+        serde_json::from_str::<serde_json::Value>(s.trim())
+            .ok()
+            .filter(|v| v.is_object())
+    };
     object(output)
-        .or_else(|| output.lines().rev().find_map(|l| l.trim().starts_with('{').then(|| object(l)).flatten()))
+        .or_else(|| {
+            output
+                .lines()
+                .rev()
+                .find_map(|l| l.trim().starts_with('{').then(|| object(l)).flatten())
+        })
         .or_else(|| {
             let (start, end) = (output.find('{')?, output.rfind('}')?);
             output.get(start..=end).and_then(object)
@@ -173,7 +191,11 @@ pub fn turn_diff(ids: &[String], backups: &Path) -> Result<Diff, String> {
             text.push_str(&part);
         }
     }
-    Ok(Diff { files, bytes: text.len(), text })
+    Ok(Diff {
+        files,
+        bytes: text.len(),
+        text,
+    })
 }
 
 fn name_of(net: &Net) -> String {
@@ -208,7 +230,11 @@ fn file_diff(net: &Net) -> Option<String> {
     if before.is_none() && after.is_none() {
         return None;
     }
-    let rename = if net.moved_to.is_some() { format!("# renamed: {name}\n") } else { String::new() };
+    let rename = if net.moved_to.is_some() {
+        format!("# renamed: {name}\n")
+    } else {
+        String::new()
+    };
     if before == after {
         return (!rename.is_empty()).then_some(rename);
     }
@@ -261,7 +287,11 @@ pub fn prompt(question: &str, diff: &str) -> (String, bool) {
     }
     let cut = end < question.len();
     let note = if cut {
-        format!("\n[The question was {} bytes; only the first {} are shown.]", question.len(), end)
+        format!(
+            "\n[The question was {} bytes; only the first {} are shown.]",
+            question.len(),
+            end
+        )
     } else {
         String::new()
     };
@@ -299,7 +329,13 @@ pub fn prepare(question: &str, ids: &[String], backups: &Path) -> Result<Prepare
     }
     let (text, question_cut) = prompt(question, &diff.text);
     let hash = format!("{:016x}", edit::fingerprint(text.as_bytes()));
-    Ok(Prepared { files: diff.files, bytes: text.len(), question_cut, text, hash })
+    Ok(Prepared {
+        files: diff.files,
+        bytes: text.len(),
+        question_cut,
+        text,
+        hash,
+    })
 }
 
 /// Send `prompt` (see [`prepare`]) to Claude for review. `configured` is the config's
@@ -332,7 +368,9 @@ pub fn run(configured: Option<&str>, prompt: &str, cancelled: impl Fn() -> bool)
     let outcome = check::run_with_input(&dir, &argv, prompt.as_bytes(), KEEP, RUN_TIMEOUT, &[], cancelled)
         .map_err(|e| RunError::Failed(format!("Could not start `claude`: {e}")))?;
     if outcome.blocked.is_some() {
-        let name = command.file_name().map_or("claude".into(), |n| n.to_string_lossy().into_owned());
+        let name = command
+            .file_name()
+            .map_or("claude".into(), |n| n.to_string_lossy().into_owned());
         return failed(format!(
             "Windows blocked {name} from running (Smart App Control), so the check could not start."
         ));
@@ -351,8 +389,16 @@ pub fn run(configured: Option<&str>, prompt: &str, cancelled: impl Fn() -> bool)
 /// The answer in `claude -p --output-format json`'s output, or why there is none.
 fn answer(output: &str, code: Option<i32>) -> Result<String, RunError> {
     let reply = json_object(output);
-    let text = reply.as_ref().and_then(|v| v.get("result")).and_then(|v| v.as_str()).map(str::trim);
-    let is_error = reply.as_ref().and_then(|v| v.get("is_error")).and_then(|v| v.as_bool()).unwrap_or(false);
+    let text = reply
+        .as_ref()
+        .and_then(|v| v.get("result"))
+        .and_then(|v| v.as_str())
+        .map(str::trim);
+    let is_error = reply
+        .as_ref()
+        .and_then(|v| v.get("is_error"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     if is_error || (reply.is_some() && code != Some(0)) {
         let said = text.filter(|t| !t.is_empty());
@@ -362,11 +408,18 @@ fn answer(output: &str, code: Option<i32>) -> Result<String, RunError> {
         }
         return failed(match said {
             Some(t) => format!("Claude reported an error: {t}"),
-            None => format!("Claude reported an error (exit {}).", code.map_or("none".into(), |c| c.to_string())),
+            None => format!(
+                "Claude reported an error (exit {}).",
+                code.map_or("none".into(), |c| c.to_string())
+            ),
         });
     }
     if let Some(text) = text {
-        return if text.is_empty() { failed("Claude sent back an empty answer.") } else { Ok(text.to_string()) };
+        return if text.is_empty() {
+            failed("Claude sent back an empty answer.")
+        } else {
+            Ok(text.to_string())
+        };
     }
     let lower = output.to_lowercase();
     if lower.contains("not logged in") || lower.contains("/login") {
@@ -407,7 +460,12 @@ mod tests {
     }
 
     fn net(display: &str, before: Content, after: Content) -> Net {
-        Net { display: display.into(), moved_to: None, before, after }
+        Net {
+            display: display.into(),
+            moved_to: None,
+            before,
+            after,
+        }
     }
 
     fn text(s: &str) -> Content {
@@ -444,7 +502,10 @@ mod tests {
         assert_eq!(file_diff(&moved).unwrap(), "# renamed: a.txt -> sub/b.txt\n");
         moved.after = text("x\ny\n");
         let d = file_diff(&moved).unwrap();
-        assert!(d.contains("# renamed: a.txt -> sub/b.txt\n--- a/a.txt\n+++ b/sub/b.txt\n"), "{d}");
+        assert!(
+            d.contains("# renamed: a.txt -> sub/b.txt\n--- a/a.txt\n+++ b/sub/b.txt\n"),
+            "{d}"
+        );
         assert!(d.contains("+y\n"));
     }
 
@@ -459,10 +520,18 @@ mod tests {
 
     #[test]
     fn binary_and_oversize_files_are_named_not_sent() {
-        let b = file_diff(&net("img.png", Content::Bytes(vec![0, 1, 2]), Content::Bytes(vec![0, 9]))).unwrap();
+        let b = file_diff(&net(
+            "img.png",
+            Content::Bytes(vec![0, 1, 2]),
+            Content::Bytes(vec![0, 9]),
+        ))
+        .unwrap();
         assert_eq!(b, "# img.png: not shown (not text)\n");
         let big = file_diff(&net("big.txt", text("a\n"), Content::TooBig(5_000_000))).unwrap();
-        assert!(big.starts_with("# big.txt: not shown (5000000 bytes, over the"), "{big}");
+        assert!(
+            big.starts_with("# big.txt: not shown (5000000 bytes, over the"),
+            "{big}"
+        );
     }
 
     /// Make an edit, a create, a delete and a move with the real edit code, then ask
@@ -490,10 +559,16 @@ mod tests {
         assert_eq!(diff.files, 4, "{}", diff.text);
         assert_eq!(diff.bytes, diff.text.len());
         let t = &diff.text;
-        assert!(t.contains("--- a/a.txt\n+++ b/a.txt\n") && t.contains("-two\n+2\n"), "{t}");
+        assert!(
+            t.contains("--- a/a.txt\n+++ b/a.txt\n") && t.contains("-two\n+2\n"),
+            "{t}"
+        );
         assert!(!t.contains('\r'), "{t:?}");
         assert!(t.contains("--- /dev/null\n+++ b/n.txt\n"), "{t}");
-        assert!(t.contains("--- a/gone.txt\n+++ /dev/null\n") && t.contains("-bye\n"), "{t}");
+        assert!(
+            t.contains("--- a/gone.txt\n+++ /dev/null\n") && t.contains("-bye\n"),
+            "{t}"
+        );
         assert!(t.contains("# renamed: old.txt -> sub/new.txt\n"), "{t}");
         // The file as it is now: a hand edit since the turn is in the diff too.
         std::fs::write(project.join("n.txt"), "new\nmore\n").unwrap();
@@ -513,7 +588,10 @@ mod tests {
 
     #[test]
     fn an_answer_is_the_result_field() {
-        let ok = answer(r#"{"type":"result","is_error":false,"result":"  Looks fine.\n"}"#, Some(0));
+        let ok = answer(
+            r#"{"type":"result","is_error":false,"result":"  Looks fine.\n"}"#,
+            Some(0),
+        );
         assert_eq!(ok, Ok("Looks fine.".to_string()));
     }
 
@@ -523,9 +601,17 @@ mod tests {
             Err(RunError::Failed(m)) => m,
             other => panic!("{other:?}"),
         };
-        assert!(msg(answer(r#"{"is_error":true,"result":"Not logged in - Please run /login"}"#, Some(1)))
-            .contains("not signed in"));
-        assert!(msg(answer(r#"{"is_error":true,"result":"Overloaded"}"#, Some(0))).contains("Claude reported an error: Overloaded"));
+        assert!(
+            msg(answer(
+                r#"{"is_error":true,"result":"Not logged in - Please run /login"}"#,
+                Some(1)
+            ))
+            .contains("not signed in")
+        );
+        assert!(
+            msg(answer(r#"{"is_error":true,"result":"Overloaded"}"#, Some(0)))
+                .contains("Claude reported an error: Overloaded")
+        );
         assert!(msg(answer(r#"{"result":"x"}"#, Some(2))).contains("reported an error"));
         assert!(msg(answer(r#"{"result":""}"#, Some(0))).contains("empty"));
         assert!(msg(answer("garbage", Some(0))).contains("could not be read"));
@@ -558,16 +644,29 @@ mod tests {
         let ws = edit::Workspace::open(&project).unwrap();
         let backups = dir.0.join("backups");
         std::fs::write(project.join("a.txt"), "one\n").unwrap();
-        let id = edit::apply(&edit::plan_replace(&ws, "a.txt", "one", "two").unwrap(), &backups).unwrap().id;
+        let id = edit::apply(&edit::plan_replace(&ws, "a.txt", "one", "two").unwrap(), &backups)
+            .unwrap()
+            .id;
         let ids = vec![id];
 
         let a = prepare("q", &ids, &backups).unwrap();
-        assert_eq!(a, prepare("q", &ids, &backups).unwrap(), "the same turn gives the same preview");
+        assert_eq!(
+            a,
+            prepare("q", &ids, &backups).unwrap(),
+            "the same turn gives the same preview"
+        );
         assert_eq!(a.bytes, a.text.len());
-        assert!(a.text.contains("<question>\nq\n"), "the size shown includes the question");
+        assert!(
+            a.text.contains("<question>\nq\n"),
+            "the size shown includes the question"
+        );
         assert!(prepare("a much longer question", &ids, &backups).unwrap().bytes > a.bytes);
         std::fs::write(project.join("a.txt"), "three\n").unwrap();
-        assert_ne!(prepare("q", &ids, &backups).unwrap().hash, a.hash, "a changed file is a different send");
+        assert_ne!(
+            prepare("q", &ids, &backups).unwrap().hash,
+            a.hash,
+            "a changed file is a different send"
+        );
         assert!(prepare("q", &[], &backups).is_err(), "nothing to check");
     }
 
@@ -593,10 +692,16 @@ mod tests {
         let local = home.join(".local").join("bin");
         std::fs::create_dir_all(&local).unwrap();
         std::fs::write(local.join("claude.cmd"), "@echo off\n").unwrap();
-        assert_eq!(resolve_in(None, None, Some(home.clone().into())), Some(local.join("claude.cmd")));
+        assert_eq!(
+            resolve_in(None, None, Some(home.clone().into())),
+            Some(local.join("claude.cmd"))
+        );
         // An exe beside it wins.
         std::fs::write(local.join("claude.exe"), "").unwrap();
-        assert_eq!(resolve_in(None, None, Some(home.into())), Some(local.join("claude.exe")));
+        assert_eq!(
+            resolve_in(None, None, Some(home.into())),
+            Some(local.join("claude.exe"))
+        );
     }
 
     // ── against a stand-in `claude` ─────────────────────────────────────────
@@ -638,9 +743,20 @@ mod tests {
         assert_eq!(got, "Looks fine.");
 
         let stdin = std::fs::read_to_string(dir.0.join("stdin.txt")).unwrap();
-        assert!(stdin.contains("fix it") && stdin.contains("+++ b/x") && stdin.contains("+y"), "{stdin}");
+        assert!(
+            stdin.contains("fix it") && stdin.contains("+++ b/x") && stdin.contains("+y"),
+            "{stdin}"
+        );
         let args = std::fs::read_to_string(dir.0.join("args.txt")).unwrap();
-        for want in ["-p", "--output-format json", "--tools \"\"", "--no-session-persistence", "--safe-mode", "--strict-mcp-config", "--append-system-prompt"] {
+        for want in [
+            "-p",
+            "--output-format json",
+            "--tools \"\"",
+            "--no-session-persistence",
+            "--safe-mode",
+            "--strict-mcp-config",
+            "--append-system-prompt",
+        ] {
             assert!(args.contains(want), "{want} in {args}");
         }
         let cwd = std::fs::read_to_string(dir.0.join("cwd.txt")).unwrap();
@@ -651,7 +767,11 @@ mod tests {
     #[test]
     fn run_reports_an_error_reply_in_words() {
         let dir = Dir::new("err");
-        let cmd = stand_in(&dir, r#"{"is_error":true,"result":"Not logged in - Please run /login"}"#, "");
+        let cmd = stand_in(
+            &dir,
+            r#"{"is_error":true,"result":"Not logged in - Please run /login"}"#,
+            "",
+        );
         match run(Some(&cmd), "q", || false) {
             Err(RunError::Failed(m)) => assert!(m.contains("not signed in"), "{m}"),
             other => panic!("{other:?}"),
@@ -662,7 +782,11 @@ mod tests {
     #[test]
     fn a_smart_app_control_block_is_its_own_message() {
         let dir = Dir::new("sac");
-        let cmd = stand_in(&dir, "{}", "echo An Application Control policy has blocked this file& exit /b 1");
+        let cmd = stand_in(
+            &dir,
+            "{}",
+            "echo An Application Control policy has blocked this file& exit /b 1",
+        );
         match run(Some(&cmd), "q", || false) {
             Err(RunError::Failed(m)) => assert!(m.contains("Windows blocked claude.cmd"), "{m}"),
             other => panic!("{other:?}"),

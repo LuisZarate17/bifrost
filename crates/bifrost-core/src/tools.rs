@@ -419,27 +419,54 @@ pub fn with_notes(prompt: String, notes: &Notes) -> String {
 /// What the model asked for, in a form the UI can show before anything happens.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
-    Read { path: String, range: Option<Lines> },
-    Edit { path: String, old_text: String, new_text: String },
-    Create { path: String, content: String },
+    Read {
+        path: String,
+        range: Option<Lines>,
+    },
+    Edit {
+        path: String,
+        old_text: String,
+        new_text: String,
+    },
+    Create {
+        path: String,
+        content: String,
+    },
     /// Delete one file. Backed up first; undoable.
-    Delete { path: String },
+    Delete {
+        path: String,
+    },
     /// Move or rename one file to a path that does not exist yet.
-    Move { path: String, to: String },
+    Move {
+        path: String,
+        to: String,
+    },
     /// Which files match a glob — all of them, with none.
-    List { pattern: Option<String> },
+    List {
+        pattern: Option<String>,
+    },
     /// Which lines contain some text, optionally only in files matching a glob.
-    Search { text: String, pattern: Option<String> },
+    Search {
+        text: String,
+        pattern: Option<String>,
+    },
     /// Run the folder's check command. Carries nothing: what runs was chosen by
     /// a person, not by the model.
     Check,
     /// A task list. Touches nothing, so it never asks.
-    Plan { steps: Vec<PlanStep> },
+    Plan {
+        steps: Vec<PlanStep>,
+    },
     /// Probe only — see [`rewrite_tool`].
-    Rewrite { path: String, content: String },
+    Rewrite {
+        path: String,
+        content: String,
+    },
     /// Run one shell command, as written. Only Hugin offers it ([`run_command_tool`]),
     /// and it always asks.
-    Command { command: String },
+    Command {
+        command: String,
+    },
 }
 
 impl Request {
@@ -588,17 +615,29 @@ pub fn interpret(call: &ToolCall) -> Result<Request, String> {
 
 /// `text` as a failed result: `error: text`, unless it already says so.
 pub fn failure(text: &str) -> String {
-    if text.trim_start().starts_with("error:") { text.to_string() } else { format!("error: {text}") }
+    if text.trim_start().starts_with("error:") {
+        text.to_string()
+    } else {
+        format!("error: {text}")
+    }
 }
 
 fn interpret_call(call: &ToolCall) -> Result<Request, String> {
     let name = call.function.name.as_str();
     let path = arg(call, "path").unwrap_or_default().trim().to_string();
-    if path.is_empty() && matches!(name, "read_file" | "edit_file" | "create_file" | "write_file" | "delete_file" | "move_file") {
+    if path.is_empty()
+        && matches!(
+            name,
+            "read_file" | "edit_file" | "create_file" | "write_file" | "delete_file" | "move_file"
+        )
+    {
         return Err(format!("{name} was called without a path"));
     }
     match name {
-        "read_file" => Ok(Request::Read { path, range: read_range(&call.function.arguments)? }),
+        "read_file" => Ok(Request::Read {
+            path,
+            range: read_range(&call.function.arguments)?,
+        }),
         "edit_file" => Ok(Request::Edit {
             path,
             old_text: arg(call, "old_text").ok_or("edit_file was called without old_text")?,
@@ -621,11 +660,15 @@ fn interpret_call(call: &ToolCall) -> Result<Request, String> {
             path,
             content: arg(call, "content").ok_or("write_file was called without content")?,
         }),
-        "list_files" => Ok(Request::List { pattern: optional(call, "pattern") }),
+        "list_files" => Ok(Request::List {
+            pattern: optional(call, "pattern"),
+        }),
         "search" => Ok(Request::Search {
             // Not trimmed: leading spaces can be exactly what is being looked
             // for. Only an empty one is refused.
-            text: arg(call, "text").filter(|t| !t.is_empty()).ok_or("search was called without text")?,
+            text: arg(call, "text")
+                .filter(|t| !t.is_empty())
+                .ok_or("search was called without text")?,
             pattern: optional(call, "pattern"),
         }),
         // Any arguments the model sends are ignored: there is nothing it may
@@ -677,11 +720,21 @@ pub enum Approval {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Auto {
     /// The canonical path to read, inside the project folder, and which lines.
-    Read { real: PathBuf, range: Option<Lines> },
-    List { pattern: Option<String> },
-    Search { text: String, pattern: Option<String> },
+    Read {
+        real: PathBuf,
+        range: Option<Lines>,
+    },
+    List {
+        pattern: Option<String>,
+    },
+    Search {
+        text: String,
+        pattern: Option<String>,
+    },
     /// The task list, already parsed. Runs with no folder, too.
-    Plan { steps: Vec<PlanStep> },
+    Plan {
+        steps: Vec<PlanStep>,
+    },
 }
 
 /// **The approval rule** — one function, so the app and the probe cannot
@@ -726,15 +779,16 @@ pub fn approval(ws: Option<&Workspace>, req: &Request, ask_every_call: bool) -> 
             Located::Inside(real) if !protected(Some(ws), &real, ask_every_call) => {
                 Approval::Auto(Auto::Read { real, range: *range })
             }
-            Located::MissingInside => {
-                Approval::Reject(format!("{}{READ_OF_MISSING}", edit::clean(path)))
-            }
+            Located::MissingInside => Approval::Reject(format!("{}{READ_OF_MISSING}", edit::clean(path))),
             Located::Inside(_) | Located::Outside(_) => Approval::Ask,
         },
-        Request::List { pattern } => Approval::Auto(Auto::List { pattern: pattern.clone() }),
-        Request::Search { text, pattern } => {
-            Approval::Auto(Auto::Search { text: text.clone(), pattern: pattern.clone() })
-        }
+        Request::List { pattern } => Approval::Auto(Auto::List {
+            pattern: pattern.clone(),
+        }),
+        Request::Search { text, pattern } => Approval::Auto(Auto::Search {
+            text: text.clone(),
+            pattern: pattern.clone(),
+        }),
         Request::Edit { .. }
         | Request::Create { .. }
         | Request::Delete { .. }
@@ -769,14 +823,10 @@ pub fn protected(ws: Option<&Workspace>, real: &Path, ask_every_call: bool) -> b
 ///
 /// A path that does not resolve is planned as usual, since its error names the
 /// path and nothing of any file.
-pub fn plan_edit(
-    ws: &Workspace,
-    path: &str,
-    old: &str,
-    new: &str,
-    ask_every_call: bool,
-) -> Result<edit::Plan, String> {
-    let quiet = ws.resolve_existing(path).is_ok_and(|real| protected(Some(ws), &real, ask_every_call));
+pub fn plan_edit(ws: &Workspace, path: &str, old: &str, new: &str, ask_every_call: bool) -> Result<edit::Plan, String> {
+    let quiet = ws
+        .resolve_existing(path)
+        .is_ok_and(|real| protected(Some(ws), &real, ask_every_call));
     edit::plan_replace_in(ws, path, old, new, quiet)
 }
 
@@ -1069,7 +1119,11 @@ pub fn parse_plan(text: &str) -> Vec<PlanStep> {
             }
         }
         let mut status = PlanStatus::Pending;
-        for (mark, s) in [("[ ]", PlanStatus::Pending), ("[~]", PlanStatus::Doing), ("[x]", PlanStatus::Done)] {
+        for (mark, s) in [
+            ("[ ]", PlanStatus::Pending),
+            ("[~]", PlanStatus::Doing),
+            ("[x]", PlanStatus::Done),
+        ] {
             if rest.is_char_boundary(3) && rest[..3].eq_ignore_ascii_case(mark) {
                 status = s;
                 rest = rest[3..].trim_start();
@@ -1079,7 +1133,10 @@ pub fn parse_plan(text: &str) -> Vec<PlanStep> {
         if rest.is_empty() {
             continue;
         }
-        steps.push(PlanStep { text: rest.chars().take(MAX_PLAN_STEP_CHARS).collect(), status });
+        steps.push(PlanStep {
+            text: rest.chars().take(MAX_PLAN_STEP_CHARS).collect(),
+            status,
+        });
         if steps.len() == MAX_PLAN_STEPS {
             break;
         }
@@ -1121,7 +1178,10 @@ pub const CHECK_FAILED_NOTE: &str = "The last check failed, so the work is not d
 /// back to fix its code keeps what it did before — the failures it has repeated, the plan
 /// updates it has made and the build files it has changed.
 fn turn_start(history: &[Message]) -> usize {
-    history.iter().rposition(|m| m.role == "user" && m.content != CHECK_FAILED_NOTE).map_or(0, |i| i + 1)
+    history
+        .iter()
+        .rposition(|m| m.role == "user" && m.content != CHECK_FAILED_NOTE)
+        .map_or(0, |i| i + 1)
 }
 
 /// How many `update_plan` calls the model has made since the user's last message.
@@ -1205,7 +1265,9 @@ pub fn prior_failures(history: &[Message], call: &ToolCall) -> usize {
 fn same_arguments(kept: &serde_json::Value, sent: &serde_json::Value) -> bool {
     match (kept.as_object(), sent.as_object()) {
         (Some(k), Some(s)) => {
-            k.len() == s.len() && k.iter().all(|(key, v)| s.get(key).is_some_and(|w| crate::compact::same_argument(v, w)))
+            k.len() == s.len()
+                && k.iter()
+                    .all(|(key, v)| s.get(key).is_some_and(|w| crate::compact::same_argument(v, w)))
         }
         _ => kept == sent,
     }
@@ -1231,9 +1293,14 @@ pub fn build_files_changed(history: &[Message]) -> Vec<String> {
     let turns = &history[turn_start(history)..];
     let mut out: Vec<String> = Vec::new();
     for (i, m) in turns.iter().enumerate() {
-        let Some(call) = m.tool_calls.as_deref().and_then(|c| c.first()) else { continue };
+        let Some(call) = m.tool_calls.as_deref().and_then(|c| c.first()) else {
+            continue;
+        };
         if m.role != "assistant"
-            || !matches!(call.function.name.as_str(), "edit_file" | "create_file" | "delete_file" | "move_file")
+            || !matches!(
+                call.function.name.as_str(),
+                "edit_file" | "create_file" | "delete_file" | "move_file"
+            )
         {
             continue;
         }
@@ -1241,7 +1308,9 @@ pub fn build_files_changed(history: &[Message]) -> Vec<String> {
         // that says so. A refusal, a denial or a rejection says something else.
         let written = turns.get(i + 1).is_some_and(|r| {
             r.role == "tool"
-                && ["Edited ", "Created ", "Deleted ", "Moved "].iter().any(|p| r.content.starts_with(p))
+                && ["Edited ", "Created ", "Deleted ", "Moved "]
+                    .iter()
+                    .any(|p| r.content.starts_with(p))
         });
         // A move changes two paths: the build file it took away and the one it
         // put there. Cleaned the way `edit` cleans it before writing, so a path
@@ -1262,7 +1331,11 @@ pub fn applied_message(a: &Applied) -> String {
     let made = if a.folders.is_empty() {
         String::new()
     } else {
-        format!(" Made the folder{} {}.", if a.folders.len() == 1 { "" } else { "s" }, a.folders.join(", "))
+        format!(
+            " Made the folder{} {}.",
+            if a.folders.len() == 1 { "" } else { "s" },
+            a.folders.join(", ")
+        )
     };
     if a.op == edit::Op::Delete {
         format!("Deleted {}.", a.display)
@@ -1301,19 +1374,46 @@ mod tests {
     /// absent made "replace `None` with `null`" a deletion.
     #[test]
     fn a_null_string_argument_is_the_word_null_and_only_an_absent_one_is_missing() {
-        let r = interpret(&call("edit_file", json!({ "path": "a.py", "old_text": "None", "new_text": null })));
-        assert!(matches!(r, Ok(Request::Edit { ref new_text, .. }) if new_text == "null"), "{r:?}");
-        let r = interpret(&call("edit_file", json!({ "path": "a.py", "old_text": null, "new_text": "x" })));
-        assert!(matches!(r, Ok(Request::Edit { ref old_text, .. }) if old_text == "null"), "{r:?}");
+        let r = interpret(&call(
+            "edit_file",
+            json!({ "path": "a.py", "old_text": "None", "new_text": null }),
+        ));
+        assert!(
+            matches!(r, Ok(Request::Edit { ref new_text, .. }) if new_text == "null"),
+            "{r:?}"
+        );
+        let r = interpret(&call(
+            "edit_file",
+            json!({ "path": "a.py", "old_text": null, "new_text": "x" }),
+        ));
+        assert!(
+            matches!(r, Ok(Request::Edit { ref old_text, .. }) if old_text == "null"),
+            "{r:?}"
+        );
         let r = interpret(&call("edit_file", json!({ "path": "a.py", "old_text": "None" })));
-        assert!(matches!(r, Ok(Request::Edit { ref new_text, .. }) if new_text.is_empty()), "left out: {r:?}");
+        assert!(
+            matches!(r, Ok(Request::Edit { ref new_text, .. }) if new_text.is_empty()),
+            "left out: {r:?}"
+        );
         let r = interpret(&call("search", json!({ "text": null })));
-        assert!(matches!(r, Ok(Request::Search { ref text, .. }) if text == "null"), "{r:?}");
+        assert!(
+            matches!(r, Ok(Request::Search { ref text, .. }) if text == "null"),
+            "{r:?}"
+        );
         let r = interpret(&call("create_file", json!({ "path": "a.txt", "content": null })));
-        assert!(matches!(r, Ok(Request::Create { ref content, .. }) if content == "null"), "{r:?}");
+        assert!(
+            matches!(r, Ok(Request::Create { ref content, .. }) if content == "null"),
+            "{r:?}"
+        );
         // Numbers and bools are their JSON text.
-        let r = interpret(&call("edit_file", json!({ "path": "a.py", "old_text": 42, "new_text": true })));
-        assert!(matches!(r, Ok(Request::Edit { ref old_text, ref new_text, .. }) if old_text == "42" && new_text == "true"), "{r:?}");
+        let r = interpret(&call(
+            "edit_file",
+            json!({ "path": "a.py", "old_text": 42, "new_text": true }),
+        ));
+        assert!(
+            matches!(r, Ok(Request::Edit { ref old_text, ref new_text, .. }) if old_text == "42" && new_text == "true"),
+            "{r:?}"
+        );
         // An optional filter given as null is no filter.
         let r = interpret(&call("search", json!({ "text": "x", "pattern": null })));
         assert!(matches!(r, Ok(Request::Search { pattern: None, .. })), "{r:?}");
@@ -1334,7 +1434,13 @@ mod tests {
         assert_eq!(d, Request::Delete { path: "old.rs".into() });
         assert_eq!((d.name(), d.path()), ("delete_file", "old.rs"));
         let m = interpret(&call("move_file", json!({ "path": "a.rs", "to": " src/b.rs " }))).unwrap();
-        assert_eq!(m, Request::Move { path: "a.rs".into(), to: "src/b.rs".into() });
+        assert_eq!(
+            m,
+            Request::Move {
+                path: "a.rs".into(),
+                to: "src/b.rs".into()
+            }
+        );
         assert_eq!((m.name(), m.path()), ("move_file", "a.rs"));
         // A move needs somewhere to go.
         assert!(interpret(&call("move_file", json!({ "path": "a.rs" }))).is_err());
@@ -1359,7 +1465,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             r,
-            Request::Edit { path: "src/a.rs".into(), old_text: "x".into(), new_text: "y".into() }
+            Request::Edit {
+                path: "src/a.rs".into(),
+                old_text: "x".into(),
+                new_text: "y".into()
+            }
         );
         assert_eq!(r.name(), "edit_file");
         assert_eq!(r.path(), "src/a.rs");
@@ -1401,12 +1511,31 @@ mod tests {
     #[test]
     fn the_new_tools_say_what_they_are_not_for_and_what_they_do_not_do() {
         let tools = available(true, None);
-        let desc = |n: &str| tools.iter().find(|t| t.function.name == n).unwrap().function.description.clone();
+        let desc = |n: &str| {
+            tools
+                .iter()
+                .find(|t| t.function.name == n)
+                .unwrap()
+                .function
+                .description
+                .clone()
+        };
         assert!(desc("delete_file").contains("not a way to rewrite a file — use edit_file"));
         assert!(desc("move_file").contains("References to the file are not updated — edit them"));
         let create = desc("create_file");
-        assert!(create.contains(CREATE_FOLDERS) && !create.contains("must already exist"), "{create}");
-        let params = |n: &str| tools.iter().find(|t| t.function.name == n).unwrap().function.parameters.clone();
+        assert!(
+            create.contains(CREATE_FOLDERS) && !create.contains("must already exist"),
+            "{create}"
+        );
+        let params = |n: &str| {
+            tools
+                .iter()
+                .find(|t| t.function.name == n)
+                .unwrap()
+                .function
+                .parameters
+                .clone()
+        };
         assert_eq!(params("move_file")["required"], json!(["path", "to"]));
         assert_eq!(params("delete_file")["required"], json!(["path"]));
     }
@@ -1437,15 +1566,23 @@ mod tests {
 
     #[test]
     fn finding_calls_are_read_with_their_optional_pattern() {
-        assert_eq!(interpret(&call("list_files", json!({}))).unwrap(), Request::List { pattern: None });
+        assert_eq!(
+            interpret(&call("list_files", json!({}))).unwrap(),
+            Request::List { pattern: None }
+        );
         assert_eq!(
             interpret(&call("list_files", json!({ "pattern": " src/**/*.rs " }))).unwrap(),
-            Request::List { pattern: Some("src/**/*.rs".into()) }
+            Request::List {
+                pattern: Some("src/**/*.rs".into())
+            }
         );
         // A blank pattern is no pattern, not a pattern matching nothing.
         assert_eq!(
             interpret(&call("search", json!({ "text": "  greet(", "pattern": "" }))).unwrap(),
-            Request::Search { text: "  greet(".into(), pattern: None }
+            Request::Search {
+                text: "  greet(".into(),
+                pattern: None
+            }
         );
         assert!(interpret(&call("search", json!({ "pattern": "*.rs" }))).is_err());
         assert!(interpret(&call("search", json!({ "text": "" }))).is_err());
@@ -1466,8 +1603,14 @@ mod tests {
         let r = interpret(&call("run_command", json!({ "command": text }))).unwrap();
         assert_eq!(r, Request::Command { command: text.into() });
         assert_eq!((r.name(), r.path()), ("run_command", ""));
-        for bad in [json!({}), json!({ "command": "" }), json!({ "command": "  
-" }), json!({ "command": 5 }), json!({ "command": null })] {
+        for bad in [
+            json!({}),
+            json!({ "command": "" }),
+            json!({ "command": "  
+" }),
+            json!({ "command": 5 }),
+            json!({ "command": null }),
+        ] {
             let e = interpret(&call("run_command", bad.clone())).unwrap_err();
             assert!(e.starts_with("error:"), "{bad}: {e}");
         }
@@ -1488,7 +1631,9 @@ mod tests {
     fn a_command_always_asks() {
         let s = Sandbox::new("command");
         let ws = s.ws();
-        let req = Request::Command { command: "git status".into() };
+        let req = Request::Command {
+            command: "git status".into(),
+        };
         for ask_every in [false, true] {
             assert_eq!(approval(Some(&ws), &req, ask_every), Approval::Ask);
         }
@@ -1504,8 +1649,9 @@ mod tests {
         assert!(system_prompt(&ws, true).contains("run_check"));
         // editprobe's Rewrite format swaps this sentence out word for word.
         for check in [false, true] {
-            assert!(system_prompt(&ws, check)
-                .contains("then use edit_file with text copied exactly from what you read"));
+            assert!(
+                system_prompt(&ws, check).contains("then use edit_file with text copied exactly from what you read")
+            );
         }
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1513,13 +1659,20 @@ mod tests {
     // ── the task list ──
 
     fn step(text: &str, status: PlanStatus) -> PlanStep {
-        PlanStep { text: text.to_string(), status }
+        PlanStep {
+            text: text.to_string(),
+            status,
+        }
     }
 
     #[test]
     fn every_spelling_of_a_task_list_is_read() {
         use PlanStatus::*;
-        let want = vec![step("read it", Done), step("change it", Doing), step("run the check", Pending)];
+        let want = vec![
+            step("read it", Done),
+            step("change it", Doing),
+            step("run the check", Pending),
+        ];
         for text in [
             "[x] read it\n[~] change it\n[ ] run the check",
             "- [x] read it\n- [~] change it\n- [ ] run the check",
@@ -1533,7 +1686,11 @@ mod tests {
         // No mark is pending, with or without a bullet or a number.
         assert_eq!(
             parse_plan("read it\n- change it\n2. run the check"),
-            [step("read it", Pending), step("change it", Pending), step("run the check", Pending)]
+            [
+                step("read it", Pending),
+                step("change it", Pending),
+                step("run the check", Pending)
+            ]
         );
         // A step that merely starts with a digit is not a numbered one.
         assert_eq!(parse_plan("2024 tax table"), [step("2024 tax table", Pending)]);
@@ -1549,7 +1706,10 @@ mod tests {
         let long = format!("[ ] {}", "é".repeat(300));
         assert_eq!(parse_plan(&long)[0].text.chars().count(), MAX_PLAN_STEP_CHARS);
         // Worst case stays under H7's 2,000-character set-aside limit.
-        let worst = (0..MAX_PLAN_STEPS).map(|_| format!("[ ] {}", "x".repeat(300))).collect::<Vec<_>>().join("\n");
+        let worst = (0..MAX_PLAN_STEPS)
+            .map(|_| format!("[ ] {}", "x".repeat(300)))
+            .collect::<Vec<_>>()
+            .join("\n");
         let args = json!({ "plan": parse_plan(&worst).iter().map(|s| format!("[ ] {}", s.text)).collect::<Vec<_>>().join("\n") });
         assert!(args.to_string().len() < 2000, "{}", args.to_string().len());
     }
@@ -1557,13 +1717,24 @@ mod tests {
     #[test]
     fn a_plan_call_is_read_into_steps_and_names_no_path() {
         let r = interpret(&call("update_plan", json!({ "plan": "[x] a\n[ ] b" }))).unwrap();
-        assert_eq!(r, Request::Plan { steps: vec![step("a", PlanStatus::Done), step("b", PlanStatus::Pending)] });
+        assert_eq!(
+            r,
+            Request::Plan {
+                steps: vec![step("a", PlanStatus::Done), step("b", PlanStatus::Pending)]
+            }
+        );
         assert_eq!((r.name(), r.path()), ("update_plan", ""));
-        assert_eq!(plan_message(&parse_plan("[x] a\n[ ] b\n[~] c")), "Plan updated: 1 of 3 done.");
+        assert_eq!(
+            plan_message(&parse_plan("[x] a\n[ ] b\n[~] c")),
+            "Plan updated: 1 of 3 done."
+        );
         // Nothing to list is an answer for the model, not an empty card.
         for args in [json!({}), json!({ "plan": "  \n" }), json!({ "plan": [1] })] {
             let err = interpret(&call("update_plan", args)).unwrap_err();
-            assert!(err.starts_with("error: update_plan was called without any steps"), "{err}");
+            assert!(
+                err.starts_with("error: update_plan was called without any steps"),
+                "{err}"
+            );
         }
     }
 
@@ -1587,8 +1758,12 @@ mod tests {
     fn a_task_list_runs_without_asking_even_with_no_folder_or_the_switch() {
         let s = Sandbox::new("plan");
         let ws = s.ws();
-        let req = Request::Plan { steps: parse_plan("[ ] a") };
-        let auto = Approval::Auto(Auto::Plan { steps: parse_plan("[ ] a") });
+        let req = Request::Plan {
+            steps: parse_plan("[ ] a"),
+        };
+        let auto = Approval::Auto(Auto::Plan {
+            steps: parse_plan("[ ] a"),
+        });
         assert_eq!(approval(Some(&ws), &req, false), auto);
         assert_eq!(approval(Some(&ws), &req, true), auto, "ask_every_call");
         assert_eq!(approval(None, &req, false), auto, "no folder");
@@ -1627,12 +1802,19 @@ mod tests {
             history.push(asked(&plan_call("[ ] a")));
             history.push(Message::tool_result("update_plan", "x"));
         }
-        assert_eq!(PLAN_LIMIT_NOTE, "error: You have updated the plan 6 times this turn — do the work now.");
+        assert_eq!(
+            PLAN_LIMIT_NOTE,
+            "error: You have updated the plan 6 times this turn — do the work now."
+        );
     }
 
     #[test]
     fn the_notes_are_framed_as_the_projects_and_not_the_users() {
-        let notes = Notes { name: "AGENTS.md".into(), text: "Use tabs.\n".into(), cut: false };
+        let notes = Notes {
+            name: "AGENTS.md".into(),
+            text: "Use tabs.\n".into(),
+            cut: false,
+        };
         let out = with_notes("PROMPT".into(), &notes);
         assert_eq!(
             out,
@@ -1686,7 +1868,10 @@ mod tests {
         assert_eq!(open, std::fs::canonicalize(ws.root().join("src/main.rs")).unwrap());
         // Inside the folder: relative, the way an edit card shows a path.
         assert_eq!(shown, "src/main.rs");
-        assert!(!shown.starts_with(r"\\?\"), "shown to a person, so no verbatim prefix: {shown}");
+        assert!(
+            !shown.starts_with(r"\\?\"),
+            "shown to a person, so no verbatim prefix: {shown}"
+        );
         // Absolute paths are left alone; with no folder, nothing is joined.
         assert_eq!(read_target(r"C:\x\y.txt", Some(&ws)).1, r"C:\x\y.txt");
         assert!(read_target("src/main.rs", None).1.ends_with(r"src\main.rs"));
@@ -1711,7 +1896,10 @@ mod tests {
     /// The `\\?\UNC\…` form of a share, shown the way a person writes it.
     #[test]
     fn a_network_share_is_shown_as_one() {
-        assert_eq!(edit::plain(Path::new(r"\\?\UNC\server\share\a.txt")), r"\\server\share\a.txt");
+        assert_eq!(
+            edit::plain(Path::new(r"\\?\UNC\server\share\a.txt")),
+            r"\\server\share\a.txt"
+        );
     }
 
     // ── the approval rule ──
@@ -1748,7 +1936,10 @@ mod tests {
     }
 
     fn read(path: &str) -> Request {
-        Request::Read { path: path.to_string(), range: None }
+        Request::Read {
+            path: path.to_string(),
+            range: None,
+        }
     }
 
     fn auto_read(s: &Sandbox, rel: &str) -> Approval {
@@ -1764,13 +1955,28 @@ mod tests {
         let ws = s.ws();
         s.write("src/main.rs", "fn main() {}\n");
         s.write(".github/ci.yml", "x\n");
-        assert_eq!(approval(Some(&ws), &read("src/main.rs"), false), auto_read(&s, "src/main.rs"));
-        assert_eq!(approval(Some(&ws), &read(".github/ci.yml"), false), auto_read(&s, ".github/ci.yml"));
+        assert_eq!(
+            approval(Some(&ws), &read("src/main.rs"), false),
+            auto_read(&s, "src/main.rs")
+        );
+        assert_eq!(
+            approval(Some(&ws), &read(".github/ci.yml"), false),
+            auto_read(&s, ".github/ci.yml")
+        );
         // However it is spelled: absolute, with a `..` that stays inside, quoted.
         let abs = ws.root().join("src/main.rs");
-        assert_eq!(approval(Some(&ws), &read(&edit::plain(&abs)), false), auto_read(&s, "src/main.rs"));
-        assert_eq!(approval(Some(&ws), &read("src/../src/main.rs"), false), auto_read(&s, "src/main.rs"));
-        assert_eq!(approval(Some(&ws), &read("`src/main.rs`"), false), auto_read(&s, "src/main.rs"));
+        assert_eq!(
+            approval(Some(&ws), &read(&edit::plain(&abs)), false),
+            auto_read(&s, "src/main.rs")
+        );
+        assert_eq!(
+            approval(Some(&ws), &read("src/../src/main.rs"), false),
+            auto_read(&s, "src/main.rs")
+        );
+        assert_eq!(
+            approval(Some(&ws), &read("`src/main.rs`"), false),
+            auto_read(&s, "src/main.rs")
+        );
     }
 
     #[test]
@@ -1891,7 +2097,10 @@ mod tests {
 
         let mut tries = vec![
             (".env", "DB_USER=admin\nDB_PASSWORD=wrongpass"),
-            ("keys/server.pem", "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEI\n-----END PRIVATE KEY-----"),
+            (
+                "keys/server.pem",
+                "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEI\n-----END PRIVATE KEY-----",
+            ),
             ("private/notes.txt", "the launch code is 1234-X"),
         ];
         if linked {
@@ -1929,7 +2138,11 @@ mod tests {
         assert!(!quiet.contains("CRLF") && !quiet.contains("mixes"), "{quiet}");
         assert_eq!(quiet, plan_edit(&ws, ".env", "nope", "x", false).unwrap_err());
         // An unprotected file still says what is wrong.
-        assert!(plan_edit(&ws, "plain.txt", "A=1", "A=9", false).unwrap_err().contains("mixes"));
+        assert!(
+            plan_edit(&ws, "plain.txt", "A=1", "A=9", false)
+                .unwrap_err()
+                .contains("mixes")
+        );
     }
 
     /// "appears N times" is an oracle on a protected file's content: no count.
@@ -1941,7 +2154,10 @@ mod tests {
         s.write("plain.txt", "A=1\nB=1\nC=2\n");
         let ws = s.ws();
         let err = plan_edit(&ws, ".env", "=1", "=9", false).unwrap_err();
-        assert!(!err.contains("appears") && !err.chars().any(|c| c.is_ascii_digit()), "{err}");
+        assert!(
+            !err.contains("appears") && !err.chars().any(|c| c.is_ascii_digit()),
+            "{err}"
+        );
         assert!(err.contains("protected file"), "{err}");
         // A miss and an ambiguous match read the same: which one it was would
         // itself say something about the file.
@@ -1966,15 +2182,25 @@ mod tests {
     fn listing_and_searching_run_without_asking() {
         let s = Sandbox::new("find");
         let ws = s.ws();
-        let list = Request::List { pattern: Some("*.rs".into()) };
-        let search = Request::Search { text: "greet".into(), pattern: None };
+        let list = Request::List {
+            pattern: Some("*.rs".into()),
+        };
+        let search = Request::Search {
+            text: "greet".into(),
+            pattern: None,
+        };
         assert_eq!(
             approval(Some(&ws), &list, false),
-            Approval::Auto(Auto::List { pattern: Some("*.rs".into()) })
+            Approval::Auto(Auto::List {
+                pattern: Some("*.rs".into())
+            })
         );
         assert_eq!(
             approval(Some(&ws), &search, false),
-            Approval::Auto(Auto::Search { text: "greet".into(), pattern: None })
+            Approval::Auto(Auto::Search {
+                text: "greet".into(),
+                pattern: None
+            })
         );
     }
 
@@ -1983,11 +2209,24 @@ mod tests {
         let s = Sandbox::new("edits");
         let ws = s.ws();
         s.write("a.rs", "x");
-        let edit = Request::Edit { path: "a.rs".into(), old_text: "x".into(), new_text: "y".into() };
-        let create = Request::Create { path: "b.rs".into(), content: "x".into() };
-        let rewrite = Request::Rewrite { path: "a.rs".into(), content: "y".into() };
+        let edit = Request::Edit {
+            path: "a.rs".into(),
+            old_text: "x".into(),
+            new_text: "y".into(),
+        };
+        let create = Request::Create {
+            path: "b.rs".into(),
+            content: "x".into(),
+        };
+        let rewrite = Request::Rewrite {
+            path: "a.rs".into(),
+            content: "y".into(),
+        };
         let delete = Request::Delete { path: "a.rs".into() };
-        let moved = Request::Move { path: "a.rs".into(), to: "b.rs".into() };
+        let moved = Request::Move {
+            path: "a.rs".into(),
+            to: "b.rs".into(),
+        };
         for req in [edit, create, delete, moved, rewrite, Request::Check] {
             assert_eq!(approval(Some(&ws), &req, false), Approval::Ask, "{req:?}");
         }
@@ -1999,7 +2238,10 @@ mod tests {
         let ws = s.ws();
         s.write("src/main.rs", "x");
         let list = Request::List { pattern: None };
-        let search = Request::Search { text: "x".into(), pattern: None };
+        let search = Request::Search {
+            text: "x".into(),
+            pattern: None,
+        };
         for req in [read("src/main.rs"), read("src"), read("nope.rs"), list, search] {
             assert_eq!(approval(Some(&ws), &req, true), Approval::Ask, "on: {req:?}");
             assert_eq!(approval(None, &req, false), Approval::Ask, "no folder: {req:?}");
@@ -2052,10 +2294,22 @@ mod tests {
 
     #[test]
     fn build_files_edited_this_turn_are_named() {
-        let manifest = call("edit_file", json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }));
-        let script = call("create_file", json!({ "path": "crates/x/build.rs", "content": "fn main() {}" }));
-        let source = call("edit_file", json!({ "path": "src/main.rs", "old_text": "a", "new_text": "b" }));
-        let refused = call("edit_file", json!({ "path": "web/package.json", "old_text": "a", "new_text": "b" }));
+        let manifest = call(
+            "edit_file",
+            json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }),
+        );
+        let script = call(
+            "create_file",
+            json!({ "path": "crates/x/build.rs", "content": "fn main() {}" }),
+        );
+        let source = call(
+            "edit_file",
+            json!({ "path": "src/main.rs", "old_text": "a", "new_text": "b" }),
+        );
+        let refused = call(
+            "edit_file",
+            json!({ "path": "web/package.json", "old_text": "a", "new_text": "b" }),
+        );
         let history = vec![
             Message::user("go"),
             asked(&manifest),
@@ -2073,17 +2327,34 @@ mod tests {
 
     #[test]
     fn a_build_file_is_known_by_its_name_in_any_folder_and_any_case() {
-        for yes in ["build.rs", "Cargo.toml", "crates/x/BUILD.RS", r"web\package.json", "a/b/cargo.toml"] {
+        for yes in [
+            "build.rs",
+            "Cargo.toml",
+            "crates/x/BUILD.RS",
+            r"web\package.json",
+            "a/b/cargo.toml",
+        ] {
             assert!(is_build_file(yes), "{yes}");
         }
-        for no in ["src/main.rs", "Cargo.lock", "notbuild.rs", "build.rs.bak", "package.json5", "", "build.rs/"] {
+        for no in [
+            "src/main.rs",
+            "Cargo.lock",
+            "notbuild.rs",
+            "build.rs.bak",
+            "package.json5",
+            "",
+            "build.rs/",
+        ] {
             assert!(!is_build_file(no), "{no}");
         }
     }
 
     #[test]
     fn a_move_to_build_rs_a_move_from_cargo_toml_and_a_delete_of_package_json_are_named() {
-        let to = call("move_file", json!({ "path": "scripts/b.rs", "to": "crates/x/build.rs" }));
+        let to = call(
+            "move_file",
+            json!({ "path": "scripts/b.rs", "to": "crates/x/build.rs" }),
+        );
         let from = call("move_file", json!({ "path": "Cargo.toml", "to": "old/Cargo.toml.bak" }));
         let gone = call("delete_file", json!({ "path": "web/package.json" }));
         let plain = call("delete_file", json!({ "path": "src/old.rs" }));
@@ -2119,7 +2390,10 @@ mod tests {
             to: to.map(str::to_string),
             folders: folders.iter().map(|f| f.to_string()).collect(),
         };
-        assert_eq!(applied_message(&applied(edit::Op::Delete, false, None, &[])), "Deleted src/a.rs.");
+        assert_eq!(
+            applied_message(&applied(edit::Op::Delete, false, None, &[])),
+            "Deleted src/a.rs."
+        );
         assert_eq!(
             applied_message(&applied(edit::Op::Move, false, Some("src/net/a.rs"), &["src/net/"])),
             "Moved src/a.rs to src/net/a.rs. Made the folder src/net/."
@@ -2128,7 +2402,10 @@ mod tests {
             applied_message(&applied(edit::Op::Create, true, None, &["src/", "src/x/"])),
             "Created src/a.rs (3 lines). Made the folders src/, src/x/."
         );
-        assert_eq!(applied_message(&applied(edit::Op::Create, true, None, &[])), "Created src/a.rs (3 lines).");
+        assert_eq!(
+            applied_message(&applied(edit::Op::Create, true, None, &[])),
+            "Created src/a.rs (3 lines)."
+        );
     }
 
     #[test]
@@ -2142,12 +2419,21 @@ mod tests {
 
     #[test]
     fn a_declined_build_file_edit_is_not_named_but_a_quoted_one_is() {
-        let declined = call("edit_file", json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }));
-        let quoted = call("edit_file", json!({ "path": "`build.rs` ", "old_text": "a", "new_text": "b" }));
+        let declined = call(
+            "edit_file",
+            json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }),
+        );
+        let quoted = call(
+            "edit_file",
+            json!({ "path": "`build.rs` ", "old_text": "a", "new_text": "b" }),
+        );
         let history = vec![
             Message::user("go"),
             asked(&declined),
-            Message::tool_result("edit_file", "The user declined this change to Cargo.toml. Nothing was written."),
+            Message::tool_result(
+                "edit_file",
+                "The user declined this change to Cargo.toml. Nothing was written.",
+            ),
             asked(&quoted),
             Message::tool_result("edit_file", "Edited build.rs: 1 line removed, 1 added."),
         ];
@@ -2156,7 +2442,10 @@ mod tests {
 
     #[test]
     fn build_files_from_an_earlier_request_are_not_named() {
-        let manifest = call("edit_file", json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }));
+        let manifest = call(
+            "edit_file",
+            json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }),
+        );
         let history = vec![
             Message::user("first"),
             asked(&manifest),
@@ -2182,7 +2471,10 @@ mod tests {
     /// the turn did before it still counts, and a later message of the user's still ends it.
     #[test]
     fn the_push_back_after_a_failed_check_does_not_start_a_new_turn() {
-        let manifest = call("edit_file", json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }));
+        let manifest = call(
+            "edit_file",
+            json!({ "path": "Cargo.toml", "old_text": "a", "new_text": "b" }),
+        );
         let bad = call("edit_file", json!({ "path": "a", "old_text": "x", "new_text": "y" }));
         let mut history = vec![
             Message::user("go"),
@@ -2192,7 +2484,14 @@ mod tests {
             Message::tool_result("edit_file", "error: old_text was not found"),
             asked(&plan_call("[ ] a")),
             Message::tool_result("update_plan", "Plan updated: 0 of 1 done."),
-            Message { role: "assistant".into(), content: "Done.".into(), images: None, tool_calls: None, tool_name: None, thinking: None },
+            Message {
+                role: "assistant".into(),
+                content: "Done.".into(),
+                images: None,
+                tool_calls: None,
+                tool_name: None,
+                thinking: None,
+            },
             Message::user(CHECK_FAILED_NOTE),
         ];
         assert_eq!(turn_start(&history), 1);
@@ -2215,8 +2514,14 @@ mod tests {
         assert!(broad_root(Path::new(r"\\?\D:\"), None));
         assert!(broad_root(Path::new(r"C:\Users"), profile));
         assert!(broad_root(Path::new(r"C:\Users\bifrost-test-user"), profile));
-        assert!(broad_root(Path::new(r"\\?\c:\users\BIFROST-TEST-USER"), profile), "case and prefix do not matter");
-        assert!(!broad_root(Path::new(r"C:\Users\bifrost-test-user\source\repos\bifrost"), profile));
+        assert!(
+            broad_root(Path::new(r"\\?\c:\users\BIFROST-TEST-USER"), profile),
+            "case and prefix do not matter"
+        );
+        assert!(!broad_root(
+            Path::new(r"C:\Users\bifrost-test-user\source\repos\bifrost"),
+            profile
+        ));
         assert!(!broad_root(Path::new(r"C:\work\proj"), profile));
         assert!(!broad_root(Path::new(r"C:\work\proj"), None));
     }
@@ -2256,7 +2561,14 @@ mod tests {
             assert_eq!(get(v.clone()), Ok(want), "{v}");
         }
         assert_eq!(line_arg(&json!({}), "start_line"), Ok(None));
-        for bad in [json!(-3), json!("abc"), json!(12.5), json!("12.5"), json!("-1"), json!(true)] {
+        for bad in [
+            json!(-3),
+            json!("abc"),
+            json!(12.5),
+            json!("12.5"),
+            json!("-1"),
+            json!(true),
+        ] {
             assert_eq!(
                 get(bad.clone()),
                 Err("start_line must be a line number, counting from 1".to_string()),
@@ -2268,25 +2580,46 @@ mod tests {
     #[test]
     fn a_read_carries_the_range_it_asked_for() {
         let r = |args: serde_json::Value| interpret(&call("read_file", args));
-        let read = |range| Ok(Request::Read { path: "a.rs".into(), range });
+        let read = |range| {
+            Ok(Request::Read {
+                path: "a.rs".into(),
+                range,
+            })
+        };
         assert_eq!(r(json!({ "path": "a.rs" })), read(None));
-        assert_eq!(r(json!({ "path": "a.rs", "start_line": null, "end_line": "" })), read(None));
-        assert_eq!(r(json!({ "path": "a.rs", "start_line": 120, "end_line": 180 })), read(lines(120, Some(180))));
+        assert_eq!(
+            r(json!({ "path": "a.rs", "start_line": null, "end_line": "" })),
+            read(None)
+        );
+        assert_eq!(
+            r(json!({ "path": "a.rs", "start_line": 120, "end_line": 180 })),
+            read(lines(120, Some(180)))
+        );
         assert_eq!(
             r(json!({ "path": "a.rs", "start_line": "120", "end_line": " 180 " })),
             read(lines(120, Some(180)))
         );
-        assert_eq!(r(json!({ "path": "a.rs", "start_line": 120.0 })), read(lines(120, None)));
+        assert_eq!(
+            r(json!({ "path": "a.rs", "start_line": 120.0 })),
+            read(lines(120, None))
+        );
         // An end alone is the top of the file down to it; a start of 0 is 1.
         assert_eq!(r(json!({ "path": "a.rs", "end_line": 40 })), read(lines(1, Some(40))));
-        assert_eq!(r(json!({ "path": "a.rs", "start_line": 0, "end_line": 5 })), read(lines(1, Some(5))));
+        assert_eq!(
+            r(json!({ "path": "a.rs", "start_line": 0, "end_line": 5 })),
+            read(lines(1, Some(5)))
+        );
         assert_eq!(r(json!({ "path": "a.rs", "start_line": 0 })), read(lines(1, None)));
     }
 
     #[test]
     fn a_range_that_cannot_be_read_is_refused_with_the_reason() {
         let r = |args: serde_json::Value| {
-            interpret(&call("read_file", args)).unwrap_err().strip_prefix("error: ").expect("a refusal starts error:").to_string()
+            interpret(&call("read_file", args))
+                .unwrap_err()
+                .strip_prefix("error: ")
+                .expect("a refusal starts error:")
+                .to_string()
         };
         assert_eq!(
             r(json!({ "path": "a", "start_line": 90, "end_line": 20 })),
@@ -2304,7 +2637,10 @@ mod tests {
             r(json!({ "path": "a", "start_line": 12.5 })),
             "start_line must be a line number, counting from 1"
         );
-        assert_eq!(r(json!({ "path": "a", "end_line": 0 })), "end_line must be a line number, counting from 1");
+        assert_eq!(
+            r(json!({ "path": "a", "end_line": 0 })),
+            "end_line must be a line number, counting from 1"
+        );
     }
 
     #[test]
@@ -2316,12 +2652,19 @@ mod tests {
         assert_eq!(props["end_line"]["type"], "integer");
         assert_eq!(schema["function"]["parameters"]["required"], json!(["path"]));
         assert!(tool.function.description.contains(READ_RANGE_SENTENCE));
-        assert!(tool.function.description.ends_with("The user may be asked to approve a read."));
+        assert!(
+            tool.function
+                .description
+                .ends_with("The user may be asked to approve a read.")
+        );
     }
 
     #[test]
     fn a_whole_read_of_a_small_file_is_the_text_and_nothing_else() {
-        assert_eq!(read_text("f", b"hello\r\nfrom a tool\r\n", None), "hello\nfrom a tool\n");
+        assert_eq!(
+            read_text("f", b"hello\r\nfrom a tool\r\n", None),
+            "hello\nfrom a tool\n"
+        );
         assert_eq!(read_text("f", b"\xEF\xBB\xBFone\r\ntwo", None), "one\ntwo");
         assert_eq!(read_text("f", b"", None), "");
     }
@@ -2344,7 +2687,10 @@ mod tests {
             "[lines 20–22 of 100]\nline 20\nline 21\nline 22\n"
         );
         // No end: to the last line.
-        assert_eq!(read_text("f", text.as_bytes(), lines(99, None)), "[lines 99–100 of 100]\nline 99\nline 100\n");
+        assert_eq!(
+            read_text("f", text.as_bytes(), lines(99, None)),
+            "[lines 99–100 of 100]\nline 99\nline 100\n"
+        );
         // A big file is read in parts whatever its size.
         let big = numbered(20000);
         assert!(big.len() > MAX_READ_BYTES as usize);
@@ -2359,7 +2705,10 @@ mod tests {
             read_text("f", b"\xEF\xBB\xBFone\r\ntwo\r\nthree\r\n", lines(2, Some(2))),
             "[lines 2–2 of 3]\ntwo\n"
         );
-        assert_eq!(read_text("f", b"a\rb\nc\n", lines(1, Some(1))), "[lines 1–1 of 2]\na\rb\n");
+        assert_eq!(
+            read_text("f", b"a\rb\nc\n", lines(1, Some(1))),
+            "[lines 1–1 of 2]\na\rb\n"
+        );
         // No final newline: the last line is still a line, and is not given one.
         assert_eq!(read_text("f", b"a\nb", lines(2, None)), "[lines 2–2 of 2]\nb");
     }
@@ -2375,8 +2724,14 @@ mod tests {
             read_text("f", text.as_bytes(), lines(6, None)),
             "error: f has 5 lines; start_line 6 is past the end"
         );
-        assert_eq!(read_text("f", b"x\n", lines(2, None)), "error: f has 1 line; start_line 2 is past the end");
-        assert_eq!(read_text("f", b"", lines(1, None)), "error: f is empty, so it has no lines to read");
+        assert_eq!(
+            read_text("f", b"x\n", lines(2, None)),
+            "error: f has 1 line; start_line 2 is past the end"
+        );
+        assert_eq!(
+            read_text("f", b"", lines(1, None)),
+            "error: f is empty, so it has no lines to read"
+        );
     }
 
     #[test]
@@ -2389,7 +2744,11 @@ mod tests {
         assert_eq!(body.len(), 65 * 1000);
         // Starting later, the cut is counted from there.
         let out = read_text("f", text.as_bytes(), lines(50, None));
-        assert!(out.starts_with("[lines 50–100 of 100]\n"), "50 lines fit: {}", &out[..40]);
+        assert!(
+            out.starts_with("[lines 50–100 of 100]\n"),
+            "50 lines fit: {}",
+            &out[..40]
+        );
     }
 
     #[test]
@@ -2428,7 +2787,11 @@ mod tests {
             );
         }
         #[cfg(windows)]
-        assert!(read_unasked(&real, lines(1, Some(2))).unwrap().contains("limit for reading any part"));
+        assert!(
+            read_unasked(&real, lines(1, Some(2)))
+                .unwrap()
+                .contains("limit for reading any part")
+        );
     }
 
     #[test]
@@ -2458,7 +2821,11 @@ mod tests {
         s.write("a.txt", &numbered(300).replace('\n', "\r\n"));
         let real = std::fs::canonicalize(s.dir.join("project/a.txt")).unwrap();
         for range in [None, lines(10, Some(12)), lines(299, None), lines(500, None)] {
-            assert_eq!(read_unasked(&real, range), Some(run_read_file(&real, range)), "{range:?}");
+            assert_eq!(
+                read_unasked(&real, range),
+                Some(run_read_file(&real, range)),
+                "{range:?}"
+            );
         }
     }
 
@@ -2468,7 +2835,10 @@ mod tests {
         let ws = s.ws();
         s.write("src/main.rs", "fn main() {}\n");
         let range = lines(2, Some(9));
-        let req = Request::Read { path: "src/main.rs".into(), range };
+        let req = Request::Read {
+            path: "src/main.rs".into(),
+            range,
+        };
         assert_eq!(
             approval(Some(&ws), &req, false),
             Approval::Auto(Auto::Read {
@@ -2486,7 +2856,11 @@ mod tests {
         let bad = call("read_file", json!({ "path": "a.rs", "start_line": "abc" }));
         let why = interpret(&bad).unwrap_err();
         assert!(why.starts_with("error: "), "{why}");
-        for c in [call("rm_rf", json!({ "path": "/" })), call("read_file", json!({})), call("search", json!({}))] {
+        for c in [
+            call("rm_rf", json!({ "path": "/" })),
+            call("read_file", json!({})),
+            call("search", json!({})),
+        ] {
             assert!(interpret(&c).unwrap_err().starts_with("error: "), "{c:?}");
         }
         let history = vec![Message::user("go"), asked(&bad), Message::tool_result("read_file", why)];
@@ -2499,20 +2873,43 @@ mod tests {
     #[test]
     fn the_seventh_plan_update_refusal_is_counted_as_a_failure() {
         let plan = plan_call("[ ] a");
-        let history = vec![Message::user("go"), asked(&plan), Message::tool_result("update_plan", PLAN_LIMIT_NOTE)];
+        let history = vec![
+            Message::user("go"),
+            asked(&plan),
+            Message::tool_result("update_plan", PLAN_LIMIT_NOTE),
+        ];
         assert_eq!(prior_failures(&history, &plan), 1);
     }
 
     #[test]
     fn a_failing_call_is_still_recognised_after_its_long_argument_was_set_aside() {
-        let edit = call("edit_file", json!({ "path": "a.rs", "old_text": "x".repeat(3000), "new_text": "y" }));
-        let mut history = vec![Message::user("go"), asked(&edit), Message::tool_result("edit_file", "error: not found")];
+        let edit = call(
+            "edit_file",
+            json!({ "path": "a.rs", "old_text": "x".repeat(3000), "new_text": "y" }),
+        );
+        let mut history = vec![
+            Message::user("go"),
+            asked(&edit),
+            Message::tool_result("edit_file", "error: not found"),
+        ];
         crate::compact::set_aside(&mut history[1], None);
         assert_eq!(prior_failures(&history, &edit), 1);
         // A different path, or a text of another length, is another call.
-        let other_path = call("edit_file", json!({ "path": "b.rs", "old_text": "x".repeat(3000), "new_text": "y" }));
-        let other_len = call("edit_file", json!({ "path": "a.rs", "old_text": "x".repeat(3001), "new_text": "y" }));
-        assert_eq!((prior_failures(&history, &other_path), prior_failures(&history, &other_len)), (0, 0));
+        let other_path = call(
+            "edit_file",
+            json!({ "path": "b.rs", "old_text": "x".repeat(3000), "new_text": "y" }),
+        );
+        let other_len = call(
+            "edit_file",
+            json!({ "path": "a.rs", "old_text": "x".repeat(3001), "new_text": "y" }),
+        );
+        assert_eq!(
+            (
+                prior_failures(&history, &other_path),
+                prior_failures(&history, &other_len)
+            ),
+            (0, 0)
+        );
     }
 
     #[test]
@@ -2524,20 +2921,32 @@ mod tests {
         // Leading blank space counts as the start, as the repeat rule reads it.
         assert!(!read_text("f", b"\n  error: x", None).trim_start().starts_with("error:"));
         // Everything else is exactly its text, as before.
-        assert_eq!(read_text("f", b"hello\nan error: here\n", None), "hello\nan error: here\n");
+        assert_eq!(
+            read_text("f", b"hello\nan error: here\n", None),
+            "hello\nan error: here\n"
+        );
         assert_eq!(read_text("f", b"", None), "");
         // A ranged read has its header already.
-        assert_eq!(read_text("f", log, lines(1, Some(1))), "[lines 1–1 of 2]\nerror: could not compile `demo`\n");
+        assert_eq!(
+            read_text("f", log, lines(1, Some(1))),
+            "[lines 1–1 of 2]\nerror: could not compile `demo`\n"
+        );
     }
 
     #[test]
     fn a_range_read_never_makes_is_clamped_or_refused_not_a_panic() {
         let file = b"a\nb\nc\nd\ne\n";
-        assert_eq!(read_text("f", file, lines(0, None)), read_text("f", file, lines(1, None)));
+        assert_eq!(
+            read_text("f", file, lines(0, None)),
+            read_text("f", file, lines(1, None))
+        );
         assert_eq!(read_text("f", file, lines(0, Some(2))), "[lines 1–2 of 5]\na\nb\n");
         for (start, end) in [(3, 1), (5, 2), (2, 1)] {
             let out = read_text("f", file, lines(start, Some(end)));
-            assert!(out.starts_with("error: end_line ") && out.contains("before start_line"), "{start}-{end}: {out}");
+            assert!(
+                out.starts_with("error: end_line ") && out.contains("before start_line"),
+                "{start}-{end}: {out}"
+            );
         }
         assert!(read_text("f", file, lines(9, None)).contains("is past the end"));
     }
@@ -2546,7 +2955,10 @@ mod tests {
     fn a_list_cut_to_the_caps_is_told_so() {
         let twenty: String = (1..=20).map(|i| format!("[ ] step {i}\n")).collect();
         let said = plan_message(&parse_plan(&twenty));
-        assert!(said.starts_with("Plan updated: 0 of 12 done.") && said.contains("only the first 12"), "{said}");
+        assert!(
+            said.starts_with("Plan updated: 0 of 12 done.") && said.contains("only the first 12"),
+            "{said}"
+        );
         // A short list gets just the one line.
         assert_eq!(plan_message(&parse_plan("[ ] a")), "Plan updated: 0 of 1 done.");
     }
@@ -2554,7 +2966,9 @@ mod tests {
     #[test]
     fn a_read_header_is_recognised_and_ordinary_text_is_not() {
         assert!(is_read_header("[lines 120–180 of 2140]"));
-        assert!(is_read_header("[lines 1–65 of 100; cut at 65536 bytes — read on from line 66]"));
+        assert!(is_read_header(
+            "[lines 1–65 of 100; cut at 65536 bytes — read on from line 66]"
+        ));
         assert!(is_read_header("  [lines 3–4 of 9]\r"));
         assert!(!is_read_header("let lines = [1, 2];"));
         assert!(!is_read_header("[lines]"));

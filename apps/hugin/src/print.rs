@@ -66,9 +66,9 @@ use bifrost_core::agent::turn::{Card, Decision, Frontend, Patch, RoundNumbers, r
 use bifrost_core::agent::unattended;
 use bifrost_core::chat::Message;
 use bifrost_core::check::{self, Ended};
+use bifrost_core::config;
 use bifrost_core::edit::{self, Workspace};
 use bifrost_core::scratch::{self, Git, Lock, Scratch};
-use bifrost_core::config;
 use serde::Serialize;
 
 use crate::bent::{self, Bent};
@@ -182,7 +182,9 @@ pub fn parse_time(text: Option<&str>) -> Result<Duration, String> {
 
 /// [`parse_time`] with another default, in seconds: `--ask` gives itself five minutes.
 pub fn parse_time_or(text: Option<&str>, default: u64) -> Result<Duration, String> {
-    let Some(text) = text else { return Ok(Duration::from_secs(default)) };
+    let Some(text) = text else {
+        return Ok(Duration::from_secs(default));
+    };
     match text.trim().parse::<u64>() {
         Ok(secs) if secs > 0 => Ok(Duration::from_secs(secs)),
         _ => Err(format!("--time takes a whole number of seconds, 1 or more, not {text}")),
@@ -207,7 +209,12 @@ fn lexical(path: &Path) -> PathBuf {
 /// Whether `path` is `root` or something under it, by text and without regard to case, as
 /// Windows reads paths.
 fn inside(path: &Path, root: &Path) -> bool {
-    let plain = |p: &Path| p.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    let plain = |p: &Path| {
+        p.to_string_lossy()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    };
     let (path, root) = (plain(path), plain(root));
     path == root || path.starts_with(&format!("{root}\\"))
 }
@@ -215,7 +222,9 @@ fn inside(path: &Path, root: &Path) -> bool {
 /// `path` as the file system really has it, with no `\\?\` prefix and no short name; as it is if
 /// it cannot be found.
 fn real_path(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).map(|real| PathBuf::from(edit::plain(&real))).unwrap_or_else(|_| path.to_path_buf())
+    std::fs::canonicalize(path)
+        .map(|real| PathBuf::from(edit::plain(&real)))
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 /// The check as it runs in the copy. **A program named with a folder in it is the copy's**:
@@ -225,8 +234,15 @@ fn real_path(path: &Path) -> PathBuf {
 /// the copy, and must stay inside the copy; an absolute path is left as it is unless it points
 /// into the user's repository, which is refused, since the copy has its own version of that
 /// file. A bare name is looked up on `PATH`, as ever.
-pub fn resolve_check(argv: &[String], folder: &Path, copy_root: &Path, repo_root: &Path) -> Result<Vec<String>, String> {
-    let Some(program) = argv.first() else { return Ok(argv.to_vec()) };
+pub fn resolve_check(
+    argv: &[String],
+    folder: &Path,
+    copy_root: &Path,
+    repo_root: &Path,
+) -> Result<Vec<String>, String> {
+    let Some(program) = argv.first() else {
+        return Ok(argv.to_vec());
+    };
     let given = Path::new(program);
     let has_folder = program.contains(['/', '\\']) || program.as_bytes().get(1) == Some(&b':');
     if !has_folder {
@@ -244,12 +260,16 @@ pub fn resolve_check(argv: &[String], folder: &Path, copy_root: &Path, repo_root
         }
         return Ok(argv.to_vec());
     } else if given.has_root() || matches!(given.components().next(), Some(Component::Prefix(_))) {
-        return Err(format!("--check names {program} by a drive or a root alone; {use_instead}"));
+        return Err(format!(
+            "--check names {program} by a drive or a root alone; {use_instead}"
+        ));
     } else {
         lexical(&folder.join(given))
     };
     if !inside(&resolved, copy_root) {
-        return Err(format!("--check names {program}, which leads out of the folder; {use_instead}"));
+        return Err(format!(
+            "--check names {program}, which leads out of the folder; {use_instead}"
+        ));
     }
     let mut out = argv.to_vec();
     out[0] = resolved.to_string_lossy().into_owned();
@@ -275,7 +295,12 @@ pub struct Budget {
 impl Budget {
     pub fn of(total: Duration) -> Self {
         let reserve = (total / 4).min(Duration::from_secs(90));
-        Self { total, reserve, grace: (reserve / 2).min(Duration::from_secs(5)), tail: (total / 10).min(Duration::from_secs(10)) }
+        Self {
+            total,
+            reserve,
+            grace: (reserve / 2).min(Duration::from_secs(5)),
+            tail: (total / 10).min(Duration::from_secs(10)),
+        }
     }
 }
 
@@ -319,7 +344,10 @@ fn real(model: &str, ctx: &Ctx) -> Wired {
         round_in(messages, &asked, &cfg, &env, calibration, closing)
     };
     let run = move |name: &str, path: &str, token: &str| run_approved_in(name, path, token, &run_env);
-    Wired { ask: Box::new(ask), run: Box::new(run) }
+    Wired {
+        ask: Box::new(ask),
+        run: Box::new(run),
+    }
 }
 
 // ── what the turn leaves ────────────────────────────────────────────────────
@@ -594,7 +622,9 @@ impl Report {
     /// A check was asked for and gave no verdict: it was not run, ran out of time, or was blocked
     /// by Windows. Nothing then says the work is right.
     fn unverified(&self) -> bool {
-        self.check.as_ref().is_some_and(|c| c.not_run.is_some() || c.timed_out || c.blocked.is_some())
+        self.check
+            .as_ref()
+            .is_some_and(|c| c.not_run.is_some() || c.timed_out || c.blocked.is_some())
     }
 
     /// Short of a whole answer: stopped, ended by an error or a bound, no answer given, or a
@@ -644,7 +674,11 @@ impl Report {
             return None;
         }
         let file = self.patch_file.as_ref()?;
-        Some(format!("git -C \"{}\" apply --whitespace=nowarn \"{}\"", self.repo_root, file.display()))
+        Some(format!(
+            "git -C \"{}\" apply --whitespace=nowarn \"{}\"",
+            self.repo_root,
+            file.display()
+        ))
     }
 
     /// This run has no proposal, and why.
@@ -724,7 +758,8 @@ impl Report {
     /// The report as `--json` gives it: one object, whatever happened, its fields in the order
     /// [`JsonReport`] names them.
     pub fn to_json_string(&self) -> String {
-        serde_json::to_string(&self.json()).unwrap_or_else(|e| format!("{{\"error\":\"could not write the report: {e}\"}}"))
+        serde_json::to_string(&self.json())
+            .unwrap_or_else(|e| format!("{{\"error\":\"could not write the report: {e}\"}}"))
     }
 
     /// The same as a value, which does not keep the order, for a test that looks fields up.
@@ -754,7 +789,11 @@ impl Report {
         if let Some(why) = self.error.clone().or_else(|| self.notes.first().cloned()) {
             return why;
         }
-        match self.check.as_ref().filter(|_| self.unverified() && !self.answer.is_empty()) {
+        match self
+            .check
+            .as_ref()
+            .filter(|_| self.unverified() && !self.answer.is_empty())
+        {
             Some(c) => unverified_why(c),
             None => "the model gave no answer".to_string(),
         }
@@ -815,7 +854,10 @@ impl Report {
                 out.push_str(&self.also_cut_short(&files));
             }
             Status::Review => {
-                out.push_str(&format!("\nthe existing tests the patch changes:\n{}\n", bent::listing(&self.bent)));
+                out.push_str(&format!(
+                    "\nthe existing tests the patch changes:\n{}\n",
+                    bent::listing(&self.bent)
+                ));
                 if !self.answer.is_empty() {
                     out.push_str(&format!(
                         "\nThe model's own words (it may say the change was needed; confirm that it was):\n{}\n",
@@ -853,15 +895,26 @@ impl Report {
             return out;
         }
         let (added, deleted, binary) = self.totals();
-        let counts = format!("+{added} -{deleted}{}", if binary { ", and a file that is not text" } else { "" });
+        let counts = format!(
+            "+{added} -{deleted}{}",
+            if binary { ", and a file that is not text" } else { "" }
+        );
         out.push_str(&format!("\n--- patch: {files}, {counts} ---\n"));
         for f in &self.files {
-            let from = f.from.as_ref().map(|from| format!(" (from {from})")).unwrap_or_default();
+            let from = f
+                .from
+                .as_ref()
+                .map(|from| format!(" (from {from})"))
+                .unwrap_or_default();
             let lines = match (f.added, f.deleted) {
                 (Some(a), Some(d)) => format!("+{a} -{d}"),
                 _ => "not text".to_string(),
             };
-            let by = if f.by == "edit" { "by an edit" } else { "by something else: not one of the model's edits" };
+            let by = if f.by == "edit" {
+                "by an edit"
+            } else {
+                "by something else: not one of the model's edits"
+            };
             out.push_str(&format!("{} {}{from}  {lines}  [{by}]\n", f.status, f.path));
         }
         let (diff, _, omitted) = self.diff();
@@ -871,7 +924,10 @@ impl Report {
                 Some(file) => format!("read it in {}, which has all of it", file.display()),
                 None => "it could not be saved".to_string(),
             };
-            out.push_str(&format!("\nThe patch is {kb} KB, too long to print here ({} KB at most): {whole}.\n", MAX_SHOWN_DIFF / 1024));
+            out.push_str(&format!(
+                "\nThe patch is {kb} KB, too long to print here ({} KB at most): {whole}.\n",
+                MAX_SHOWN_DIFF / 1024
+            ));
         } else {
             out.push('\n');
             out.push_str(&diff);
@@ -895,14 +951,24 @@ impl Report {
                 "check: `{name}` could not finish: Windows Smart App Control blocked {what}. This is not a problem in the code; run it again.\n"
             );
         }
-        let reused = if c.reused { ", the model's own last run, with nothing edited after it" } else { "" };
+        let reused = if c.reused {
+            ", the model's own last run, with nothing edited after it"
+        } else {
+            ""
+        };
         let how = if c.timed_out && c.cut_short {
             format!("did not finish in the {} s the run had left", c.seconds)
         } else if c.timed_out {
             format!("timed out after {} s", c.seconds)
         } else {
-            let code = c.exit_code.map_or("no exit code".to_string(), |code| format!("exit {code}"));
-            format!("{} ({code}, {} s{reused})", if c.passed == Some(true) { "passed" } else { "FAILED" }, c.seconds)
+            let code = c
+                .exit_code
+                .map_or("no exit code".to_string(), |code| format!("exit {code}"));
+            format!(
+                "{} ({code}, {} s{reused})",
+                if c.passed == Some(true) { "passed" } else { "FAILED" },
+                c.seconds
+            )
         };
         let mut line = format!("check: `{name}` {how}\n");
         if c.passed != Some(true) && !c.output_tail.is_empty() {
@@ -1061,7 +1127,10 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
         ..Report::default()
     };
     let finish = |report: Report, copy: Option<Scratch>, lock: Option<Lock>| Finished {
-        report: Report { seconds: seconds(started.elapsed()), ..report },
+        report: Report {
+            seconds: seconds(started.elapsed()),
+            ..report
+        },
         _copy: copy,
         _lock: lock,
     };
@@ -1086,8 +1155,16 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
     };
     // The check as it runs in the copy; `job.check` stays what the report calls it. The three
     // places are compared as the file system has them, not as a short name or a prefix writes them.
-    let (folder, copy_root, repo_root) = (real_path(ws.root()), real_path(copy.copy_root()), real_path(&copy.repo_root));
-    let check = match job.check.as_deref().map(|argv| resolve_check(argv, &folder, &copy_root, &repo_root)) {
+    let (folder, copy_root, repo_root) = (
+        real_path(ws.root()),
+        real_path(copy.copy_root()),
+        real_path(&copy.repo_root),
+    );
+    let check = match job
+        .check
+        .as_deref()
+        .map(|argv| resolve_check(argv, &folder, &copy_root, &repo_root))
+    {
         Some(Err(e)) => return finish(report.abort(e), Some(copy), Some(lock)),
         Some(Ok(argv)) => Some(argv),
         None => None,
@@ -1107,7 +1184,11 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
         ],
         ..Env::default()
     };
-    let ctx = Ctx { root: ws.root_display(), env, check: check.clone() };
+    let ctx = Ctx {
+        root: ws.root_display(),
+        env,
+        check: check.clone(),
+    };
     let wired = wire(&ctx);
 
     // The turn, on a thread of its own: a request to the model cannot be cut short.
@@ -1155,7 +1236,14 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
             // The loop leaves the model's last words out of the conversation, and the follow-up answers them.
             let said = held(&turn_progress).answer.clone();
             if let Some(content) = said {
-                convo.push(Message { role: "assistant".to_string(), content, images: None, tool_calls: None, tool_name: None, thinking: None });
+                convo.push(Message {
+                    role: "assistant".to_string(),
+                    content,
+                    images: None,
+                    tool_calls: None,
+                    tool_name: None,
+                    thinking: None,
+                });
             }
             convo.push(Message::user(text));
             let calibration = fe.calibration;
@@ -1164,7 +1252,11 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
         }
     });
     if let Err(e) = worker {
-        return finish(report.abort(format!("could not start the turn: {e}")), Some(copy), Some(lock));
+        return finish(
+            report.abort(format!("could not start the turn: {e}")),
+            Some(copy),
+            Some(lock),
+        );
     }
 
     let turn_ends = started + budget.total.saturating_sub(budget.reserve);
@@ -1189,7 +1281,14 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
 
     let (answer, notes, rounds, undo, last_check, edited_since) = {
         let p = held(&progress);
-        (p.answer.clone(), p.notes.clone(), p.rounds, p.undo.clone(), p.last_check.clone(), p.edited_since)
+        (
+            p.answer.clone(),
+            p.notes.clone(),
+            p.rounds,
+            p.undo.clone(),
+            p.last_check.clone(),
+            p.edited_since,
+        )
     };
     report.answer = answer.unwrap_or_default();
     report.notes = notes;
@@ -1215,9 +1314,14 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
     // (a build file, a runner's config): the card that warns about it, which a person would
     // read, is not here to read.
     if let (Some(shown), Some(argv)) = (&job.check, &check) {
-        let runs_code: Vec<&str> = edited.iter().flatten().map(String::as_str).filter(|p| unattended::runs_code(p)).collect();
-        let reusable = last_check
-            .filter(|o| !edited_since && o.blocked.is_none() && matches!(o.ended, Ended::Exited(Some(_))));
+        let runs_code: Vec<&str> = edited
+            .iter()
+            .flatten()
+            .map(String::as_str)
+            .filter(|p| unattended::runs_code(p))
+            .collect();
+        let reusable =
+            last_check.filter(|o| !edited_since && o.blocked.is_none() && matches!(o.ended, Ended::Exited(Some(_))));
         report.check = Some(if !runs_code.is_empty() {
             let why = format!(
                 "the turn changed {}, and a check runs those files; read the patch, then run the check yourself",
@@ -1228,7 +1332,9 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
             report_of(shown, &outcome, true)
         } else {
             let end = started + budget.total;
-            let left = end.saturating_duration_since(Instant::now()).saturating_sub(budget.tail);
+            let left = end
+                .saturating_duration_since(Instant::now())
+                .saturating_sub(budget.tail);
             if left < Duration::from_secs(2).min(budget.total / 4) {
                 not_run(shown, "no time was left for it")
             } else {
@@ -1251,12 +1357,22 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
     drop(writers);
     let patch = match made {
         Ok(patch) => patch,
-        Err(e) => return finish(report.abort(format!("could not make the patch: {e}")), Some(copy), Some(lock)),
+        Err(e) => {
+            return finish(
+                report.abort(format!("could not make the patch: {e}")),
+                Some(copy),
+                Some(lock),
+            );
+        }
     };
     report.skipped = copy.skipped_lines();
     // A change is the model's own if one of its edits touched the file. Without the records to
     // say, every change is taken to be.
-    let own = |path: &str| edited.as_ref().is_none_or(|e| e.iter().any(|p| p.eq_ignore_ascii_case(path)));
+    let own = |path: &str| {
+        edited
+            .as_ref()
+            .is_none_or(|e| e.iter().any(|p| p.eq_ignore_ascii_case(path)))
+    };
     report.files = patch
         .files
         .iter()
@@ -1264,7 +1380,11 @@ pub fn execute(job: &Job, git: &Git, model: &str, wire: impl FnOnce(&Ctx) -> Wir
             path: c.path.clone(),
             from: c.from.clone(),
             status: c.status,
-            by: if own(&c.path) || c.from.as_deref().is_some_and(own) { "edit" } else { "other" },
+            by: if own(&c.path) || c.from.as_deref().is_some_and(own) {
+                "edit"
+            } else {
+                "other"
+            },
             added: c.added,
             deleted: c.deleted,
         })
@@ -1329,9 +1449,23 @@ pub fn run(args: Args) -> ExitCode {
     // The model loads while the copy is made. A failure is not news here: the first request meets it.
     let _ = start::warm(model.clone(), cfg.num_ctx);
 
-    let job = Job { task, folder: args.folder, check, time: args.time, started, work: scratch::work_dir(), cache: cache_dir() };
-    let finished = execute(&job, &Git::new(), &model, |ctx| trace::wired(trace, &model, real(&model, ctx)));
-    let text = if json { format!("{}\n", finished.report.to_json_string()) } else { finished.report.to_text() };
+    let job = Job {
+        task,
+        folder: args.folder,
+        check,
+        time: args.time,
+        started,
+        work: scratch::work_dir(),
+        cache: cache_dir(),
+    };
+    let finished = execute(&job, &Git::new(), &model, |ctx| {
+        trace::wired(trace, &model, real(&model, ctx))
+    });
+    let text = if json {
+        format!("{}\n", finished.report.to_json_string())
+    } else {
+        finished.report.to_text()
+    };
     let mut stdout = std::io::stdout().lock();
     let _ = stdout.write_all(text.as_bytes());
     let _ = stdout.flush();

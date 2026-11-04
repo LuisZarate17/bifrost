@@ -9,15 +9,15 @@ use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 use serde::Serialize;
 use tauri::ipc::Channel;
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use tauri::{Emitter, Manager};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
 use windows_capture::graphics_capture_api::InternalCaptureControl;
 use windows_capture::monitor::Monitor;
 use windows_capture::settings::{
-    ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
-    MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
+    ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings, MinimumUpdateIntervalSettings,
+    SecondaryWindowSettings, Settings,
 };
 // In scope at module level, unlike the rest of the Win32 imports, because these
 // two appear in the geometry helpers' signatures rather than only inside them.
@@ -76,7 +76,12 @@ struct Shot {
 /// the command: a command's `Result` is delivered as a single IPC reply, so
 /// returning the whole answer would buffer it by construction.
 #[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase", rename_all_fields = "camelCase", tag = "event", content = "data")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "event",
+    content = "data"
+)]
 enum StreamEvent {
     /// The screenshot is taken; the model hasn't answered yet.
     Captured { width: u32, height: u32, png_bytes: usize },
@@ -124,11 +129,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         Ok(Self { sender: ctx.flags })
     }
 
-    fn on_frame_arrived(
-        &mut self,
-        frame: &mut Frame,
-        control: InternalCaptureControl,
-    ) -> Result<(), Self::Error> {
+    fn on_frame_arrived(&mut self, frame: &mut Frame, control: InternalCaptureControl) -> Result<(), Self::Error> {
         let width = frame.width();
         let height = frame.height();
 
@@ -217,10 +218,18 @@ struct Turn {
 
 impl Turn {
     fn user(content: String, images: Vec<String>) -> Self {
-        Self { role: "user", content, images }
+        Self {
+            role: "user",
+            content,
+            images,
+        }
     }
     fn assistant(content: String) -> Self {
-        Self { role: "assistant", content, images: Vec::new() }
+        Self {
+            role: "assistant",
+            content,
+            images: Vec::new(),
+        }
     }
 }
 
@@ -262,8 +271,7 @@ async fn ask_about_screen(
     // label; refusing to answer because a secondary lookup failed would be a
     // worse failure than the one it is guarding against.
     let tag = model.clone();
-    if let Ok(Ok(detail)) =
-        tauri::async_runtime::spawn_blocking(move || bifrost_core::ollama::show_cached(&tag)).await
+    if let Ok(Ok(detail)) = tauri::async_runtime::spawn_blocking(move || bifrost_core::ollama::show_cached(&tag)).await
     {
         if !detail.has("vision") {
             let _ = on_event.send(StreamEvent::NoVision { model: model.clone() });
@@ -361,13 +369,10 @@ async fn ask_another_shot(
     // The newest shot is what a plain follow-up should refer to from here on.
     *last.0.lock().map_err(|_| "capture store poisoned")? = Some(png.clone());
 
-    chat.0
-        .lock()
-        .map_err(|_| "chat store poisoned")?
-        .push(Turn::user(
-            prompt.unwrap_or(cfg.prompt),
-            vec![BASE64_STANDARD.encode(&png)],
-        ));
+    chat.0.lock().map_err(|_| "chat store poisoned")?.push(Turn::user(
+        prompt.unwrap_or(cfg.prompt),
+        vec![BASE64_STANDARD.encode(&png)],
+    ));
 
     run_turns(&chat, model, on_event).await
 }
@@ -376,11 +381,7 @@ async fn ask_another_shot(
 ///
 /// The remembering is the part that makes it a conversation at all: without it
 /// every turn arrives at a model that has never seen the previous one.
-async fn run_turns(
-    chat: &Chat,
-    model: String,
-    on_event: Channel<StreamEvent>,
-) -> Result<(), String> {
+async fn run_turns(chat: &Chat, model: String, on_event: Channel<StreamEvent>) -> Result<(), String> {
     // Cloned out of the lock before any `await` — a `MutexGuard` held across one
     // is not `Send`, and this future has to be.
     let turns = {
@@ -484,11 +485,7 @@ async fn ask_followup(
 ///
 /// Shared by the first question and every follow-up, so the two can never drift
 /// apart in how they talk to Ollama — same body, same `num_ctx`, same streaming.
-async fn ask_with_turns(
-    turns: Vec<Turn>,
-    model: String,
-    on_event: Channel<StreamEvent>,
-) -> Result<String, String> {
+async fn ask_with_turns(turns: Vec<Turn>, model: String, on_event: Channel<StreamEvent>) -> Result<String, String> {
     // Cold? Say so before the wait, not after. Checked rather than assumed: the
     // model may have been warmed from the tray, from the CLI, or by Ollama's own
     // timeout not having expired yet.
@@ -553,8 +550,7 @@ async fn ask_with_turns(
                 continue;
             }
 
-            let v: serde_json::Value =
-                serde_json::from_str(line).map_err(|e| format!("bad JSON from Ollama: {e}"))?;
+            let v: serde_json::Value = serde_json::from_str(line).map_err(|e| format!("bad JSON from Ollama: {e}"))?;
 
             // `/api/chat` puts the text under `message.content`; `/api/generate`
             // used `response`. Reading the wrong one streams nothing, silently.
@@ -598,9 +594,7 @@ async fn ask_with_turns(
 /// lands at B4, so this will need reapplying — see docs/B3-results.md.
 #[cfg(windows)]
 fn exclude_from_capture(window: &tauri::WebviewWindow) -> Result<(), String> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
 
     // Diagnostic escape hatch. The popup being invisible to screen capture also
     // means it cannot be screenshotted for inspection — so debugging how it
@@ -711,9 +705,7 @@ impl Anim {
 /// every animation frame.
 #[cfg(windows)]
 fn monitor_rects(hwnd: HWND) -> Option<(RECT, RECT)> {
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    };
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 
     let mut info = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -750,12 +742,7 @@ struct Corners {
 }
 
 #[cfg(windows)]
-fn target_rect(
-    hwnd: HWND,
-    tray_top: Option<i32>,
-    want_h: i32,
-    scale: f64,
-) -> Option<Corners> {
+fn target_rect(hwnd: HWND, tray_top: Option<i32>, want_h: i32, scale: f64) -> Option<Corners> {
     let (work, monitor) = monitor_rects(hwnd)?;
 
     let gap = (GAP * scale).round() as i32;
@@ -834,9 +821,7 @@ fn cursor_pos() -> Option<(i32, i32)> {
 /// measured elapsed time — a slower frame simply moves further.
 #[cfg(windows)]
 fn set_bounds(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowPos, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
-    };
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER};
 
     // SAFETY: a valid top-level HWND owned by this process.
     //
@@ -863,9 +848,7 @@ fn set_bounds(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
 #[cfg(windows)]
 fn place_now(window: &tauri::WebviewWindow, anim: &Anim) -> Result<(), String> {
     let hwnd = window.hwnd().map_err(|e| format!("no HWND: {e}"))?;
-    let scale = window
-        .scale_factor()
-        .map_err(|e| format!("no scale factor: {e}"))?;
+    let scale = window.scale_factor().map_err(|e| format!("no scale factor: {e}"))?;
 
     let c = target_rect(hwnd, taskbar_top(), anim.target_h.load(Ordering::Relaxed), scale)
         .ok_or_else(|| "no monitor info".to_string())?;
@@ -894,11 +877,7 @@ fn place_now(window: &tauri::WebviewWindow, anim: &Anim) -> Result<(), String> {
 /// open with no fix. `SW_SHOWNOACTIVATE` is the Win32 primitive that does it, and
 /// we already link the `windows` crate.
 #[cfg(windows)]
-fn show_without_focus(
-    window: &tauri::WebviewWindow,
-    anim: &Arc<Anim>,
-    generation: u64,
-) -> Result<(), String> {
+fn show_without_focus(window: &tauri::WebviewWindow, anim: &Arc<Anim>, generation: u64) -> Result<(), String> {
     use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNOACTIVATE};
 
     let hwnd = window.hwnd().map_err(|e| format!("no HWND: {e}"))?;
@@ -1131,15 +1110,10 @@ fn animate(window: tauri::WebviewWindow, anim: Arc<Anim>, generation: u64) {
             // Only the settled window is a target: mid-swap it is off screen, and
             // testing it there would retrigger against a rectangle nobody can see.
             let here = if on_left { c.left_x } else { c.right_x };
-            let pushed = matches!(swap, Swap::Settled)
-                && pointer_in(here, c.top, width, c.height, scale);
+            let pushed = matches!(swap, Swap::Settled) && pointer_in(here, c.top, width, c.height, scale);
 
             let want_left = anim.corner(pushed);
-            let (tx, ty, th) = (
-                if want_left { c.left_x } else { c.right_x },
-                c.top,
-                c.height,
-            );
+            let (tx, ty, th) = (if want_left { c.left_x } else { c.right_x }, c.top, c.height);
 
             let now = Instant::now();
             // Frame-rate independent: `k` is the fraction of the remaining
@@ -1197,7 +1171,10 @@ fn animate(window: tauri::WebviewWindow, anim: Arc<Anim>, generation: u64) {
                         on_left = want_left;
                         let entry = if on_left { past_left } else { past_right };
                         x = entry;
-                        swap = Swap::Arriving { since: now, from: entry };
+                        swap = Swap::Arriving {
+                            since: now,
+                            from: entry,
+                        };
                     }
                 }
                 Swap::Arriving { since, from } => {
@@ -1302,8 +1279,8 @@ fn take_focus(window: &tauri::WebviewWindow) -> Result<(), String> {
     use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, SetForegroundWindow,
-        SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
+        GetForegroundWindow, GetWindowLongPtrW, GetWindowThreadProcessId, SetForegroundWindow, SetWindowLongPtrW,
+        GWL_EXSTYLE, WS_EX_NOACTIVATE,
     };
 
     let hwnd = window.hwnd().map_err(|e| format!("no hwnd: {e}"))?;
@@ -1365,9 +1342,9 @@ fn report_affinity(window: &tauri::WebviewWindow) {
 
     match (ok.is_ok(), affinity) {
         (true, 17) => println!("[vidar] affinity verified: 17 (excluded) — click-through OK"),
-        (true, other) => eprintln!(
-            "[vidar] WARNING: affinity is {other}, not 17 — the window is NOT excluded from capture"
-        ),
+        (true, other) => {
+            eprintln!("[vidar] WARNING: affinity is {other}, not 17 — the window is NOT excluded from capture")
+        }
         (false, _) => eprintln!("[vidar] WARNING: could not read display affinity"),
     }
 }
@@ -1572,8 +1549,7 @@ unsafe extern "system" fn mouse_hook(
         }
     }
 
-    if code == HC_ACTION as i32 && message == WM_MOUSEWHEEL && WHEEL_ACTIVE.load(Ordering::Relaxed)
-    {
+    if code == HC_ACTION as i32 && message == WM_MOUSEWHEEL && WHEEL_ACTIVE.load(Ordering::Relaxed) {
         // SAFETY: reads only. The high bit of GetAsyncKeyState is "currently down".
         let held = |vk: u16| unsafe { GetAsyncKeyState(vk as i32) < 0 };
 
@@ -1786,11 +1762,7 @@ fn redirect_log_to_file() -> Option<std::path::PathBuf> {
     use windows::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE};
 
     let path = std::env::temp_dir().join("vidar.log");
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .ok()?;
+    let file = std::fs::OpenOptions::new().create(true).append(true).open(&path).ok()?;
 
     let handle = HANDLE(file.as_raw_handle());
     // SAFETY: a valid handle to a file this process just opened.
@@ -1912,9 +1884,7 @@ pub fn run() {
                     Ok("1") => SUMMON_BUTTON.store(1, Ordering::Relaxed),
                     Ok("2") => SUMMON_BUTTON.store(2, Ordering::Relaxed),
                     Ok("off") | Ok("0") => SUMMON_BUTTON.store(0, Ordering::Relaxed),
-                    Ok(other) => eprintln!(
-                        "[vidar] WARNING: VIDAR_MOUSE_BUTTON={other} is not 1, 2 or off — using 2"
-                    ),
+                    Ok(other) => eprintln!("[vidar] WARNING: VIDAR_MOUSE_BUTTON={other} is not 1, 2 or off — using 2"),
                     Err(_) => {}
                 }
 
@@ -2025,13 +1995,10 @@ fn fit_window(
         return Err(format!("content height is not a number: {content_height}"));
     }
 
-    let scale = window
-        .scale_factor()
-        .map_err(|e| format!("no scale factor: {e}"))?;
+    let scale = window.scale_factor().map_err(|e| format!("no scale factor: {e}"))?;
 
     let logical = content_height.clamp(MIN_H, MAX_H);
-    anim.target_h
-        .store((logical * scale).round() as i32, Ordering::Relaxed);
+    anim.target_h.store((logical * scale).round() as i32, Ordering::Relaxed);
     Ok(())
 }
 

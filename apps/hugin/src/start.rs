@@ -27,7 +27,13 @@ pub fn learn(folder: &Path) -> Result<Start, String> {
     let folder = ws.root_display();
     let (branch, changed) = git_state(Path::new(&folder));
     let cfg = config::load();
-    Ok(Start { folder, branch, changed, model: cfg.coding_model, num_ctx: cfg.num_ctx })
+    Ok(Start {
+        folder,
+        branch,
+        changed,
+        model: cfg.coding_model,
+        num_ctx: cfg.num_ctx,
+    })
 }
 
 /// The branch and the number of changed files, or `None` for both when `folder` is not
@@ -48,7 +54,9 @@ pub fn git_state(folder: &Path) -> (Option<String>, Option<usize>) {
 /// What git printed, if it ran and succeeded.
 fn git(folder: &Path, args: &[&str]) -> Option<String> {
     let out = Command::new("git").args(args).current_dir(folder).output().ok()?;
-    out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// Start Ollama if it is not running and load `model` into memory, on a thread of its
@@ -91,11 +99,26 @@ mod tests {
         }
         let dir = scratch("repo");
         let git = |args: &[&str]| {
-            let ok = Command::new("git").args(args).current_dir(&dir).output().unwrap().status.success();
+            let ok = Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+                .status
+                .success();
             assert!(ok, "git {args:?}");
         };
         git(&["init", "-b", "work"]);
-        git(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-m", "x"]);
+        git(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "x",
+        ]);
         std::fs::write(dir.join("a.txt"), "a").unwrap();
         std::fs::write(dir.join("b.txt"), "b").unwrap();
         assert_eq!(git_state(&dir), (Some("work".to_string()), Some(2)));

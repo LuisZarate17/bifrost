@@ -134,7 +134,11 @@ fn check_outcome(text: &str) -> Option<String> {
 /// `exited 0`, `exited 1`, `timed out`, `stopped` or `blocked`, from the sentence a command's
 /// result starts with: the command in backticks (all of it, whatever it holds), then how it ended.
 fn command_outcome(command: &str, text: &str) -> Option<String> {
-    let rest = text.strip_prefix('`')?.strip_prefix(command)?.strip_prefix('`')?.trim_start();
+    let rest = text
+        .strip_prefix('`')?
+        .strip_prefix(command)?
+        .strip_prefix('`')?
+        .trim_start();
     if let Some(after) = rest.strip_prefix("exited ") {
         let code = after.split_whitespace().next()?;
         Some(format!("exited {code}"))
@@ -169,7 +173,8 @@ fn lines_read(text: &str) -> String {
 pub fn visible(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
-        let hidden = matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}');
+        let hidden =
+            matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{2069}' | '\u{feff}');
         match c {
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
@@ -194,7 +199,11 @@ pub fn first_line(text: &str) -> String {
 /// Outside a repository the branch and the count are left out; so is an empty shell.
 pub fn header(folder: &str, branch: Option<&str>, changed: Option<usize>, model: &str, shell: &str) -> String {
     let git = git_note(branch, changed).map_or(String::new(), |g| format!(" · {g}"));
-    let shell = if shell.is_empty() { String::new() } else { format!(" · {shell}") };
+    let shell = if shell.is_empty() {
+        String::new()
+    } else {
+        format!(" · {shell}")
+    };
     format!("hugin · {}{git} · {model}{shell}", folder_name(folder))
 }
 
@@ -216,7 +225,11 @@ pub fn git_note(branch: Option<&str>, changed: Option<usize>) -> Option<String> 
 
 /// The card as the line it ends as.
 pub fn tool_line(card: &Card) -> ToolLine {
-    ToolLine { name: verb(&card.name), target: target(card), outcome: outcome(card) }
+    ToolLine {
+        name: verb(&card.name),
+        target: target(card),
+        outcome: outcome(card),
+    }
 }
 
 /// What a command allowed for the session shows in place of a question.
@@ -265,7 +278,10 @@ pub fn approval(card: &Card, call: &PendingCall) -> Approval {
                 detail.push(call.path.clone());
             }
             if !call.changed_build_files.is_empty() {
-                detail.push(format!("runs build files changed this turn: {}", call.changed_build_files.join(", ")));
+                detail.push(format!(
+                    "runs build files changed this turn: {}",
+                    call.changed_build_files.join(", ")
+                ));
             }
         }
         "read_file" => detail.push(call.path.clone()),
@@ -279,7 +295,11 @@ pub fn approval(card: &Card, call: &PendingCall) -> Approval {
     if matches!(call.name.as_str(), "create_file" | "move_file") && !call.folders.is_empty() {
         detail.push(format!("makes folders: {}", call.folders.join(", ")));
     }
-    Approval { name: verb(&card.name), target: target(card), detail }
+    Approval {
+        name: verb(&card.name),
+        target: target(card),
+        detail,
+    }
 }
 
 #[cfg(test)]
@@ -296,7 +316,12 @@ mod tests {
     }
 
     fn diff_line(tag: &str, text: &str) -> DiffLine {
-        DiffLine { tag: tag.into(), text: text.into(), old: None, new: None }
+        DiffLine {
+            tag: tag.into(),
+            text: text.into(),
+            old: None,
+            new: None,
+        }
     }
 
     fn call(name: &str, path: &str) -> PendingCall {
@@ -318,7 +343,10 @@ mod tests {
         let mut c = done("read_file", "src/a.rs", "[lines 3–4 of 9]\nfn a() {}\n}\n");
         c.range = Some(Lines { start: 3, end: Some(4) });
         let line = tool_line(&c);
-        assert_eq!((line.target.as_str(), line.outcome.as_str()), ("src/a.rs:3-4", "2 lines"));
+        assert_eq!(
+            (line.target.as_str(), line.outcome.as_str()),
+            ("src/a.rs:3-4", "2 lines")
+        );
         assert_eq!(outcome(&done("read_file", "a", "one\n")), "1 line");
         let mut open = done("read_file", "a", "x");
         open.range = Some(Lines { start: 5, end: None });
@@ -331,7 +359,10 @@ mod tests {
         let out = outcome(&done("run_check", "cargo check", &long));
         assert_eq!(out.chars().count(), OUTCOME_CHARS);
         assert!(out.ends_with('…'));
-        assert_eq!(outcome(&done("read_file", "a", "error: no such file")), "error: no such file");
+        assert_eq!(
+            outcome(&done("read_file", "a", "error: no such file")),
+            "error: no such file"
+        );
     }
 
     #[test]
@@ -348,7 +379,12 @@ mod tests {
     #[test]
     fn an_edit_and_a_move_name_what_they_do_in_the_target() {
         let mut e = Card::new("edit_file", "a.rs", CardState::Pending);
-        e.diff = Some(DiffView { hunks: Vec::new(), added: 2, removed: 1, create: false });
+        e.diff = Some(DiffView {
+            hunks: Vec::new(),
+            added: 2,
+            removed: 1,
+            create: false,
+        });
         assert_eq!(target(&e), "a.rs +2 −1");
         let mut m = Card::new("move_file", "a.rs", CardState::Pending);
         m.to = Some("b/a.rs".into());
@@ -360,7 +396,12 @@ mod tests {
         let mut p = call("edit_file", "a.rs");
         let mut lines = vec![diff_line(" ", "keep")];
         lines.extend((0..44).map(|n| diff_line("+", &format!("new {n}"))));
-        p.diff = Some(DiffView { hunks: vec![Hunk { lines }], added: 44, removed: 0, create: false });
+        p.diff = Some(DiffView {
+            hunks: vec![Hunk { lines }],
+            added: 44,
+            removed: 0,
+            create: false,
+        });
         let card = Card::new("edit_file", "a.rs", CardState::Pending);
         let a = approval(&card, &p);
         assert_eq!(a.detail.len(), DIFF_LINES + 1);
@@ -369,9 +410,15 @@ mod tests {
 
         let mut c = call("run_check", "cargo check --workspace");
         c.changed_build_files = vec!["Cargo.toml".into()];
-        let a = approval(&Card::new("run_check", "cargo check --workspace", CardState::Pending), &c);
+        let a = approval(
+            &Card::new("run_check", "cargo check --workspace", CardState::Pending),
+            &c,
+        );
         // The command is the target, so it is not said twice.
-        assert_eq!((a.name.as_str(), a.target.as_str()), ("check", "cargo check --workspace"));
+        assert_eq!(
+            (a.name.as_str(), a.target.as_str()),
+            ("check", "cargo check --workspace")
+        );
         assert_eq!(a.detail.len(), 1);
         assert!(a.detail[0].contains("Cargo.toml"));
     }
@@ -379,54 +426,126 @@ mod tests {
     #[test]
     fn two_hunks_are_parted_by_an_ellipsis_line() {
         let mut p = call("edit_file", "a.rs");
-        let hunks = vec![Hunk { lines: vec![diff_line("-", "a")] }, Hunk { lines: vec![diff_line("+", "b")] }];
-        p.diff = Some(DiffView { hunks, added: 1, removed: 1, create: false });
+        let hunks = vec![
+            Hunk {
+                lines: vec![diff_line("-", "a")],
+            },
+            Hunk {
+                lines: vec![diff_line("+", "b")],
+            },
+        ];
+        p.diff = Some(DiffView {
+            hunks,
+            added: 1,
+            removed: 1,
+            create: false,
+        });
         let a = approval(&Card::new("edit_file", "a.rs", CardState::Pending), &p);
         assert_eq!(a.detail, ["-a", "⋯", "+b"]);
     }
 
     #[test]
     fn tools_go_by_their_verbs() {
-        let names = ["read_file", "list_files", "search", "edit_file", "create_file", "delete_file", "move_file", "run_check", "update_plan"];
+        let names = [
+            "read_file",
+            "list_files",
+            "search",
+            "edit_file",
+            "create_file",
+            "delete_file",
+            "move_file",
+            "run_check",
+            "update_plan",
+        ];
         let verbs: Vec<_> = names.iter().map(|n| verb(n)).collect();
-        assert_eq!(verbs, ["read", "list", "search", "edit", "create", "delete", "move", "check", "plan"]);
+        assert_eq!(
+            verbs,
+            [
+                "read", "list", "search", "edit", "create", "delete", "move", "check", "plan"
+            ]
+        );
         assert_eq!(tool_line(&done("edit_file", "a.rs", "Edited a.rs.")).name, "edit");
     }
 
     #[test]
     fn a_change_that_worked_says_what_became_of_the_file() {
-        for (name, said) in [("edit_file", "applied"), ("create_file", "created"), ("delete_file", "deleted"), ("move_file", "moved")] {
+        for (name, said) in [
+            ("edit_file", "applied"),
+            ("create_file", "created"),
+            ("delete_file", "deleted"),
+            ("move_file", "moved"),
+        ] {
             assert_eq!(outcome(&done(name, "a", "Done a.")), said);
         }
-        assert_eq!(outcome(&done("edit_file", "a", "error: a.rs changed since the diff was shown")), "error: a.rs changed since the diff was shown");
+        assert_eq!(
+            outcome(&done("edit_file", "a", "error: a.rs changed since the diff was shown")),
+            "error: a.rs changed since the diff was shown"
+        );
     }
-
 
     #[test]
     fn a_listing_and_a_search_say_how_many_and_otherwise_their_first_line() {
-        assert_eq!(outcome(&done("list_files", "x", "12 files match all files:\na.rs")), "12 files");
-        assert_eq!(outcome(&done("list_files", "x", "1 file matches *.rs:\na.rs")), "1 file");
-        assert_eq!(outcome(&done("list_files", "x", "No files match *.zz.")), "No files match *.zz.");
-        assert_eq!(outcome(&done("search", "x", "6 matches for \"x\" in 2 files:\na.rs:1: x")), "6 hits");
-        assert_eq!(outcome(&done("search", "x", "1 match for \"x\" in 1 file:\na.rs:1: x")), "1 hit");
+        assert_eq!(
+            outcome(&done("list_files", "x", "12 files match all files:\na.rs")),
+            "12 files"
+        );
+        assert_eq!(
+            outcome(&done("list_files", "x", "1 file matches *.rs:\na.rs")),
+            "1 file"
+        );
+        assert_eq!(
+            outcome(&done("list_files", "x", "No files match *.zz.")),
+            "No files match *.zz."
+        );
+        assert_eq!(
+            outcome(&done("search", "x", "6 matches for \"x\" in 2 files:\na.rs:1: x")),
+            "6 hits"
+        );
+        assert_eq!(
+            outcome(&done("search", "x", "1 match for \"x\" in 1 file:\na.rs:1: x")),
+            "1 hit"
+        );
         assert_eq!(outcome(&done("search", "x", "No matches for \"x\".")), "no match");
         assert_eq!(outcome(&done("search", "x", "something else\nmore")), "something else");
     }
 
     #[test]
     fn a_check_passed_failed_or_was_stopped() {
-        assert_eq!(outcome(&done("run_check", "c", "`cargo check` passed (exit 0, 1.2 s).")), "passed");
-        assert_eq!(outcome(&done("run_check", "c", "`cargo check` failed (exit 101, 3.0 s). Output:\n\nerror")), "failed (exit 101)");
-        assert_eq!(outcome(&done("run_check", "c", "`cargo check` was stopped by the user after 0.4 s.")), "stopped");
+        assert_eq!(
+            outcome(&done("run_check", "c", "`cargo check` passed (exit 0, 1.2 s).")),
+            "passed"
+        );
+        assert_eq!(
+            outcome(&done(
+                "run_check",
+                "c",
+                "`cargo check` failed (exit 101, 3.0 s). Output:\n\nerror"
+            )),
+            "failed (exit 101)"
+        );
+        assert_eq!(
+            outcome(&done(
+                "run_check",
+                "c",
+                "`cargo check` was stopped by the user after 0.4 s."
+            )),
+            "stopped"
+        );
         let late = "`cargo check` ran for 600 s, past its time limit, and was stopped.";
         assert_eq!(outcome(&done("run_check", "c", late)), late);
     }
 
     #[test]
     fn the_header_names_the_folder_and_the_branch_only_inside_a_repository() {
-        assert_eq!(header(r"C:\work\demo", Some("main"), Some(2), "m", ""), "hugin · demo · main, 2 changed · m");
+        assert_eq!(
+            header(r"C:\work\demo", Some("main"), Some(2), "m", ""),
+            "hugin · demo · main, 2 changed · m"
+        );
         assert_eq!(header(r"C:\work\demo", None, None, "m", ""), "hugin · demo · m");
-        assert_eq!(header(r"C:\work\demo", None, None, "m", "bash"), "hugin · demo · m · bash");
+        assert_eq!(
+            header(r"C:\work\demo", None, None, "m", "bash"),
+            "hugin · demo · m · bash"
+        );
     }
 }
 
@@ -445,17 +564,29 @@ mod command_tests {
     fn a_command_line_names_its_first_line_and_how_it_ended() {
         let multi = "echo `hi`\nexit 3";
         let line = tool_line(&ran(multi, &format!("`{multi}` exited 3 (0.1 s). Output:\n\nhi")));
-        assert_eq!((line.name.as_str(), line.target.as_str(), line.outcome.as_str()), ("command", "echo `hi`", "exited 3"));
+        assert_eq!(
+            (line.name.as_str(), line.target.as_str(), line.outcome.as_str()),
+            ("command", "echo `hi`", "exited 3")
+        );
         for (how, want) in [
             ("exited 0 (1.2 s).", "exited 0"),
             ("ran for 120 s, past its time limit, and was stopped.", "timed out"),
             ("was stopped by the user after 2.0 s.", "stopped"),
-            ("could not finish: Windows Smart App Control blocked a program.", "blocked"),
+            (
+                "could not finish: Windows Smart App Control blocked a program.",
+                "blocked",
+            ),
         ] {
             assert_eq!(tool_line(&ran("make", &format!("`make` {how}"))).outcome, want);
         }
         let long = format!("echo {}", "y".repeat(200));
-        assert_eq!(tool_line(&ran(&long, &format!("`{long}` exited 0 (0.1 s)."))).target.chars().count(), 80);
+        assert_eq!(
+            tool_line(&ran(&long, &format!("`{long}` exited 0 (0.1 s).")))
+                .target
+                .chars()
+                .count(),
+            80
+        );
     }
 
     #[test]
@@ -473,7 +604,10 @@ mod command_tests {
     fn an_approval_shows_control_and_hidden_characters_as_escapes() {
         let sneaky = "echo ok\rrm -rf build\tx\u{1b}[2K\u{202e}y\u{200b}z\nsecond";
         let a = command_approval(sneaky, Shell::Bash);
-        assert_eq!(a.detail, ["echo ok\\rrm -rf build\\tx\\u{1b}[2K\\u{202e}y\\u{200b}z", "second"]);
+        assert_eq!(
+            a.detail,
+            ["echo ok\\rrm -rf build\\tx\\u{1b}[2K\\u{202e}y\\u{200b}z", "second"]
+        );
         assert!(a.detail.iter().all(|l| !l.chars().any(|c| c.is_control())));
         assert_eq!(visible("plain text, é and 中"), "plain text, é and 中");
     }

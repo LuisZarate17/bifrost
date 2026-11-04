@@ -1,7 +1,12 @@
 use crate::splash::*;
 
 fn seen(hwnd: isize, visible: bool, terminal_class: bool, pid: u32) -> Seen {
-    Seen { hwnd, visible, terminal_class, pid }
+    Seen {
+        hwnd,
+        visible,
+        terminal_class,
+        pid,
+    }
 }
 
 #[test]
@@ -22,7 +27,10 @@ fn everything_sits_inside_the_card_and_the_text_is_right_of_the_shield() {
     for dpi in [96, 120, 144, 192, 288] {
         let l = layout(dpi);
         for rc in [l.icon, l.title, l.folder, l.track] {
-            assert!(rc.left >= 0 && rc.top >= 0 && rc.right <= l.card.right && rc.bottom <= l.card.bottom, "{dpi}");
+            assert!(
+                rc.left >= 0 && rc.top >= 0 && rc.right <= l.card.right && rc.bottom <= l.card.bottom,
+                "{dpi}"
+            );
         }
         assert!(l.title.left >= l.icon.right && l.folder.left >= l.icon.right);
         assert!(l.title.bottom <= l.folder.top + 1 && l.folder.bottom <= l.track.top);
@@ -76,7 +84,11 @@ fn the_label_is_the_last_folder_unless_the_path_is_short() {
 fn only_a_new_visible_terminal_window_counts() {
     let noted = [10, 11];
     // Nothing new yet: the old terminal windows, and a window that is not a terminal.
-    let before = [seen(10, true, true, 1), seen(11, true, true, 2), seen(20, true, false, 3)];
+    let before = [
+        seen(10, true, true, 1),
+        seen(11, true, true, 2),
+        seen(20, true, false, 3),
+    ];
     assert!(!terminal_appeared(&noted, &before, 0));
     // A new terminal window that is not shown yet does not count; once shown, it does.
     let hidden = [seen(10, true, true, 1), seen(30, false, true, 4)];

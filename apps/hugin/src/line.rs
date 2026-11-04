@@ -126,7 +126,9 @@ impl Queue {
     /// The next line, waiting for one. `give_up` is asked every [`POLL`] and, when it
     /// says so, ends the wait: that is how Stop reaches an approval.
     fn next(&self, give_up: impl Fn() -> bool) -> Next {
-        let Ok(mut l) = self.lines.lock() else { return Next::Ended };
+        let Ok(mut l) = self.lines.lock() else {
+            return Next::Ended;
+        };
         loop {
             if let Some(line) = l.queued.pop_front() {
                 return Next::Line(line);
@@ -178,7 +180,13 @@ pub struct Line<W: Write> {
 
 impl<W: Write> Line<W> {
     pub fn new(out: W, queue: Arc<Queue>, stopper: Stopper, echo: bool) -> Self {
-        Self { out, queue, stopper, echo, status: String::new() }
+        Self {
+            out,
+            queue,
+            stopper,
+            echo,
+            status: String::new(),
+        }
     }
 
     /// Write and flush. A pipe closed by the reader is not worth stopping for.
@@ -204,8 +212,17 @@ impl<W: Write> Line<W> {
 impl<W: Write> Ui for Line<W> {
     fn show(&mut self, e: Event) {
         match e {
-            Event::Header { folder, branch, changed, model, shell } => {
-                self.say(&format!("{}\n", view::header(&folder, branch.as_deref(), changed, &model, &shell)));
+            Event::Header {
+                folder,
+                branch,
+                changed,
+                model,
+                shell,
+            } => {
+                self.say(&format!(
+                    "{}\n",
+                    view::header(&folder, branch.as_deref(), changed, &model, &shell)
+                ));
             }
             Event::Allowed(a) => {
                 let mut shown = card_text(&a);
@@ -226,8 +243,16 @@ impl<W: Write> Ui for Line<W> {
                 }
             }
             Event::Tool(ToolLine { name, target, outcome }) => {
-                let target = if target.is_empty() { String::new() } else { format!(" {target}") };
-                let outcome = if outcome.is_empty() { String::new() } else { format!(" → {outcome}") };
+                let target = if target.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {target}")
+                };
+                let outcome = if outcome.is_empty() {
+                    String::new()
+                } else {
+                    format!(" → {outcome}")
+                };
                 self.say(&format!("● {name}{target}{outcome}\n"));
             }
             Event::Plan(steps) => {
@@ -272,7 +297,11 @@ impl<W: Write> Ui for Line<W> {
 
 /// An approval as text: what is asked, then every line to read before answering.
 fn card_text(a: &Approval) -> String {
-    let target = if a.target.is_empty() { String::new() } else { format!(" {}", a.target) };
+    let target = if a.target.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", a.target)
+    };
     let mut shown = format!("? {}{target}\n", a.name);
     for line in &a.detail {
         shown.push_str(&format!("  {line}\n"));

@@ -120,7 +120,11 @@ fn median(v: &[f64]) -> Option<f64> {
     let mut v = v.to_vec();
     v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let mid = v.len() / 2;
-    Some(if v.len() % 2 == 1 { v[mid] } else { (v[mid - 1] + v[mid]) / 2.0 })
+    Some(if v.len() % 2 == 1 {
+        v[mid]
+    } else {
+        (v[mid - 1] + v[mid]) / 2.0
+    })
 }
 
 /// What the prompt ends with: it asks for far more than `num_predict` tokens, so the reply runs to
@@ -215,7 +219,11 @@ fn parse_shared(output: &str) -> Result<SharedGpu, String> {
     if pids.is_empty() {
         return Err("no Ollama runner process found".to_string());
     }
-    let bytes = counters.iter().filter(|(pid, _)| pids.contains(pid)).map(|(_, b)| *b).sum();
+    let bytes = counters
+        .iter()
+        .filter(|(pid, _)| pids.contains(pid))
+        .map(|(_, b)| *b)
+        .sum();
     Ok(SharedGpu { pids, bytes })
 }
 
@@ -226,7 +234,10 @@ fn read_shared_gpu() -> Result<SharedGpu, String> {
         .map_err(|e| format!("could not run powershell: {e}"))?;
     if !out.status.success() {
         let why = String::from_utf8_lossy(&out.stderr);
-        return Err(format!("powershell failed: {}", why.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim()));
+        return Err(format!(
+            "powershell failed: {}",
+            why.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim()
+        ));
     }
     parse_shared(&String::from_utf8_lossy(&out.stdout))
 }
@@ -239,7 +250,10 @@ fn read_shared_gpu() -> Result<SharedGpu, String> {
 fn free_ram_mib() -> Option<u64> {
     use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 
-    let mut status = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
     // SAFETY: `status` is a live MEMORYSTATUSEX with its length set, as the call requires.
     unsafe { GlobalMemoryStatusEx(&mut status) }.ok()?;
     Some(mib(status.ullAvailPhys))
@@ -313,14 +327,20 @@ fn unload_everything() -> Result<Vec<String>, String> {
             return Ok(gone);
         }
         if Instant::now() >= deadline {
-            return Err(format!("Ollama still lists a model {}s after the unload", UNLOAD_WAIT.as_secs()));
+            return Err(format!(
+                "Ollama still lists a model {}s after the unload",
+                UNLOAD_WAIT.as_secs()
+            ));
         }
         std::thread::sleep(Duration::from_millis(500));
     }
 }
 
 fn card_json(c: &Option<vram::VramSample>) -> Value {
-    c.map_or(Value::Null, |s| json!({ "used_mib": s.used_mib, "total_mib": s.total_mib }))
+    c.map_or(
+        Value::Null,
+        |s| json!({ "used_mib": s.used_mib, "total_mib": s.total_mib }),
+    )
 }
 
 /// What one generate call of [`measure_speed`] came to.
@@ -336,7 +356,10 @@ fn probe_once(model: &str, tokens: usize, scale: f64, run: usize, num_ctx: u32) 
     let prompt = filler_prompt(run, tokens, scale);
     match ollama::generate_timed(model, &prompt, num_ctx, NUM_PREDICT, GENERATE_TIMEOUT) {
         Ok(t) if t.prompt_eval_duration > 0 && t.eval_duration > 0 => Probe::Read(t),
-        Ok(t) => Probe::NoClock(format!("no usable clock (prompt_eval {} ns, eval {} ns)", t.prompt_eval_duration, t.eval_duration)),
+        Ok(t) => Probe::NoClock(format!(
+            "no usable clock (prompt_eval {} ns, eval {} ns)",
+            t.prompt_eval_duration, t.eval_duration
+        )),
         Err(e) => Probe::Failed(e.to_string()),
     }
 }
@@ -451,10 +474,21 @@ fn measure_build(repo: &Path) -> Value {
     let removed = std::fs::remove_dir_all(&target).is_ok() || !target.exists();
     let (status, note) = match &result {
         Err(e) => ("could not start", e.clone()),
-        Ok(o) if o.blocked.is_some() => ("blocked", format!("Windows blocked {}", o.blocked.as_deref().unwrap_or(""))),
+        Ok(o) if o.blocked.is_some() => (
+            "blocked",
+            format!("Windows blocked {}", o.blocked.as_deref().unwrap_or("")),
+        ),
         Ok(o) if o.passed() => ("built", String::new()),
         Ok(o) => {
-            let tail: String = o.output.chars().rev().take(KEEP_TAIL).collect::<Vec<_>>().into_iter().rev().collect();
+            let tail: String = o
+                .output
+                .chars()
+                .rev()
+                .take(KEEP_TAIL)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
             ("failed", format!("{:?}: {}", o.ended, tail.trim()))
         }
     };
@@ -508,12 +542,24 @@ fn run(opts: &Opts) -> Result<(), String> {
     println!("speedprobe - J1c");
     println!("model:   {model}");
     println!("num_ctx: {num_ctx}");
-    println!("card:    {}\n", card.as_ref().map(|c| c.name.clone()).unwrap_or_else(|e| format!("unavailable ({e})")));
+    println!(
+        "card:    {}\n",
+        card.as_ref()
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|e| format!("unavailable ({e})"))
+    );
     let sample = || card.as_ref().ok().and_then(|c| c.sample().ok());
 
     println!("1. unloading everything");
     let unloaded = unload_everything()?;
-    println!("  unloaded: {}", if unloaded.is_empty() { "nothing was loaded".to_string() } else { unloaded.join(", ") });
+    println!(
+        "  unloaded: {}",
+        if unloaded.is_empty() {
+            "nothing was loaded".to_string()
+        } else {
+            unloaded.join(", ")
+        }
+    );
     std::thread::sleep(SETTLE);
 
     println!("2. card before");
@@ -558,7 +604,8 @@ fn run(opts: &Opts) -> Result<(), String> {
     let out = repo.join("evals").join("out").join(format!("J1-speed-{started_unix}"));
     std::fs::create_dir_all(&out).map_err(|e| format!("could not make {}: {e}", out.display()))?;
     let file = out.join("results.json");
-    std::fs::write(&file, serde_json::to_string_pretty(&sections).unwrap_or_default()).map_err(|e| format!("could not write {}: {e}", file.display()))?;
+    std::fs::write(&file, serde_json::to_string_pretty(&sections).unwrap_or_default())
+        .map_err(|e| format!("could not write {}: {e}", file.display()))?;
     println!("\nsaved {}", file.display());
     Ok(())
 }
@@ -586,7 +633,11 @@ fn measure_loaded(
     let size_vram = me.and_then(|m| m.size_vram);
     let cpu_share = me.and_then(|m| m.cpu_share());
     let digest = me.and_then(|m| m.digest.clone());
-    println!("  card {} (change {})", fmt_opt(after.map(|s| s.used_mib), " MiB used"), fmt_opt(change, " MiB"));
+    println!(
+        "  card {} (change {})",
+        fmt_opt(after.map(|s| s.used_mib), " MiB used"),
+        fmt_opt(change, " MiB")
+    );
     println!(
         "  size {}, on the card {}, CPU share {}",
         fmt_opt(size.map(mib), " MiB"),
@@ -635,7 +686,9 @@ fn measure_loaded(
         if let Some(n) = s["decode_eval_count_median"].as_f64()
             && n < NUM_PREDICT as f64 / 2.0
         {
-            println!("    (decode is over only {n:.0} tokens: the reply stopped short of {NUM_PREDICT}, so that figure is shaky)");
+            println!(
+                "    (decode is over only {n:.0} tokens: the reply stopped short of {NUM_PREDICT}, so that figure is shaky)"
+            );
         }
     }
     if build["status"] == "built" {
@@ -696,13 +749,33 @@ mod tests {
     fn flags_are_parsed_and_unknown_ones_refused() {
         assert_eq!(parse_args(&strings(&["--help"])), Ok(Cmd::Help));
         assert_eq!(parse_args(&strings(&["--model", "a:b", "-h"])), Ok(Cmd::Help));
-        assert_eq!(parse_args(&strings(&["--model", " a:b "])), Ok(Cmd::Run(Opts { model: "a:b".into(), skip_build: false })));
-        assert_eq!(parse_args(&strings(&["--skip-build", "--model", "a"])), Ok(Cmd::Run(Opts { model: "a".into(), skip_build: true })));
+        assert_eq!(
+            parse_args(&strings(&["--model", " a:b "])),
+            Ok(Cmd::Run(Opts {
+                model: "a:b".into(),
+                skip_build: false
+            }))
+        );
+        assert_eq!(
+            parse_args(&strings(&["--skip-build", "--model", "a"])),
+            Ok(Cmd::Run(Opts {
+                model: "a".into(),
+                skip_build: true
+            }))
+        );
         assert!(parse_args(&[]).unwrap_err().contains("--model"));
         assert!(parse_args(&strings(&["--model"])).is_err());
         assert!(parse_args(&strings(&["--model", " "])).is_err());
-        assert!(parse_args(&strings(&["--model", "a", "--nope"])).unwrap_err().contains("unknown flag"));
-        assert!(parse_args(&strings(&["--model", "a", "extra"])).unwrap_err().contains("unexpected"));
+        assert!(
+            parse_args(&strings(&["--model", "a", "--nope"]))
+                .unwrap_err()
+                .contains("unknown flag")
+        );
+        assert!(
+            parse_args(&strings(&["--model", "a", "extra"]))
+                .unwrap_err()
+                .contains("unexpected")
+        );
     }
 
     #[test]
@@ -720,7 +793,11 @@ mod tests {
         for tokens in PROMPT_SIZES {
             let p = filler_prompt(1, tokens, 1.0);
             let want = (tokens as f64 * CHARS_PER_TOKEN) as usize;
-            assert!(p.len() >= want + CONTINUE.len() && p.len() < want + CONTINUE.len() + 200, "{} chars for {tokens} tokens", p.len());
+            assert!(
+                p.len() >= want + CONTINUE.len() && p.len() < want + CONTINUE.len() + 200,
+                "{} chars for {tokens} tokens",
+                p.len()
+            );
             assert_eq!(p, filler_prompt(1, tokens, 1.0), "deterministic");
             // The difference is in the first line, so no prefix is shared past it.
             let other = filler_prompt(2, tokens, 1.0);
@@ -739,14 +816,23 @@ mod tests {
     #[test]
     fn the_filler_asks_for_more_than_the_reply_can_hold() {
         let p = filler_prompt(1, 2_000, 1.0);
-        assert!(p.ends_with(CONTINUE) && CONTINUE.contains("at least 300 more lines") && CONTINUE.contains("no explanation"));
+        assert!(
+            p.ends_with(CONTINUE)
+                && CONTINUE.contains("at least 300 more lines")
+                && CONTINUE.contains("no explanation")
+        );
         assert!(!p.contains("one sentence"));
     }
 
     #[test]
     fn a_scale_makes_the_filler_longer_or_shorter() {
         let (whole, half) = (filler_prompt(1, 16_000, 1.0), filler_prompt(1, 16_000, 0.5));
-        assert!(half.len() < whole.len() * 55 / 100 && half.len() > whole.len() * 45 / 100, "{} against {}", half.len(), whole.len());
+        assert!(
+            half.len() < whole.len() * 55 / 100 && half.len() > whole.len() * 45 / 100,
+            "{} against {}",
+            half.len(),
+            whole.len()
+        );
     }
 
     #[test]
@@ -787,11 +873,20 @@ mod tests {
                    CTR\tpid_9999_luid_0x00000000_0x0000F5A1_phys_0\t5000000000\r\n\
                    CTR\tpid_42420_luid_0x00000000_0x0000F5A1_phys_0\t7\r\n\
                    noise line\r\n";
-        assert_eq!(parse_shared(out), Ok(SharedGpu { pids: vec![4242], bytes: 1_073_741_824 + 1_048_576 }));
+        assert_eq!(
+            parse_shared(out),
+            Ok(SharedGpu {
+                pids: vec![4242],
+                bytes: 1_073_741_824 + 1_048_576
+            })
+        );
         // Two runner processes add up; one with no instance counts for nothing.
         let two = "PID\t1\nPID\t2\nCTR\tpid_1_luid_0x0_phys_0\t10\nCTR\tpid_2_luid_0x0_phys_0\t5\nCTR\tpid_3_luid_0x0_phys_0\t99\n";
         assert_eq!(parse_shared(two).unwrap().bytes, 15);
-        assert_eq!(parse_shared("PID\t5\nCTR\tpid_6_luid_0x0_phys_0\t99\n").unwrap().bytes, 0);
+        assert_eq!(
+            parse_shared("PID\t5\nCTR\tpid_6_luid_0x0_phys_0\t99\n").unwrap().bytes,
+            0
+        );
     }
 
     #[test]
@@ -806,7 +901,14 @@ mod tests {
         for v in [9000, 8000, 8500, 7000, 9500] {
             s.note(v);
         }
-        assert_eq!(s, RamStats { first_mib: Some(9000), min_mib: Some(7000), samples: 5 });
+        assert_eq!(
+            s,
+            RamStats {
+                first_mib: Some(9000),
+                min_mib: Some(7000),
+                samples: 5
+            }
+        );
     }
 
     #[test]

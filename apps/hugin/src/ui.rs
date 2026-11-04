@@ -14,7 +14,13 @@ pub enum Event {
     /// What Hugin learned on start: the folder it works in, where git stands there and
     /// the model it asks, and the shell its commands run in (`""` for none shown).
     /// `branch` and `changed` are `None` outside a repository.
-    Header { folder: String, branch: Option<String>, changed: Option<usize>, model: String, shell: String },
+    Header {
+        folder: String,
+        branch: Option<String>,
+        changed: Option<usize>,
+        model: String,
+        shell: String,
+    },
     /// The person's own words, echoed, so a transcript reads in order.
     Prompt(String),
     /// What the turn is waiting for; empty clears it.

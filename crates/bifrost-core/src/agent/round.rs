@@ -27,9 +27,9 @@ use std::time::Duration;
 
 use super::env::Env;
 use super::run::run_auto;
-use super::send::{compact_for_send, send_whole, Calibration, Sent};
+use super::send::{Calibration, Sent, compact_for_send, send_whole};
 use super::stop::next_stop;
-use super::ticket::{arm, plan_name, DiffView, Find, Payload, PendingCall};
+use super::ticket::{DiffView, Find, Payload, PendingCall, arm, plan_name};
 use super::workspace;
 use crate::chat::{self, Message, Options};
 use crate::config::Think;
@@ -140,7 +140,12 @@ pub enum Reply {
     /// of [`tools::interpret`], the 7th plan update. The repeat rule counts only
     /// results that start that way, and the probes' results do. `raw_call` goes
     /// back with it, so the conversation shows the model its own attempt.
-    Rejected { name: String, path: String, error: String, raw_call: chat::ToolCall },
+    Rejected {
+        name: String,
+        path: String,
+        error: String,
+        raw_call: chat::ToolCall,
+    },
     /// A call that needs no approval, already run: a read inside the project folder
     /// of a file the listing would show, a listing, a search, or the task list
     /// (`update_plan`, which touches nothing and works even with no folder).
@@ -170,7 +175,10 @@ pub enum Reply {
     /// the loop does not close.** Ollama expects assistant(tool_calls) →
     /// tool(result); a tool message with no call in front of it answers a question
     /// the model cannot see itself asking.
-    Call { call: PendingCall, raw_call: chat::ToolCall },
+    Call {
+        call: PendingCall,
+        raw_call: chat::ToolCall,
+    },
 }
 
 /// Ask the model, offering the tools, and report back what it wants.
@@ -284,7 +292,9 @@ pub fn round_in(
     let offered = if closing {
         Vec::new()
     } else {
-        env.offered.clone().unwrap_or_else(|| default_tools(env, ws.is_some(), check_label.as_deref()))
+        env.offered
+            .clone()
+            .unwrap_or_else(|| default_tools(env, ws.is_some(), check_label.as_deref()))
     };
 
     // Inside a turn the conversation only grows, and past `num_ctx` Ollama cuts
@@ -302,9 +312,15 @@ pub fn round_in(
         // `chat`, not `chat_tools`: with no tools there is nothing for the recovery
         // to turn text into, and a call the model writes anyway stays words.
         let reply = chat::chat(model, &messages, &[], options)?;
-        let metrics = Metrics { note, ..Metrics::of(&reply) };
+        let metrics = Metrics {
+            note,
+            ..Metrics::of(&reply)
+        };
         return Ok(Round {
-            reply: Reply::Answer { content: reply.message.content, eval_count: reply.eval_count },
+            reply: Reply::Answer {
+                content: reply.message.content,
+                eval_count: reply.eval_count,
+            },
             prompt_eval_count: reply.prompt_eval_count,
             recovered: reply.recovered,
             fed_back: reply.fed_back,
@@ -318,7 +334,10 @@ pub fn round_in(
     } else {
         chat::chat(model, &messages, &offered, options)?
     };
-    let rewrite = env.offered.as_deref().is_some_and(|list| list.iter().any(|t| t.function.name == "write_file"));
+    let rewrite = env
+        .offered
+        .as_deref()
+        .is_some_and(|list| list.iter().any(|t| t.function.name == "write_file"));
     let cx = Context {
         history: &history,
         ws: ws.as_ref(),
@@ -334,7 +353,10 @@ pub fn round_in(
         recovered: reply.recovered,
         fed_back: reply.fed_back,
         thinking: reply.message.thinking.clone(),
-        metrics: Metrics { note, ..Metrics::of(&reply) },
+        metrics: Metrics {
+            note,
+            ..Metrics::of(&reply)
+        },
         sent,
     })
 }
@@ -356,7 +378,15 @@ fn think_for(
     let Some(wanted) = asked.or_else(|| cfg.settings_for(model).and_then(|s| s.think)) else {
         return (None, None);
     };
-    let unsent = |why: &str| (None, Some(format!("think {} is set for {model}, but {why}, so it was not sent", wanted.name())));
+    let unsent = |why: &str| {
+        (
+            None,
+            Some(format!(
+                "think {} is set for {model}, but {why}, so it was not sent",
+                wanted.name()
+            )),
+        )
+    };
     match detail {
         Some(detail) if detail.has("thinking") => (Some(wanted), None),
         Some(_) => unsent("it does not report the thinking capability"),
@@ -423,7 +453,10 @@ fn classify(
     // since H5 an automatic one does not, so several could run in one round.
     // Left as it is (review R-34): Qwen3-Coder asks for one call per reply.
     let Some(call) = reply.tool_calls().first().cloned() else {
-        return Reply::Answer { content: reply.message.content.clone(), eval_count: reply.eval_count };
+        return Reply::Answer {
+            content: reply.message.content.clone(),
+            eval_count: reply.eval_count,
+        };
     };
 
     // A call that has already failed identically, twice, ends the turn: the file
@@ -448,12 +481,24 @@ fn classify(
     // that way, and the probe's results do.
     let reject = |name: &str, path: &str, why: String| {
         let why = tools::failure(&why);
-        let why = if prior > 0 { format!("{why}{}", tools::repeated_note(name)) } else { why };
-        Reply::Rejected { name: name.to_string(), path: path.to_string(), error: why, raw_call: call.clone() }
+        let why = if prior > 0 {
+            format!("{why}{}", tools::repeated_note(name))
+        } else {
+            why
+        };
+        Reply::Rejected {
+            name: name.to_string(),
+            path: path.to_string(),
+            error: why,
+            raw_call: call.clone(),
+        }
     };
 
     if call.function.name == chat::INVALID_TOOL_CALL {
-        let why = call.function.arguments["error"].as_str().unwrap_or("unreadable").to_string();
+        let why = call.function.arguments["error"]
+            .as_str()
+            .unwrap_or("unreadable")
+            .to_string();
         return reject("tool call", "", format!("{why}. Send one valid tool call."));
     }
     let request = match tools::interpret(&call) {
@@ -541,13 +586,29 @@ fn classify(
             let ws = ws.expect("checked above");
             let shown = search::describe_list(pattern.as_deref());
             let find = Find::List { pattern };
-            ("list_files", shown, Some(Payload::Find { root: ws.root_display(), find, stop: next_stop() }))
+            (
+                "list_files",
+                shown,
+                Some(Payload::Find {
+                    root: ws.root_display(),
+                    find,
+                    stop: next_stop(),
+                }),
+            )
         }
         tools::Request::Search { text, pattern } => {
             let ws = ws.expect("checked above");
             let shown = search::describe_search(&text, pattern.as_deref());
             let find = Find::Search { text, pattern };
-            ("search", shown, Some(Payload::Find { root: ws.root_display(), find, stop: next_stop() }))
+            (
+                "search",
+                shown,
+                Some(Payload::Find {
+                    root: ws.root_display(),
+                    find,
+                    stop: next_stop(),
+                }),
+            )
         }
         // The model can call it from history, or invent it. Either way there is
         // only something to run when a person chose a command for this folder.
@@ -555,7 +616,11 @@ fn classify(
             (Some(ws), Some(argv)) => (
                 "run_check",
                 check::label(argv),
-                Some(Payload::Check { root: ws.root_display(), argv: argv.to_vec(), stop: next_stop() }),
+                Some(Payload::Check {
+                    root: ws.root_display(),
+                    argv: argv.to_vec(),
+                    stop: next_stop(),
+                }),
             ),
             _ => {
                 return reject("run_check", "", format!("error: {}", tools::CHECK_UNAVAILABLE));
@@ -578,8 +643,12 @@ fn classify(
             let (ws, shell) = (ws.expect("checked above"), cx.commands.expect("checked above"));
             // The path is the command itself, whole: it is what the approval is for,
             // and what the ticket is redeemed against.
-            let payload =
-                Payload::Command { root: ws.root_display(), shell, command: command.clone(), stop: next_stop() };
+            let payload = Payload::Command {
+                root: ws.root_display(),
+                shell,
+                command: command.clone(),
+                stop: next_stop(),
+            };
             ("run_command", command, Some(payload))
         }
         tools::Request::Rewrite { path, .. } if !cx.rewrite => {
@@ -598,7 +667,11 @@ fn classify(
                 "editing is off: the user has not chosen a project folder".into(),
             );
         }
-        tools::Request::Edit { path, old_text, new_text } => {
+        tools::Request::Edit {
+            path,
+            old_text,
+            new_text,
+        } => {
             let ws = ws.expect("checked above");
             match tools::plan_edit(ws, &path, &old_text, &new_text, cx.ask_every_call) {
                 Ok(p) => ("edit_file", p.display.clone(), Some(Payload::Edit(p))),
@@ -662,7 +735,11 @@ fn classify(
         Some(Payload::Read { range, .. }) => *range,
         _ => None,
     };
-    let changed_build_files = if name == "run_check" { tools::build_files_changed(history) } else { Vec::new() };
+    let changed_build_files = if name == "run_check" {
+        tools::build_files_changed(history)
+    } else {
+        Vec::new()
+    };
     Reply::Call {
         call: PendingCall {
             token: arm(name, &path, payload),
@@ -732,7 +809,13 @@ mod tests {
     }
 
     fn call(name: &str, arguments: serde_json::Value) -> ToolCall {
-        ToolCall { id: None, function: FunctionCall { name: name.into(), arguments } }
+        ToolCall {
+            id: None,
+            function: FunctionCall {
+                name: name.into(),
+                arguments,
+            },
+        }
     }
 
     fn said(content: &str, calls: Vec<ToolCall>) -> ChatReply {
@@ -795,7 +878,15 @@ mod tests {
         commands: Option<check::Shell>,
     ) -> (Reply, Armed) {
         let mut armed = Armed::new();
-        let cx = Context { history, ws, check, ask_every_call, rewrite, commands, stop: u64::MAX };
+        let cx = Context {
+            history,
+            ws,
+            check,
+            ask_every_call,
+            rewrite,
+            commands,
+            stop: u64::MAX,
+        };
         let reply = classify(reply, &cx, &mut |name: &str, path: &str, payload: Option<Payload>| {
             armed.push((name.to_string(), path.to_string(), payload));
             format!("ticket-{}", armed.len())
@@ -844,8 +935,16 @@ mod tests {
             let (card, (name, path, payload)) = asking((reply, armed));
             assert_eq!((card.name.as_str(), card.path.as_str()), ("run_command", text));
             assert_eq!((name.as_str(), path.as_str()), ("run_command", text));
-            let Some(Payload::Command { root, shell, command, .. }) = payload else { panic!("armed with a command") };
-            assert_eq!((root, shell, command.as_str()), (ws.root_display(), check::Shell::Bash, text));
+            let Some(Payload::Command {
+                root, shell, command, ..
+            }) = payload
+            else {
+                panic!("armed with a command")
+            };
+            assert_eq!(
+                (root, shell, command.as_str()),
+                (ws.root_display(), check::Shell::Bash, text)
+            );
         }
     }
 
@@ -855,8 +954,11 @@ mod tests {
     fn a_command_is_rejected_when_not_offered() {
         let s = Sandbox::new("nocommand");
         let ws = s.ws();
-        let (name, path, error) =
-            rejection(judge_command(call("run_command", json!({ "command": "dir" })), Some(&ws), None));
+        let (name, path, error) = rejection(judge_command(
+            call("run_command", json!({ "command": "dir" })),
+            Some(&ws),
+            None,
+        ));
         assert_eq!((name.as_str(), path.as_str()), ("run_command", ""));
         assert_eq!(error, "error: no such tool: run_command");
     }
@@ -866,10 +968,24 @@ mod tests {
         let s = Sandbox::new("command-edges");
         let ws = s.ws();
         let shell = Some(check::Shell::Cmd);
-        let (_, _, error) = rejection(judge_command(call("run_command", json!({ "command": "dir" })), None, shell));
-        assert!(error.starts_with("error:") && error.contains("no project folder"), "{error}");
-        let (_, _, error) = rejection(judge_command(call("run_command", json!({ "command": " " })), Some(&ws), shell));
-        assert!(error.starts_with("error:") && error.contains("without a command"), "{error}");
+        let (_, _, error) = rejection(judge_command(
+            call("run_command", json!({ "command": "dir" })),
+            None,
+            shell,
+        ));
+        assert!(
+            error.starts_with("error:") && error.contains("no project folder"),
+            "{error}"
+        );
+        let (_, _, error) = rejection(judge_command(
+            call("run_command", json!({ "command": " " })),
+            Some(&ws),
+            shell,
+        ));
+        assert!(
+            error.starts_with("error:") && error.contains("without a command"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -878,23 +994,39 @@ mod tests {
         let ws = sandbox.ws();
         let cfg = config::Config::default();
         let plain = app_prompt(&Env::default(), &cfg, &ws, true);
-        assert_eq!(plain, tools::system_prompt(&ws, true), "no identity: the prompt as it was");
-        let named = Env { identity: Some("You are Hugin.".into()), ..Env::default() };
+        assert_eq!(
+            plain,
+            tools::system_prompt(&ws, true),
+            "no identity: the prompt as it was"
+        );
+        let named = Env {
+            identity: Some("You are Hugin.".into()),
+            ..Env::default()
+        };
         assert_eq!(app_prompt(&named, &cfg, &ws, true), format!("You are Hugin. {plain}"));
     }
 
     #[test]
     fn only_a_setting_with_a_shell_offers_run_command() {
         let names = |env: &Env, editing| -> Vec<String> {
-            default_tools(env, editing, Some("cargo check")).into_iter().map(|t| t.function.name).collect()
+            default_tools(env, editing, Some("cargo check"))
+                .into_iter()
+                .map(|t| t.function.name)
+                .collect()
         };
         let app = Env::default();
         assert!(!names(&app, true).contains(&"run_command".to_string()));
-        let hugin = Env { commands: Some(check::Shell::PowerShell), ..Env::default() };
+        let hugin = Env {
+            commands: Some(check::Shell::PowerShell),
+            ..Env::default()
+        };
         let offered = names(&hugin, true);
         assert_eq!(offered.last().map(String::as_str), Some("run_command"));
         assert_eq!(offered[..offered.len() - 1], names(&app, true)[..]);
-        assert!(!names(&hugin, false).contains(&"run_command".to_string()), "no folder, no command");
+        assert!(
+            !names(&hugin, false).contains(&"run_command".to_string()),
+            "no folder, no command"
+        );
     }
 
     fn kind(reply: &Reply) -> &'static str {
@@ -943,14 +1075,19 @@ mod tests {
     #[test]
     fn words_with_no_call_are_an_answer() {
         let (reply, armed) = judge(&said("It is in main.rs.", vec![]), &[], None, None, false);
-        let Reply::Answer { content, eval_count } = reply else { panic!("not an answer") };
+        let Reply::Answer { content, eval_count } = reply else {
+            panic!("not an answer")
+        };
         assert_eq!((content.as_str(), eval_count), ("It is in main.rs.", 5));
         assert!(armed.is_empty());
     }
 
     #[test]
     fn only_the_first_call_of_a_reply_is_looked_at() {
-        let calls = vec![call("search", json!({})), call("update_plan", json!({ "plan": "[ ] a" }))];
+        let calls = vec![
+            call("search", json!({})),
+            call("update_plan", json!({ "plan": "[ ] a" })),
+        ];
         let (name, ..) = rejection(judge(&said("", calls), &[], None, None, false));
         assert_eq!(name, "search");
     }
@@ -963,7 +1100,9 @@ mod tests {
             history.extend(exchange("edit_file", args.clone(), "error: old_text was not found"));
         }
         let (reply, armed) = judge(&said("", vec![call("edit_file", args)]), &history, None, None, false);
-        let Reply::Stuck { error } = reply else { panic!("not stuck: {}", kind(&reply)) };
+        let Reply::Stuck { error } = reply else {
+            panic!("not stuck: {}", kind(&reply))
+        };
         assert_eq!(
             error,
             "the model kept repeating a call to edit_file that could not be carried out, so it was stopped"
@@ -975,8 +1114,18 @@ mod tests {
     fn a_call_that_failed_once_is_rejected_again_with_the_repeat_note() {
         let args = json!({ "old_text": "x" });
         let mut history = vec![Message::user("fix it")];
-        history.extend(exchange("edit_file", args.clone(), "error: edit_file was called without a path"));
-        let got = rejection(judge(&said("", vec![call("edit_file", args)]), &history, None, None, false));
+        history.extend(exchange(
+            "edit_file",
+            args.clone(),
+            "error: edit_file was called without a path",
+        ));
+        let got = rejection(judge(
+            &said("", vec![call("edit_file", args)]),
+            &history,
+            None,
+            None,
+            false,
+        ));
         let first_time = "error: edit_file was called without a path";
         let again = format!("{first_time}{}", tools::repeated_note("edit_file"));
         assert_eq!(got, ("edit_file".to_string(), String::new(), again));
@@ -1027,10 +1176,22 @@ mod tests {
 
         // The conversation now holds the stand-in call and the reason; the model's next call is read.
         let mut history = vec![Message::user("read a.txt")];
-        history.extend(exchange(chat::INVALID_TOOL_CALL, fed.tool_calls()[0].function.arguments.clone(), &error));
-        let (reply, armed) = judge(&said("", vec![call("read_file", json!({ "path": "a.txt" }))]), &history, Some(&ws), None, false);
+        history.extend(exchange(
+            chat::INVALID_TOOL_CALL,
+            fed.tool_calls()[0].function.arguments.clone(),
+            &error,
+        ));
+        let (reply, armed) = judge(
+            &said("", vec![call("read_file", json!({ "path": "a.txt" }))]),
+            &history,
+            Some(&ws),
+            None,
+            false,
+        );
         assert!(armed.is_empty());
-        let Reply::Auto { name, ok, result, .. } = reply else { panic!("not run: {}", kind(&reply)) };
+        let Reply::Auto { name, ok, result, .. } = reply else {
+            panic!("not run: {}", kind(&reply))
+        };
         assert_eq!((name.as_str(), ok), ("read_file", true));
         assert!(result.contains("one"), "{result}");
     }
@@ -1038,13 +1199,19 @@ mod tests {
     // ── thinking (J0d) ──────────────────────────────────────────────────────
 
     fn detail(capabilities: &[&str]) -> ollama::ModelDetail {
-        ollama::ModelDetail { capabilities: capabilities.iter().map(|c| c.to_string()).collect(), ..Default::default() }
+        ollama::ModelDetail {
+            capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
+            ..Default::default()
+        }
     }
 
     /// A config with a `think` set for one model.
     fn thinking_config(tag: &str, think: Option<Think>) -> config::Config {
         let model_settings = std::collections::BTreeMap::from([(tag.to_string(), config::ModelSettings { think })]);
-        config::Config { model_settings, ..config::Config::default() }
+        config::Config {
+            model_settings,
+            ..config::Config::default()
+        }
     }
 
     /// **`think` goes only to a model that reports `thinking`**: Ollama refuses it for one that
@@ -1055,12 +1222,18 @@ mod tests {
         let thinks = detail(&["completion", "tools", "thinking"]);
         let plain = detail(&["completion", "tools"]);
 
-        assert_eq!(think_for("gpt-oss:20b", None, &cfg, Some(&thinks)), (Some(Think::High), None));
+        assert_eq!(
+            think_for("gpt-oss:20b", None, &cfg, Some(&thinks)),
+            (Some(Think::High), None)
+        );
 
         let (sent, note) = think_for("gpt-oss:20b", None, &cfg, Some(&plain));
         assert_eq!(sent, None);
         let note = note.expect("a setting that was left out is said");
-        assert!(note.contains("gpt-oss:20b") && note.contains("high") && note.contains("thinking"), "{note}");
+        assert!(
+            note.contains("gpt-oss:20b") && note.contains("high") && note.contains("thinking"),
+            "{note}"
+        );
 
         // Nothing known of the model: not sent either, and said.
         let (sent, note) = think_for("gpt-oss:20b", None, &cfg, None);
@@ -1074,7 +1247,11 @@ mod tests {
         let plain = detail(&["completion", "tools"]);
         let none = (None, None);
         // No entry for it, an entry that sets nothing, and the default config.
-        for cfg in [thinking_config("other:1b", Some(Think::High)), thinking_config("m", None), config::Config::default()] {
+        for cfg in [
+            thinking_config("other:1b", Some(Think::High)),
+            thinking_config("m", None),
+            config::Config::default(),
+        ] {
             for d in [Some(&thinks), Some(&plain), None] {
                 assert_eq!(think_for("m", None, &cfg, d), none);
             }
@@ -1087,11 +1264,20 @@ mod tests {
     fn a_think_the_caller_asks_for_wins_over_the_configs_and_is_held_to_the_same_rule() {
         let cfg = thinking_config("m", Some(Think::High));
         let thinks = detail(&["thinking"]);
-        assert_eq!(think_for("m", Some(Think::Off), &cfg, Some(&thinks)), (Some(Think::Off), None));
-        assert_eq!(think_for("m", Some(Think::Low), &config::Config::default(), Some(&thinks)), (Some(Think::Low), None));
+        assert_eq!(
+            think_for("m", Some(Think::Off), &cfg, Some(&thinks)),
+            (Some(Think::Off), None)
+        );
+        assert_eq!(
+            think_for("m", Some(Think::Low), &config::Config::default(), Some(&thinks)),
+            (Some(Think::Low), None)
+        );
         let (sent, note) = think_for("m", Some(Think::Low), &cfg, Some(&detail(&["tools"])));
         assert_eq!(sent, None);
-        assert!(note.is_some_and(|n| n.contains("low")), "the setting that was left out is the caller's");
+        assert!(
+            note.is_some_and(|n| n.contains("low")),
+            "the setting that was left out is the caller's"
+        );
     }
 
     #[test]
@@ -1126,10 +1312,20 @@ mod tests {
 
     #[test]
     fn a_call_the_tools_refuse_goes_back_with_their_words() {
-        let got = rejection(judge_call(call("edit_file", json!({ "old_text": "x" })), None, None, false));
+        let got = rejection(judge_call(
+            call("edit_file", json!({ "old_text": "x" })),
+            None,
+            None,
+            false,
+        ));
         let no_path = "error: edit_file was called without a path".to_string();
         assert_eq!(got, ("edit_file".to_string(), String::new(), no_path));
-        let got = rejection(judge_call(call("frobnicate", json!({ "path": "a.rs" })), None, None, false));
+        let got = rejection(judge_call(
+            call("frobnicate", json!({ "path": "a.rs" })),
+            None,
+            None,
+            false,
+        ));
         let no_tool = "error: no such tool: frobnicate".to_string();
         assert_eq!(got, ("frobnicate".to_string(), "a.rs".to_string(), no_tool));
     }
@@ -1157,7 +1353,9 @@ mod tests {
         // The plan is an edit, armed under the name `run_approved` redeems it by.
         assert_eq!((card.name.as_str(), card.path.as_str()), ("edit_file", "a.txt"));
         assert_eq!((name.as_str(), path.as_str()), ("edit_file", "a.txt"));
-        let Some(Payload::Edit(plan)) = payload else { panic!("a rewrite is armed with its plan") };
+        let Some(Payload::Edit(plan)) = payload else {
+            panic!("a rewrite is armed with its plan")
+        };
         assert_eq!(plan_name(&plan), "edit_file");
         let diff = card.diff.expect("the diff to approve");
         assert_eq!((diff.added, diff.removed, diff.create), (1, 1, false));
@@ -1165,7 +1363,9 @@ mod tests {
 
         // The conversation still shows the call as the model made it.
         let (reply, _) = judge_rewrite(call("write_file", args.clone()), Some(&ws));
-        let Reply::Call { raw_call, .. } = reply else { panic!("not a call") };
+        let Reply::Call { raw_call, .. } = reply else {
+            panic!("not a call")
+        };
         assert_eq!(raw_call, call("write_file", args));
     }
 
@@ -1229,7 +1429,11 @@ mod tests {
         let ws = s.ws();
         assert_eq!(
             rejection(judge_call(call("run_check", json!({})), Some(&ws), None, false)),
-            ("run_check".to_string(), String::new(), format!("error: {}", tools::CHECK_UNAVAILABLE))
+            (
+                "run_check".to_string(),
+                String::new(),
+                format!("error: {}", tools::CHECK_UNAVAILABLE)
+            )
         );
         // The same with no folder at all.
         let (name, _, error) = rejection(judge_call(call("run_check", json!({})), None, None, false));
@@ -1241,7 +1445,12 @@ mod tests {
     fn a_search_that_could_never_run_goes_back_without_asking_anyone() {
         let s = Sandbox::new("badsearch");
         let ws = s.ws();
-        let got = rejection(judge_call(call("search", json!({ "text": "a\nb" })), Some(&ws), None, false));
+        let got = rejection(judge_call(
+            call("search", json!({ "text": "a\nb" })),
+            Some(&ws),
+            None,
+            false,
+        ));
         assert_eq!(
             got,
             (
@@ -1253,7 +1462,10 @@ mod tests {
         let outside = call("list_files", json!({ "pattern": "../*.rs" }));
         let (name, path, error) = rejection(judge_call(outside, Some(&ws), None, false));
         assert_eq!((name.as_str(), path.as_str()), ("list_files", ""));
-        assert!(error.starts_with("error: ../*.rs is not inside the project folder"), "{error}");
+        assert!(
+            error.starts_with("error: ../*.rs is not inside the project folder"),
+            "{error}"
+        );
     }
 
     // ── the task list ───────────────────────────────────────────────────────
@@ -1263,14 +1475,30 @@ mod tests {
         let plan = call("update_plan", json!({ "plan": "[x] read the file\n[ ] edit it" }));
         let (reply, armed) = judge_call(plan, None, None, true);
         assert!(armed.is_empty(), "the task list never arms a ticket");
-        let Reply::Auto { name, path, range, result, ok, stopped, plan, raw_call } = reply else {
+        let Reply::Auto {
+            name,
+            path,
+            range,
+            result,
+            ok,
+            stopped,
+            plan,
+            raw_call,
+        } = reply
+        else {
             panic!("not automatic: {}", kind(&reply))
         };
-        assert_eq!((name.as_str(), path.as_str(), range, ok, stopped), ("update_plan", "", None, true, false));
+        assert_eq!(
+            (name.as_str(), path.as_str(), range, ok, stopped),
+            ("update_plan", "", None, true, false)
+        );
         assert_eq!(result, "Plan updated: 1 of 2 done.");
         let steps = plan.expect("the parsed list");
         assert_eq!(steps.len(), 2);
-        assert_eq!((steps[0].text.as_str(), steps[0].status), ("read the file", tools::PlanStatus::Done));
+        assert_eq!(
+            (steps[0].text.as_str(), steps[0].status),
+            ("read the file", tools::PlanStatus::Done)
+        );
         assert_eq!(raw_call.function.name, "update_plan");
     }
 
@@ -1285,7 +1513,11 @@ mod tests {
         let (reply, armed) = judge(&said("", vec![plan]), &history, None, None, false);
         assert_eq!(
             rejection((reply, armed)),
-            ("update_plan".to_string(), String::new(), tools::PLAN_LIMIT_NOTE.to_string())
+            (
+                "update_plan".to_string(),
+                String::new(),
+                tools::PLAN_LIMIT_NOTE.to_string()
+            )
         );
     }
 
@@ -1299,16 +1531,37 @@ mod tests {
 
         let (reply, armed) = judge_call(call("search", json!({ "text": "needle" })), Some(&ws), None, false);
         assert!(armed.is_empty(), "an automatic call never touches the pending slot");
-        let Reply::Auto { name, path, range, result, ok, stopped, plan, .. } = reply else {
+        let Reply::Auto {
+            name,
+            path,
+            range,
+            result,
+            ok,
+            stopped,
+            plan,
+            ..
+        } = reply
+        else {
             panic!("not automatic: {}", kind(&reply))
         };
-        assert_eq!((name.as_str(), path.as_str(), range, ok, stopped, plan), ("search", "\"needle\"", None, true, false, None));
+        assert_eq!(
+            (name.as_str(), path.as_str(), range, ok, stopped, plan),
+            ("search", "\"needle\"", None, true, false, None)
+        );
         assert!(result.contains("a.txt:1"), "{result}");
 
         let (reply, armed) = judge_call(call("list_files", json!({})), Some(&ws), None, false);
         assert!(armed.is_empty());
-        let Reply::Auto { name, path, result, ok, .. } = reply else { panic!("not automatic: {}", kind(&reply)) };
-        assert_eq!((name.as_str(), path.as_str(), ok), ("list_files", "the whole project", true));
+        let Reply::Auto {
+            name, path, result, ok, ..
+        } = reply
+        else {
+            panic!("not automatic: {}", kind(&reply))
+        };
+        assert_eq!(
+            (name.as_str(), path.as_str(), ok),
+            ("list_files", "the whole project", true)
+        );
         assert!(result.contains("a.txt"), "{result}");
     }
 
@@ -1323,7 +1576,9 @@ mod tests {
         history.extend(exchange("search", args.clone(), "error: could not read the folder"));
         drop(s);
         let (reply, _) = judge(&said("", vec![call("search", args)]), &history, Some(&ws), None, false);
-        let Reply::Auto { ok, result, .. } = reply else { panic!("not automatic: {}", kind(&reply)) };
+        let Reply::Auto { ok, result, .. } = reply else {
+            panic!("not automatic: {}", kind(&reply))
+        };
         assert!(!ok, "{result}");
         assert!(result.ends_with(tools::repeated_note("search")), "{result}");
     }
@@ -1337,9 +1592,18 @@ mod tests {
         let ws = s.ws();
         let args = json!({ "path": "a.txt", "old_text": "two", "new_text": "2" });
         let (card, (name, path, payload)) = asking(judge_call(call("edit_file", args.clone()), Some(&ws), None, false));
-        assert_eq!((card.name.as_str(), card.path.as_str(), card.token.as_str()), ("edit_file", "a.txt", "ticket-1"));
-        assert_eq!((name.as_str(), path.as_str()), ("edit_file", "a.txt"), "armed for the call the card shows");
-        let Some(Payload::Edit(plan)) = payload else { panic!("an edit is armed with its plan") };
+        assert_eq!(
+            (card.name.as_str(), card.path.as_str(), card.token.as_str()),
+            ("edit_file", "a.txt", "ticket-1")
+        );
+        assert_eq!(
+            (name.as_str(), path.as_str()),
+            ("edit_file", "a.txt"),
+            "armed for the call the card shows"
+        );
+        let Some(Payload::Edit(plan)) = payload else {
+            panic!("an edit is armed with its plan")
+        };
         assert_eq!(plan_name(&plan), "edit_file");
         let diff = card.diff.expect("the diff to approve");
         assert_eq!((diff.added, diff.removed, diff.create), (1, 1, false));
@@ -1348,7 +1612,9 @@ mod tests {
 
         // The raw call goes with it, for the conversation.
         let (reply, _) = judge_call(call("edit_file", args.clone()), Some(&ws), None, false);
-        let Reply::Call { raw_call, .. } = reply else { panic!("not a call") };
+        let Reply::Call { raw_call, .. } = reply else {
+            panic!("not a call")
+        };
         assert_eq!(raw_call, call("edit_file", args));
     }
 
@@ -1398,7 +1664,11 @@ mod tests {
         let real = std::fs::canonicalize(s.dir.join("outside.txt")).unwrap();
         let lines = Some(tools::Lines { start: 2, end: Some(3) });
         assert_eq!(card.name, "read_file");
-        assert_eq!(card.path, edit::plain(&real), "the card shows the file that will really be opened");
+        assert_eq!(
+            card.path,
+            edit::plain(&real),
+            "the card shows the file that will really be opened"
+        );
         assert_eq!(card.range, lines);
         assert_eq!((name.as_str(), path.as_str()), ("read_file", card.path.as_str()));
         assert_eq!(payload, Some(Payload::Read { real, range: lines }));
@@ -1417,7 +1687,10 @@ mod tests {
         assert_eq!((card.name.as_str(), card.path.as_str()), ("run_check", "cargo check"));
         assert_eq!(card.changed_build_files, ["Cargo.toml"]);
         assert_eq!((name.as_str(), path.as_str()), ("run_check", "cargo check"));
-        let Some(Payload::Check { root, argv: armed_argv, .. }) = payload else {
+        let Some(Payload::Check {
+            root, argv: armed_argv, ..
+        }) = payload
+        else {
             panic!("a check is armed with its command")
         };
         assert_eq!((root, armed_argv), (ws.root_display(), argv));
@@ -1429,12 +1702,21 @@ mod tests {
         let ws = s.ws();
         let args = json!({ "text": "needle", "pattern": "src/**/*.rs" });
         let (card, (name, path, payload)) = asking(judge_call(call("search", args), Some(&ws), None, true));
-        assert_eq!((card.name.as_str(), card.path.as_str()), ("search", "\"needle\" in src/**/*.rs"));
+        assert_eq!(
+            (card.name.as_str(), card.path.as_str()),
+            ("search", "\"needle\" in src/**/*.rs")
+        );
         assert_eq!((name.as_str(), path.as_str()), ("search", card.path.as_str()));
         let Some(Payload::Find { root, find, .. }) = payload else {
             panic!("a search is armed with what it looks for")
         };
         assert_eq!(root, ws.root_display());
-        assert_eq!(find, Find::Search { text: "needle".into(), pattern: Some("src/**/*.rs".into()) });
+        assert_eq!(
+            find,
+            Find::Search {
+                text: "needle".into(),
+                pattern: Some("src/**/*.rs".into())
+            }
+        );
     }
 }

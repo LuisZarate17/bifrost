@@ -96,7 +96,13 @@ impl Backend for Peek {
 
 fn rows_of(buf: &Buffer) -> Vec<String> {
     (0..buf.area.height)
-        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
+        .map(|y| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_string()
+        })
         .collect()
 }
 
@@ -107,7 +113,11 @@ struct Scripted {
 
 impl Keys for Scripted {
     fn next(&mut self, wait: Duration, at: At) -> std::io::Result<Option<Term>> {
-        assert!(self.started.elapsed() < Duration::from_secs(20), "the scripted session hung; left: {:?}", self.items);
+        assert!(
+            self.started.elapsed() < Duration::from_secs(20),
+            "the scripted session hung; left: {:?}",
+            self.items
+        );
         match self.items.front() {
             Some((need, _)) if *need == at => Ok(self.items.pop_front().map(|(_, e)| e)),
             _ => {
@@ -131,7 +141,8 @@ impl Keystrokes {
     }
 
     fn typed(mut self, at: At, text: &str) -> Self {
-        self.0.extend(text.chars().map(|c| (at, key(KeyCode::Char(c), KeyModifiers::NONE))));
+        self.0
+            .extend(text.chars().map(|c| (at, key(KeyCode::Char(c), KeyModifiers::NONE))));
         self
     }
 
@@ -161,10 +172,14 @@ fn session(
             "m".into(),
             Box::new(move |_: &[Message], _: Option<Calibration>, _: bool| {
                 std::thread::sleep(delay);
-                asks.borrow_mut().pop_front().expect("the loop asked the model more often than the script allows")
+                asks.borrow_mut()
+                    .pop_front()
+                    .expect("the loop asked the model more often than the script allows")
             }),
             Box::new(move |_: &str, _: &str, _: &str| {
-                runs.borrow_mut().pop_front().expect("the loop ran a call the script did not expect")
+                runs.borrow_mut()
+                    .pop_front()
+                    .expect("the loop ran a call the script did not expect")
             }),
             Box::new(|_: &store::Conversation| Ok(())),
         )
@@ -176,20 +191,39 @@ fn session(
 fn play(keys: Keystrokes, make: impl FnOnce() -> Session + Send + 'static) -> Vec<String> {
     let screen = Peek::new(60, 24);
     let (_keep, notices) = mpsc::channel();
-    let mut script = Scripted { items: keys.0.into(), started: Instant::now() };
-    run(screen.clone(), &mut script, Theme::new(false), Some(header()), notices, Worker::spawn(make)).unwrap();
+    let mut script = Scripted {
+        items: keys.0.into(),
+        started: Instant::now(),
+    };
+    run(
+        screen.clone(),
+        &mut script,
+        Theme::new(false),
+        Some(header()),
+        notices,
+        Worker::spawn(make),
+    )
+    .unwrap();
     assert!(script.items.is_empty(), "keys left unused: {:?}", script.items);
     screen.with(|b| rows_of(b.buffer()))
 }
 
 fn has_run(seen: &[String], want: &[&str]) -> bool {
-    seen.windows(want.len()).any(|w| w.iter().map(String::as_str).eq(want.iter().copied()))
+    seen.windows(want.len())
+        .any(|w| w.iter().map(String::as_str).eq(want.iter().copied()))
 }
 
 #[test]
 fn a_prompt_is_sent_an_approval_answered_y_and_the_answer_lands_in_the_transcript() {
-    let keys = Keystrokes::new().typed(At::Idle, "fix it").enter(At::Idle).typed(At::Approval, "y").quit();
-    let seen = play(keys, session(vec![edit(), answer("Done.")], vec![edited()], Duration::ZERO));
+    let keys = Keystrokes::new()
+        .typed(At::Idle, "fix it")
+        .enter(At::Idle)
+        .typed(At::Approval, "y")
+        .quit();
+    let seen = play(
+        keys,
+        session(vec![edit(), answer("Done.")], vec![edited()], Duration::ZERO),
+    );
     let want = [
         "› fix it",
         "? edit a.rs +1 −1",
@@ -201,14 +235,27 @@ fn a_prompt_is_sent_an_approval_answered_y_and_the_answer_lands_in_the_transcrip
         "Done.",
     ];
     assert!(has_run(&seen, &want), "{seen:#?}");
-    assert_eq!(seen.iter().find(|l| l.starts_with("hugin")).map(String::as_str), Some("hugin · demo · main, 2 changed · m"));
+    assert_eq!(
+        seen.iter().find(|l| l.starts_with("hugin")).map(String::as_str),
+        Some("hugin · demo · main, 2 changed · m")
+    );
 }
 
 #[test]
 fn n_declines_and_the_turn_goes_on() {
-    let keys = Keystrokes::new().typed(At::Idle, "fix it").enter(At::Idle).typed(At::Approval, "n").quit();
-    let seen = play(keys, session(vec![edit(), answer("Understood.")], vec![], Duration::ZERO));
-    assert!(has_run(&seen, &["● edit a.rs +1 −1 → declined", "Understood."]), "{seen:#?}");
+    let keys = Keystrokes::new()
+        .typed(At::Idle, "fix it")
+        .enter(At::Idle)
+        .typed(At::Approval, "n")
+        .quit();
+    let seen = play(
+        keys,
+        session(vec![edit(), answer("Understood.")], vec![], Duration::ZERO),
+    );
+    assert!(
+        has_run(&seen, &["● edit a.rs +1 −1 → declined", "Understood."]),
+        "{seen:#?}"
+    );
 }
 
 /// A key typed while the model thinks — or in the moment an approval arrives, before
@@ -222,8 +269,14 @@ fn a_y_typed_ahead_never_answers_an_approval() {
         .typed(At::Turn, "y")
         .typed(At::Approval, "n")
         .quit();
-    let seen = play(keys, session(vec![edit(), answer("Understood.")], vec![], Duration::from_millis(30)));
-    assert!(has_run(&seen, &["● edit a.rs +1 −1 → declined", "Understood."]), "{seen:#?}");
+    let seen = play(
+        keys,
+        session(vec![edit(), answer("Understood.")], vec![], Duration::from_millis(30)),
+    );
+    assert!(
+        has_run(&seen, &["● edit a.rs +1 −1 → declined", "Understood."]),
+        "{seen:#?}"
+    );
 }
 
 #[test]
@@ -246,7 +299,10 @@ fn esc_at_an_approval_declines_it_and_stops() {
         .press(At::Approval, KeyCode::Esc, KeyModifiers::NONE)
         .quit();
     let seen = play(keys, session(vec![edit()], vec![], Duration::ZERO));
-    assert!(has_run(&seen, &["● edit a.rs +1 −1 → declined", "· stopped"]), "{seen:#?}");
+    assert!(
+        has_run(&seen, &["● edit a.rs +1 −1 → declined", "· stopped"]),
+        "{seen:#?}"
+    );
 }
 
 #[test]
@@ -258,7 +314,10 @@ fn what_is_typed_during_a_turn_waits_and_enter_does_not_send_it() {
         .enter(At::Turn)
         .enter(At::Idle)
         .quit();
-    let seen = play(keys, session(vec![answer("one"), answer("two")], vec![], Duration::from_millis(200)));
+    let seen = play(
+        keys,
+        session(vec![answer("one"), answer("two")], vec![], Duration::from_millis(200)),
+    );
     assert!(has_run(&seen, &["› a", "one", "", "› nx", "two"]), "{seen:#?}");
 }
 
@@ -278,8 +337,18 @@ fn a_backslash_makes_a_new_line_and_slash_exit_leaves() {
 #[test]
 fn a_failed_turn_is_shown_as_an_error() {
     let keys = Keystrokes::new().typed(At::Idle, "go").enter(At::Idle).quit();
-    let seen = play(keys, session(vec![Err("POST /api/chat: connection refused".into())], vec![], Duration::ZERO));
-    assert!(seen.iter().any(|l| l == "! POST /api/chat: connection refused"), "{seen:#?}");
+    let seen = play(
+        keys,
+        session(
+            vec![Err("POST /api/chat: connection refused".into())],
+            vec![],
+            Duration::ZERO,
+        ),
+    );
+    assert!(
+        seen.iter().any(|l| l == "! POST /api/chat: connection refused"),
+        "{seen:#?}"
+    );
 }
 // ── the screen ──
 
@@ -306,7 +375,11 @@ struct Watch {
 
 impl Keys for Watch {
     fn next(&mut self, wait: Duration, at: At) -> std::io::Result<Option<Term>> {
-        assert!(self.started.elapsed() < Duration::from_secs(20), "the watched session hung; last: {:#?}", self.seen.last());
+        assert!(
+            self.started.elapsed() < Duration::from_secs(20),
+            "the watched session hung; last: {:#?}",
+            self.seen.last()
+        );
         if wait.is_zero() {
             return Ok(None);
         }
@@ -338,7 +411,8 @@ impl Keys for Watch {
 }
 
 fn typed(text: &str) -> impl Iterator<Item = Step> + '_ {
-    text.chars().map(|c| Step::Key(key(KeyCode::Char(c), KeyModifiers::NONE)))
+    text.chars()
+        .map(|c| Step::Key(key(KeyCode::Char(c), KeyModifiers::NONE)))
 }
 
 fn press(code: KeyCode, mods: KeyModifiers) -> Step {
@@ -346,7 +420,12 @@ fn press(code: KeyCode, mods: KeyModifiers) -> Step {
 }
 
 fn wheel(kind: MouseEventKind) -> Step {
-    Step::Key(Term::Mouse(MouseEvent { kind, column: 0, row: 0, modifiers: KeyModifiers::NONE }))
+    Step::Key(Term::Mouse(MouseEvent {
+        kind,
+        column: 0,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    }))
 }
 
 /// A screen with `text` on one of its rows, and the interface idle.
@@ -367,8 +446,22 @@ fn watched(
 ) -> Vec<Vec<String>> {
     let screen = Peek::new(width, height);
     let (_keep, notices) = mpsc::channel();
-    let mut watch = Watch { screen: screen.clone(), steps: steps.into(), until, seen: Vec::new(), started: Instant::now() };
-    run(screen, &mut watch, Theme::new(true), Some(header()), notices, Worker::spawn(make)).unwrap();
+    let mut watch = Watch {
+        screen: screen.clone(),
+        steps: steps.into(),
+        until,
+        seen: Vec::new(),
+        started: Instant::now(),
+    };
+    run(
+        screen,
+        &mut watch,
+        Theme::new(true),
+        Some(header()),
+        notices,
+        Worker::spawn(make),
+    )
+    .unwrap();
     assert!(watch.steps.is_empty(), "steps left unused");
     watch.seen
 }
@@ -408,7 +501,12 @@ fn the_start_screen_is_at_the_top_and_the_box_on_the_bottom_row() {
 #[test]
 fn a_prompt_and_its_answer_follow_the_start_screen_without_a_second_blank_row() {
     let steps: Vec<Step> = typed("hi").chain([enter()]).collect();
-    let seen = watched((60, 24), steps, idle_with("Done."), session(vec![answer("Done.")], vec![], Duration::ZERO));
+    let seen = watched(
+        (60, 24),
+        steps,
+        idle_with("Done."),
+        session(vec![answer("Done.")], vec![], Duration::ZERO),
+    );
     let screen = seen.last().unwrap();
     assert!(screen[0].contains("Hugin"));
     assert_eq!(screen[4], "");
@@ -420,7 +518,12 @@ fn a_prompt_and_its_answer_follow_the_start_screen_without_a_second_blank_row() 
 #[test]
 fn a_prompt_that_has_scrolled_off_is_pinned_on_the_top_row_while_the_answer_follows() {
     let steps: Vec<Step> = typed("go").chain([enter()]).collect();
-    let seen = watched((60, 24), steps, idle_with("l39"), session(vec![answer(&long(40))], vec![], Duration::ZERO));
+    let seen = watched(
+        (60, 24),
+        steps,
+        idle_with("l39"),
+        session(vec![answer(&long(40))], vec![], Duration::ZERO),
+    );
     let screen = seen.last().unwrap();
     // The end is in view, the prompt above it is on the top row, and the box is under them.
     assert_eq!(screen[0], "› go", "{screen:#?}");
@@ -433,10 +536,18 @@ fn a_prompt_that_has_scrolled_off_is_pinned_on_the_top_row_while_the_answer_foll
 fn the_wheel_and_the_page_keys_scroll_and_ctrl_end_returns_to_the_end() {
     let go: Vec<Step> = typed("go").chain([enter()]).collect();
     let mut steps = go;
-    steps.push(Step::When(idle_with("l39"), Box::new(Step::Key(key(KeyCode::Char('x'), KeyModifiers::NONE)))));
+    steps.push(Step::When(
+        idle_with("l39"),
+        Box::new(Step::Key(key(KeyCode::Char('x'), KeyModifiers::NONE))),
+    ));
     // A typed x is not a key for the window: it goes to the input.
     steps.push(wheel(MouseEventKind::ScrollUp));
-    let seen = watched((60, 24), steps, has("↓ ctrl+end"), session(vec![answer(&long(40))], vec![], Duration::ZERO));
+    let seen = watched(
+        (60, 24),
+        steps,
+        has("↓ ctrl+end"),
+        session(vec![answer(&long(40))], vec![], Duration::ZERO),
+    );
     let screen = seen.last().unwrap();
     // Three rows up: the window starts three rows earlier, the prompt is still the pinned one.
     assert_eq!(screen[0], "› go", "{screen:#?}");
@@ -449,14 +560,22 @@ fn the_wheel_and_the_page_keys_scroll_and_ctrl_end_returns_to_the_end() {
 #[test]
 fn page_up_moves_a_page_and_end_and_home_stay_with_the_input() {
     let mut steps: Vec<Step> = typed("go").chain([enter()]).collect();
-    steps.push(Step::When(idle_with("l39"), Box::new(Step::Key(key(KeyCode::PageUp, KeyModifiers::NONE)))));
+    steps.push(Step::When(
+        idle_with("l39"),
+        Box::new(Step::Key(key(KeyCode::PageUp, KeyModifiers::NONE))),
+    ));
     steps.extend(typed("ab"));
     // End and Home move the input's cursor, not the window.
     steps.push(press(KeyCode::Home, KeyModifiers::NONE));
     steps.push(press(KeyCode::Char('z'), KeyModifiers::NONE));
     steps.push(press(KeyCode::End, KeyModifiers::NONE));
     steps.push(press(KeyCode::Char('y'), KeyModifiers::NONE));
-    let seen = watched((60, 24), steps, has("› zaby"), session(vec![answer(&long(40))], vec![], Duration::ZERO));
+    let seen = watched(
+        (60, 24),
+        steps,
+        has("› zaby"),
+        session(vec![answer(&long(40))], vec![], Duration::ZERO),
+    );
     let screen = seen.last().unwrap();
     // A page is the window less one row: 19 up.
     assert_eq!(screen[0], "› go", "{screen:#?}");
@@ -468,26 +587,59 @@ fn page_up_moves_a_page_and_end_and_home_stay_with_the_input() {
 #[test]
 fn ctrl_end_and_page_down_come_back_to_the_end() {
     let mut steps: Vec<Step> = typed("go").chain([enter()]).collect();
-    steps.push(Step::When(idle_with("l39"), Box::new(Step::Key(key(KeyCode::PageUp, KeyModifiers::NONE)))));
-    steps.push(Step::When(has("↓ ctrl+end"), Box::new(Step::Key(key(KeyCode::PageDown, KeyModifiers::NONE)))));
-    steps.push(Step::When(Box::new(|s| s.iter().all(|l| !l.contains("↓"))), Box::new(Step::Key(key(KeyCode::Home, KeyModifiers::CONTROL)))));
-    steps.push(Step::When(has("↓ ctrl+end"), Box::new(Step::Key(key(KeyCode::End, KeyModifiers::CONTROL)))));
-    let seen = watched((60, 24), steps, Box::new(|s| s.len() == 24 && s[19] == "l39" && s[0] == "› go"), session(vec![answer(&long(40))], vec![], Duration::ZERO));
+    steps.push(Step::When(
+        idle_with("l39"),
+        Box::new(Step::Key(key(KeyCode::PageUp, KeyModifiers::NONE))),
+    ));
+    steps.push(Step::When(
+        has("↓ ctrl+end"),
+        Box::new(Step::Key(key(KeyCode::PageDown, KeyModifiers::NONE))),
+    ));
+    steps.push(Step::When(
+        Box::new(|s| s.iter().all(|l| !l.contains("↓"))),
+        Box::new(Step::Key(key(KeyCode::Home, KeyModifiers::CONTROL))),
+    ));
+    steps.push(Step::When(
+        has("↓ ctrl+end"),
+        Box::new(Step::Key(key(KeyCode::End, KeyModifiers::CONTROL))),
+    ));
+    let seen = watched(
+        (60, 24),
+        steps,
+        Box::new(|s| s.len() == 24 && s[19] == "l39" && s[0] == "› go"),
+        session(vec![answer(&long(40))], vec![], Duration::ZERO),
+    );
     let screen = seen.last().unwrap();
     assert_eq!(screen[19], "l39", "{screen:#?}");
     assert_eq!(screen[23], hint());
     // Ctrl+Home had shown the start of everything, with no row to pin.
-    assert!(seen.iter().any(|s| s[0].contains("Hugin") && s[23].trim_start().starts_with("↓ ctrl+end")));
+    assert!(
+        seen.iter()
+            .any(|s| s[0].contains("Hugin") && s[23].trim_start().starts_with("↓ ctrl+end"))
+    );
 }
 
 #[test]
 fn scrolled_up_new_rows_do_not_move_the_window_and_the_status_line_says_so() {
     let mut steps: Vec<Step> = typed("go").chain([enter()]).collect();
-    steps.push(Step::When(idle_with("l39"), Box::new(Step::Key(key(KeyCode::Char('x'), KeyModifiers::NONE)))));
-    steps.push(Step::When(idle_with("› x"), Box::new(Step::Key(key(KeyCode::Enter, KeyModifiers::NONE)))));
+    steps.push(Step::When(
+        idle_with("l39"),
+        Box::new(Step::Key(key(KeyCode::Char('x'), KeyModifiers::NONE))),
+    ));
+    steps.push(Step::When(
+        idle_with("› x"),
+        Box::new(Step::Key(key(KeyCode::Enter, KeyModifiers::NONE))),
+    ));
     // The second turn is at its request when the window is scrolled up.
-    steps.push(Step::When(has("thinking"), Box::new(Step::Key(key(KeyCode::PageUp, KeyModifiers::NONE)))));
-    let model = session(vec![answer(&long(40)), answer("late answer")], vec![], Duration::from_millis(150));
+    steps.push(Step::When(
+        has("thinking"),
+        Box::new(Step::Key(key(KeyCode::PageUp, KeyModifiers::NONE))),
+    ));
+    let model = session(
+        vec![answer(&long(40)), answer("late answer")],
+        vec![],
+        Duration::from_millis(150),
+    );
     let seen = watched((60, 24), steps, has("new below"), model);
     let screen = seen.last().unwrap();
     assert!(!screen.iter().any(|l| l.contains("late answer")), "{screen:#?}");
@@ -497,20 +649,36 @@ fn scrolled_up_new_rows_do_not_move_the_window_and_the_status_line_says_so() {
 #[test]
 fn the_box_grows_upward_with_the_input_and_the_transcript_gives_up_rows() {
     let mut steps: Vec<Step> = typed("go").chain([enter()]).collect();
-    steps.push(Step::When(idle_with("l39"), Box::new(Step::Key(key(KeyCode::Char('o'), KeyModifiers::NONE)))));
+    steps.push(Step::When(
+        idle_with("l39"),
+        Box::new(Step::Key(key(KeyCode::Char('o'), KeyModifiers::NONE))),
+    ));
     steps.push(press(KeyCode::Enter, KeyModifiers::SHIFT));
     steps.extend(typed("two"));
-    let seen = watched((60, 24), steps, has("  two"), session(vec![answer(&long(40))], vec![], Duration::ZERO));
+    let seen = watched(
+        (60, 24),
+        steps,
+        has("  two"),
+        session(vec![answer(&long(40))], vec![], Duration::ZERO),
+    );
     let screen = seen.last().unwrap();
     assert_eq!(screen[0], "› go");
     assert_eq!(screen[18], "l39", "{screen:#?}");
-    assert_eq!(screen[19..], [bar(60), "› o".to_string(), "  two".to_string(), bar(60), hint()]);
+    assert_eq!(
+        screen[19..],
+        [bar(60), "› o".to_string(), "  two".to_string(), bar(60), hint()]
+    );
 }
 
 #[test]
 fn a_taller_screen_lays_the_start_out_again_with_the_box_on_the_new_bottom_row() {
     let steps = vec![Step::Resize(60, 30)];
-    let seen = watched((60, 24), steps, Box::new(|s| s.len() == 30 && s[26] == bar(60)), quiet());
+    let seen = watched(
+        (60, 24),
+        steps,
+        Box::new(|s| s.len() == 30 && s[26] == bar(60)),
+        quiet(),
+    );
     let screen = seen.last().unwrap();
     assert!(screen[0].contains("Hugin"), "{screen:#?}");
     assert!(screen[5..26].iter().all(String::is_empty), "{screen:#?}");
@@ -523,12 +691,25 @@ fn a_resize_lays_the_start_screen_and_an_answer_out_again_at_the_new_width() {
     let said = "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj";
     let mut steps: Vec<Step> = typed("hi").chain([enter()]).collect();
     steps.push(Step::When(idle_with("jjjj"), Box::new(Step::Resize(30, 24))));
-    let until = Box::new(|s: &[String]| s.len() == 24 && s[20] == bar(30) && s.iter().any(|l| l == "› hi") && s.iter().any(|l| l == "gggg hhhh iiii jjjj"));
-    let seen = watched((60, 24), steps, until, session(vec![answer(said)], vec![], Duration::ZERO));
+    let until = Box::new(|s: &[String]| {
+        s.len() == 24
+            && s[20] == bar(30)
+            && s.iter().any(|l| l == "› hi")
+            && s.iter().any(|l| l == "gggg hhhh iiii jjjj")
+    });
+    let seen = watched(
+        (60, 24),
+        steps,
+        until,
+        session(vec![answer(said)], vec![], Duration::ZERO),
+    );
     let screen = seen.last().unwrap();
     // Under 48 columns the art comes first and the text under it.
     assert!(screen[4].starts_with("  Hugin") && screen[8].is_empty(), "{screen:#?}");
-    assert_eq!(screen[9..12], ["› hi", "aaaa bbbb cccc dddd eeee ffff", "gggg hhhh iiii jjjj"]);
+    assert_eq!(
+        screen[9..12],
+        ["› hi", "aaaa bbbb cccc dddd eeee ffff", "gggg hhhh iiii jjjj"]
+    );
     assert!(screen[12..20].iter().all(String::is_empty), "{screen:#?}");
     assert_eq!(screen[20..23], [bar(30), "›".to_string(), bar(30)]);
 }

@@ -119,10 +119,7 @@ fn unreachable(e: reqwest::Error) -> String {
 /// What Ollama believes it has loaded. Its own claim, not the card's — see
 /// `crate::vram` for the second opinion.
 pub fn ps() -> Result<Vec<LoadedModel>, String> {
-    let response = client(SHORT_TIMEOUT)?
-        .get(url("/api/ps"))
-        .send()
-        .map_err(unreachable)?;
+    let response = client(SHORT_TIMEOUT)?.get(url("/api/ps")).send().map_err(unreachable)?;
 
     if !response.status().is_success() {
         return Err(format!("Ollama returned HTTP {} from /api/ps", response.status()));
@@ -308,8 +305,7 @@ pub fn generate_measured(
         if line.trim().is_empty() {
             continue;
         }
-        let chunk: StreamChunk =
-            serde_json::from_str(&line).map_err(|e| format!("bad JSON from Ollama: {e}"))?;
+        let chunk: StreamChunk = serde_json::from_str(&line).map_err(|e| format!("bad JSON from Ollama: {e}"))?;
 
         if !chunk.response.is_empty() && ttft.is_none() {
             ttft = Some(started.elapsed());
@@ -369,13 +365,23 @@ impl Timed {
 }
 
 fn per_second(count: u32, nanos: u64) -> f64 {
-    if nanos == 0 { 0.0 } else { count as f64 / (nanos as f64 / 1e9) }
+    if nanos == 0 {
+        0.0
+    } else {
+        count as f64 / (nanos as f64 / 1e9)
+    }
 }
 
 /// One non-streaming generate, at temperature 0 and `num_predict` tokens at most, answered with
 /// Ollama's own durations. For a speed measurement: the time to first token is not needed, and
 /// the prefill and decode clocks the final object carries are the ones to trust.
-pub fn generate_timed(tag: &str, prompt: &str, num_ctx: u32, num_predict: u32, timeout: Duration) -> Result<Timed, String> {
+pub fn generate_timed(
+    tag: &str,
+    prompt: &str,
+    num_ctx: u32,
+    num_predict: u32,
+    timeout: Duration,
+) -> Result<Timed, String> {
     let body = serde_json::json!({
         "model": tag,
         "prompt": prompt,
@@ -393,7 +399,9 @@ pub fn generate_timed(tag: &str, prompt: &str, num_ctx: u32, num_predict: u32, t
         return Err(format!("Ollama returned HTTP {}", response.status()));
     }
 
-    response.json::<Timed>().map_err(|e| format!("could not parse the generate reply: {e}"))
+    response
+        .json::<Timed>()
+        .map_err(|e| format!("could not parse the generate reply: {e}"))
 }
 
 // The prompt the app ships with moved to `config::DEFAULT_PROMPT` at Before-G0
@@ -487,7 +495,16 @@ pub fn best_at(tag: &str) -> Vec<&'static str> {
     let any = |needles: &[&str]| needles.iter().any(|n| t.contains(n));
 
     let mut out = Vec::new();
-    if any(&["coder", "coding", "devstral", "codestral", "codellama", "starcoder", "qwen3.6", "ornith"]) {
+    if any(&[
+        "coder",
+        "coding",
+        "devstral",
+        "codestral",
+        "codellama",
+        "starcoder",
+        "qwen3.6",
+        "ornith",
+    ]) {
         out.push("Coding");
     }
     if any(&["-vl", "llava", "vision", "minicpm-v", "moondream"]) {
@@ -498,7 +515,11 @@ pub fn best_at(tag: &str) -> Vec<&'static str> {
     }
     // By how the family starts, so `dolphin3` is not taken for `phi`.
     let family = t.split(':').next().unwrap_or("");
-    if out.is_empty() && ["llama", "mistral", "gemma", "phi", "qwen3", "qwen2.5"].iter().any(|f| family.starts_with(f)) {
+    if out.is_empty()
+        && ["llama", "mistral", "gemma", "phi", "qwen3", "qwen2.5"]
+            .iter()
+            .any(|f| family.starts_with(f))
+    {
         out.push("General chat");
     }
     out
@@ -589,9 +610,10 @@ pub fn show_cached(tag: &str) -> Result<ModelDetail, String> {
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
     if let Ok(map) = cache.lock()
-        && let Some(hit) = map.get(tag) {
-            return Ok(hit.clone());
-        }
+        && let Some(hit) = map.get(tag)
+    {
+        return Ok(hit.clone());
+    }
 
     let detail = show(tag)?;
     if let Ok(mut map) = cache.lock() {
@@ -710,7 +732,9 @@ fn spawn_detached() -> Result<(), String> {
             Err(e) => last = format!("{exe}: {e}"),
         }
     }
-    Err(format!("could not start Ollama ({last}) — install it, or run `ollama serve` yourself"))
+    Err(format!(
+        "could not start Ollama ({last}) — install it, or run `ollama serve` yourself"
+    ))
 }
 
 #[cfg(not(windows))]
@@ -754,7 +778,10 @@ mod tests {
         let m = &ps.models[0];
         assert!(m.is("qwen3-coder:30b"));
         assert_eq!(m.size, Some(21_474_836_480));
-        assert_eq!(m.digest.as_deref(), Some("06c1097efce0431c2045fe7b2e5108366e43bee1b4603a7aded8f21689e90bca"));
+        assert_eq!(
+            m.digest.as_deref(),
+            Some("06c1097efce0431c2045fe7b2e5108366e43bee1b4603a7aded8f21689e90bca")
+        );
         assert_eq!(m.size_vram, Some(17_179_869_184));
         assert!(m.pinned());
         assert_eq!(m.cpu_share(), Some(0.2));
@@ -762,7 +789,9 @@ mod tests {
 
     #[test]
     fn ps_without_size_or_digest_still_parses() {
-        let ps: PsResponse = serde_json::from_str(r#"{"models":[{"name":"a:b","size_vram":5,"expires_at":"2026-01-01T00:00:00Z"}]}"#).unwrap();
+        let ps: PsResponse =
+            serde_json::from_str(r#"{"models":[{"name":"a:b","size_vram":5,"expires_at":"2026-01-01T00:00:00Z"}]}"#)
+                .unwrap();
         let m = &ps.models[0];
         assert_eq!((m.size, m.digest.as_deref(), m.size_vram), (None, None, Some(5)));
         assert_eq!(m.cpu_share(), None);
@@ -831,7 +860,10 @@ mod tests {
             parser_from_modelfile("FROM qwen3-coder:30b\nRENDERER qwen3-coder\nPARSER qwen3-coder\n"),
             Some("qwen3-coder".to_string())
         );
-        assert_eq!(parser_from_modelfile("PARSER qwen3-vl-instruct"), Some("qwen3-vl-instruct".to_string()));
+        assert_eq!(
+            parser_from_modelfile("PARSER qwen3-vl-instruct"),
+            Some("qwen3-vl-instruct".to_string())
+        );
         assert_eq!(parser_from_modelfile("FROM llama3.1:8b\n"), None);
         assert_eq!(parser_from_modelfile(""), None);
     }

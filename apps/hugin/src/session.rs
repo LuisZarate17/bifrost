@@ -48,12 +48,7 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(
-        model: String,
-        ask: Box<turn::Ask<'static>>,
-        run: Box<turn::Run<'static>>,
-        save: Box<Saver>,
-    ) -> Self {
+    pub fn new(model: String, ask: Box<turn::Ask<'static>>, run: Box<turn::Run<'static>>, save: Box<Saver>) -> Self {
         Self {
             model,
             convo: Vec::new(),
@@ -196,8 +191,17 @@ fn stored(m: &Message, model: &str) -> StoredMessage {
         role: m.role.clone(),
         content: m.content.clone(),
         images: Vec::new(),
-        tool_calls: m.tool_calls.iter().flatten().filter_map(|c| serde_json::to_value(c).ok()).collect(),
-        model: if m.role == "assistant" { model.to_string() } else { String::new() },
+        tool_calls: m
+            .tool_calls
+            .iter()
+            .flatten()
+            .filter_map(|c| serde_json::to_value(c).ok())
+            .collect(),
+        model: if m.role == "assistant" {
+            model.to_string()
+        } else {
+            String::new()
+        },
         created_at: store::stamp(),
     }
 }

@@ -29,8 +29,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -46,8 +46,7 @@ pub const DEFAULT_MODEL: &str = "qwen3-vl:8b-instruct-q4_K_M";
 /// in Vidar's `App.tsx` — four places to keep in step, which nothing enforced.
 /// `evals/prompts/current.txt` is byte-identical and stays, because that one is
 /// measured input for the bench rather than a copy of this.
-pub const DEFAULT_PROMPT: &str =
-    "What am I looking at? If there's an error or something broken, explain it \
+pub const DEFAULT_PROMPT: &str = "What am I looking at? If there's an error or something broken, explain it \
      and the fix. Otherwise explain what matters here.";
 
 /// Vidar's value, and now everyone's.
@@ -259,7 +258,10 @@ pub struct Config {
     /// **Read leniently**, like `checks`: an entry that is not an object is dropped, and a
     /// `think` that is not `off`, `low`, `medium` or `high` is unset — never a reset of the
     /// whole file.
-    #[serde(deserialize_with = "lenient_model_settings", skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        deserialize_with = "lenient_model_settings",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub model_settings: BTreeMap<String, ModelSettings>,
     /// Your own "best at" labels for a model, keyed by its tag, shown in Mimir's model picker
     /// after the built-in ones. Look a model up with [`Config::tags_for`], which ignores case
@@ -385,7 +387,11 @@ where
     Ok(map
         .iter()
         .filter_map(|(tag, entry)| {
-            let think = entry.as_object()?.get("think").and_then(|v| v.as_str()).and_then(Think::parse);
+            let think = entry
+                .as_object()?
+                .get("think")
+                .and_then(|v| v.as_str())
+                .and_then(Think::parse);
             Some((tag.clone(), ModelSettings { think }))
         })
         .collect())
@@ -459,14 +465,22 @@ impl Config {
     /// What the config says about this model, if it has an entry. Ollama's tags are
     /// lower case, but a tag typed by hand may not be.
     pub fn settings_for(&self, model: &str) -> Option<&ModelSettings> {
-        self.model_settings.iter().find(|(k, _)| k.eq_ignore_ascii_case(model)).map(|(_, v)| v)
+        self.model_settings
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(model))
+            .map(|(_, v)| v)
     }
 
     /// The labels the config gives this model, if any: the entries whose tag is this model,
     /// ignoring case and a trailing `:latest`, in the config's order, without repeats.
     pub fn tags_for(&self, model: &str) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        for label in self.model_tags.iter().filter(|(k, _)| same_model(k, model)).flat_map(|(_, v)| v) {
+        for label in self
+            .model_tags
+            .iter()
+            .filter(|(k, _)| same_model(k, model))
+            .flat_map(|(_, v)| v)
+        {
             if !out.contains(label) {
                 out.push(label.clone());
             }
@@ -653,11 +667,14 @@ pub fn save_to(p: &Path, config: &Config) -> Result<(), String> {
     if let Some(dir) = p.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
     }
-    let json = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("serializing config: {e}"))?;
+    let json = serde_json::to_string_pretty(config).map_err(|e| format!("serializing config: {e}"))?;
     let mut tmp = p.as_os_str().to_owned();
     static SAVES: AtomicU64 = AtomicU64::new(0);
-    tmp.push(format!(".{}.{}.tmp", std::process::id(), SAVES.fetch_add(1, Ordering::Relaxed)));
+    tmp.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        SAVES.fetch_add(1, Ordering::Relaxed)
+    ));
     let tmp = PathBuf::from(tmp);
     std::fs::write(&tmp, json).map_err(|e| format!("writing {}: {e}", tmp.display()))?;
     rename_patiently(&tmp, p).map_err(|e| {
@@ -710,7 +727,11 @@ mod tests {
         let c = read(r#"{"command_timeout_secs":30,"hugin_shell":"Bash"}"#);
         assert_eq!((c.command_timeout_secs, c.hugin_shell.as_str()), (30, "bash"));
         for bad in [r#""soon""#, "null", "-5", "1.5", "[]", "0"] {
-            assert_eq!(read(&format!(r#"{{"command_timeout_secs":{bad},"model":"m"}}"#)).command_timeout_secs, 120, "{bad}");
+            assert_eq!(
+                read(&format!(r#"{{"command_timeout_secs":{bad},"model":"m"}}"#)).command_timeout_secs,
+                120,
+                "{bad}"
+            );
         }
         for bad in [r#""zsh""#, "null", "3", "[]"] {
             let c = read(&format!(r#"{{"hugin_shell":{bad},"model":"m"}}"#));
@@ -721,20 +742,24 @@ mod tests {
     #[test]
     fn the_last_hugin_folder_reads_leniently_and_is_skipped_when_none() {
         let read = |json: &str| serde_json::from_str::<Config>(json).unwrap();
-        assert_eq!(read(r#"{"hugin_last_folder":"C:\\w"}"#).hugin_last_folder.as_deref(), Some(r"C:\w"));
+        assert_eq!(
+            read(r#"{"hugin_last_folder":"C:\\w"}"#).hugin_last_folder.as_deref(),
+            Some(r"C:\w")
+        );
         for bad in ["null", "3", "[]", "{}", "true"] {
             let c = read(&format!(r#"{{"hugin_last_folder":{bad},"model":"m"}}"#));
             assert_eq!((c.hugin_last_folder, c.model.as_str()), (None, "m"), "{bad}");
         }
-        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("hugin_last_folder"));
+        assert!(
+            !serde_json::to_string(&Config::default())
+                .unwrap()
+                .contains("hugin_last_folder")
+        );
     }
 
     #[test]
     fn empty_object_is_entirely_defaults() {
-        assert_eq!(
-            serde_json::from_str::<Config>("{}").unwrap(),
-            Config::default()
-        );
+        assert_eq!(serde_json::from_str::<Config>("{}").unwrap(), Config::default());
     }
 
     #[test]
@@ -755,10 +780,21 @@ mod tests {
         assert!(read(r#"{"claude_checks":true}"#).claude_checks);
         for bad in ["null", "3", "\"true\"", "[]", "{}"] {
             let c = read(&format!(r#"{{"claude_checks":{bad},"claude_command":7,"model":"m"}}"#));
-            assert_eq!((c.claude_checks, c.claude_command, c.model.as_str()), (false, None, "m"), "{bad}");
+            assert_eq!(
+                (c.claude_checks, c.claude_command, c.model.as_str()),
+                (false, None, "m"),
+                "{bad}"
+            );
         }
-        assert_eq!(read(r#"{"claude_command":"C:\\c.exe"}"#).claude_command.as_deref(), Some(r"C:\c.exe"));
-        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("claude_command"));
+        assert_eq!(
+            read(r#"{"claude_command":"C:\\c.exe"}"#).claude_command.as_deref(),
+            Some(r"C:\c.exe")
+        );
+        assert!(
+            !serde_json::to_string(&Config::default())
+                .unwrap()
+                .contains("claude_command")
+        );
     }
 
     #[test]
@@ -780,7 +816,12 @@ mod tests {
             bifrost_login_chosen: true,
             claude_checks: true,
             claude_command: Some(r"C:\tools\claude.exe".into()),
-            model_settings: BTreeMap::from([("gpt-oss:20b".into(), ModelSettings { think: Some(Think::High) })]),
+            model_settings: BTreeMap::from([(
+                "gpt-oss:20b".into(),
+                ModelSettings {
+                    think: Some(Think::High),
+                },
+            )]),
             model_tags: BTreeMap::from([("qwen3.6:35b-a3b".into(), vec!["Favourite".into()])]),
             extra: serde_json::Map::new(),
             unsaved: false,
@@ -804,7 +845,10 @@ mod tests {
     fn a_check_is_found_whatever_the_case_of_its_folder() {
         let mut c = Config::default();
         c.set_check(r"C:\Work\Demo", Some(vec!["cargo".into(), "check".into()]));
-        assert_eq!(c.check_for(r"c:\work\demo").map(|v| v.join(" ")), Some("cargo check".into()));
+        assert_eq!(
+            c.check_for(r"c:\work\demo").map(|v| v.join(" ")),
+            Some("cargo check".into())
+        );
         assert_eq!(c.check_for(r"C:\work\other"), None);
     }
 
@@ -911,8 +955,7 @@ mod tests {
         assert_eq!(c.instructions.len(), 2);
         assert!(c.instructions_for(r"C:\a") && c.instructions_for(r"C:\c"));
         for bad in [r#""C:\\a""#, "true", "{}", "null", "7"] {
-            let c: Config =
-                serde_json::from_str(&format!(r#"{{"model":"x","instructions":{bad}}}"#)).unwrap();
+            let c: Config = serde_json::from_str(&format!(r#"{{"model":"x","instructions":{bad}}}"#)).unwrap();
             assert_eq!((c.model.as_str(), c.instructions.len()), ("x", 0), "{bad}");
         }
     }
@@ -933,7 +976,11 @@ mod tests {
         assert_eq!(think("qwen3-coder:30b"), None);
         // Nothing set is nothing written, so a config that never used it is unchanged on disk.
         assert!(Config::default().model_settings.is_empty());
-        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("model_settings"));
+        assert!(
+            !serde_json::to_string(&Config::default())
+                .unwrap()
+                .contains("model_settings")
+        );
         let saved = serde_json::to_string(&c).unwrap();
         assert!(saved.contains(r#""gpt-oss:20b":{"think":"high"}"#), "{saved}");
     }
@@ -954,7 +1001,11 @@ mod tests {
         .unwrap();
         assert_eq!((c.model.as_str(), c.workspace.as_deref()), ("mine", Some(r"C:\w")));
         let tags: Vec<&str> = c.model_settings.keys().map(String::as_str).collect();
-        assert_eq!(tags, ["d", "e", "f", "g"], "the entries that are not objects are dropped");
+        assert_eq!(
+            tags,
+            ["d", "e", "f", "g"],
+            "the entries that are not objects are dropped"
+        );
         for unset in ["d", "e", "f"] {
             assert_eq!(c.settings_for(unset).and_then(|s| s.think), None, "{unset}");
         }
@@ -968,15 +1019,17 @@ mod tests {
 
     #[test]
     fn a_models_settings_are_found_whatever_the_case_of_its_tag() {
-        let c: Config =
-            serde_json::from_str(r#"{"model_settings":{"GPT-OSS:20b":{"think":"low"}}}"#).unwrap();
+        let c: Config = serde_json::from_str(r#"{"model_settings":{"GPT-OSS:20b":{"think":"low"}}}"#).unwrap();
         assert_eq!(c.settings_for("gpt-oss:20b").and_then(|s| s.think), Some(Think::Low));
         assert_eq!(c.settings_for("GPT-OSS:20B").and_then(|s| s.think), Some(Think::Low));
         assert!(c.settings_for("gpt-oss:120b").is_none());
         // The words themselves, in any case; a number or a stray word is none.
         assert_eq!(Think::parse(" High "), Some(Think::High));
         assert_eq!(Think::parse("OFF").map(Think::name), Some("off"));
-        assert_eq!((Think::parse("true"), Think::parse(""), Think::parse("max")), (None, None, None));
+        assert_eq!(
+            (Think::parse("true"), Think::parse(""), Think::parse("max")),
+            (None, None, None)
+        );
     }
 
     #[test]
@@ -1044,7 +1097,11 @@ mod tests {
         assert_eq!(load_from(&p), c);
         // Nothing set is nothing written, so a config that never used it is unchanged on disk.
         assert!(Config::default().model_tags.is_empty());
-        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("model_tags"));
+        assert!(
+            !serde_json::to_string(&Config::default())
+                .unwrap()
+                .contains("model_tags")
+        );
     }
 
     /// A `config.json` path in a folder of its own, **removed when the test ends** —
@@ -1078,7 +1135,10 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bifrost-config-test-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        TempConfig { path: dir.join("config.json"), dir }
+        TempConfig {
+            path: dir.join("config.json"),
+            dir,
+        }
     }
 
     /// **A file that does not parse fails towards asking, and is kept.** A typo in
@@ -1239,12 +1299,19 @@ mod tests {
         let p = temp_file("held");
         save_to(&p, &Config::default()).unwrap();
         // FILE_SHARE_READ | FILE_SHARE_WRITE, but not FILE_SHARE_DELETE.
-        let held = std::fs::OpenOptions::new().read(true).share_mode(1 | 2).open(&*p).unwrap();
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1 | 2)
+            .open(&*p)
+            .unwrap();
         let release = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(150));
             drop(held);
         });
-        let c = Config { model: "after the hold".into(), ..Config::default() };
+        let c = Config {
+            model: "after the hold".into(),
+            ..Config::default()
+        };
         let saved = save_to(&p, &c);
         release.join().unwrap();
         assert!(saved.is_ok(), "{saved:?}");
@@ -1266,7 +1333,10 @@ mod tests {
                     scope.spawn(move || {
                         (0..100)
                             .filter_map(|i| {
-                                let c = Config { model: format!("m{w}-{i}"), ..Config::default() };
+                                let c = Config {
+                                    model: format!("m{w}-{i}"),
+                                    ..Config::default()
+                                };
                                 save_to(p, &c).err()
                             })
                             .collect::<Vec<_>>()
@@ -1289,7 +1359,12 @@ mod tests {
             let errors: Vec<String> = writers.into_iter().flat_map(|w| w.join().unwrap_or_default()).collect();
             stop.store(true, Ordering::Relaxed);
             let broken = reader.join().unwrap_or(usize::MAX);
-            assert!(errors.is_empty(), "{} of 600 saves failed, e.g. {:?}", errors.len(), errors.first());
+            assert!(
+                errors.is_empty(),
+                "{} of 600 saves failed, e.g. {:?}",
+                errors.len(),
+                errors.first()
+            );
             assert_eq!(broken, 0, "a reader saw a broken file {broken} times");
         });
         assert!(!p.with_extension("json.bad").exists());

@@ -1,0 +1,2 @@
+# The code is written wide; 120 keeps rustfmt close to how it already reads.
+max_width = 120

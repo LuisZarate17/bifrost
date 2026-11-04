@@ -314,7 +314,11 @@ mod tests {
 
         assert_eq!(b.read("odin/config.json"), "{\"model\":\"m\"}");
         assert!(!b.0.join("bifrost").exists(), "nothing was half-made");
-        assert_eq!(data_dir_in(&b.0), b.0.join("odin"), "the old folder is still the live one");
+        assert_eq!(
+            data_dir_in(&b.0),
+            b.0.join("odin"),
+            "the old folder is still the live one"
+        );
 
         // Released, the next start moves it.
         assert_eq!(migrate_in(&b.0), Migration::Moved);

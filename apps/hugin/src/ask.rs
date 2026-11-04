@@ -101,7 +101,10 @@ const LOOKING: [&str; 3] = ["read_file", "list_files", "search"];
 
 /// The tools a scout is offered: the three that read, and nothing that writes or runs.
 pub fn offered() -> Vec<Tool> {
-    tools::available(true, None).into_iter().filter(|tool| LOOKING.contains(&tool.function.name.as_str())).collect()
+    tools::available(true, None)
+        .into_iter()
+        .filter(|tool| LOOKING.contains(&tool.function.name.as_str()))
+        .collect()
 }
 
 /// Who the model is, and what it does here.
@@ -122,7 +125,10 @@ const HOW: &str = "You can only look: read_file, list_files and search. You cann
 /// The system prompt: the identity, the folder, how to answer, and the project's own notes when it
 /// has them. Used as it is, in place of the app's, which tells the model it can change files.
 pub fn prompt(ws: &Workspace) -> String {
-    let prompt = format!("{IDENTITY} You answer one question about the code in the user's project folder: {}\n{HOW}", ws.root_display());
+    let prompt = format!(
+        "{IDENTITY} You answer one question about the code in the user's project folder: {}\n{HOW}",
+        ws.root_display()
+    );
     match instructions::find(ws) {
         Some(notes) => tools::with_notes(prompt, &notes),
         None => prompt,
@@ -157,7 +163,10 @@ fn real(model: &str, ctx: &Ctx) -> Wired {
     };
     // Nothing is approved, so nothing should be run; if the loop ever asks, it is an error.
     let run = |name: &str, _path: &str, _token: &str| Err(format!("hugin --ask only looks: it cannot run {name}"));
-    Wired { ask: Box::new(ask), run: Box::new(run) }
+    Wired {
+        ask: Box::new(ask),
+        run: Box::new(run),
+    }
 }
 
 // ── what the turn leaves ────────────────────────────────────────────────────
@@ -239,7 +248,11 @@ fn lines_of(card: &Card) -> Option<String> {
         .and_then(|line| line.strip_prefix("[lines "))
         .and_then(|rest| rest.split_once(" of "))
         .and_then(|(range, _)| range.split_once('–'))
-        .filter(|(from, to)| [from, to].iter().all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())))
+        .filter(|(from, to)| {
+            [from, to]
+                .iter()
+                .all(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
         .map(|(from, to)| format!("{from}-{to}"));
     Some(shown.unwrap_or_else(|| match asked.end {
         Some(end) => format!("{}-{end}", asked.start),
@@ -289,9 +302,15 @@ fn looked_at(reads: &[(String, Option<String>)]) -> Vec<LookedAt> {
             }
         }
         if parts.iter().any(|lines| lines.is_none()) {
-            out.push(LookedAt { path: file.to_string(), lines: None });
+            out.push(LookedAt {
+                path: file.to_string(),
+                lines: None,
+            });
         } else {
-            out.extend(parts.into_iter().map(|lines| LookedAt { path: file.to_string(), lines: lines.clone() }));
+            out.extend(parts.into_iter().map(|lines| LookedAt {
+                path: file.to_string(),
+                lines: lines.clone(),
+            }));
         }
     }
     out
@@ -368,7 +387,8 @@ impl Report {
 
     /// The report as `--json` gives it: one object, whatever happened.
     pub fn to_json_string(&self) -> String {
-        serde_json::to_string(&self.json()).unwrap_or_else(|e| format!("{{\"error\":\"could not write the report: {e}\"}}"))
+        serde_json::to_string(&self.json())
+            .unwrap_or_else(|e| format!("{{\"error\":\"could not write the report: {e}\"}}"))
     }
 
     /// The same as a value, which does not keep the order, for a test that looks fields up.
@@ -383,14 +403,24 @@ impl Report {
         let secs = self.seconds.round();
         let mut out = match self.status() {
             Status::Error => {
-                return format!("hugin --ask could not answer: {}\n", self.error.as_deref().unwrap_or_default());
+                return format!(
+                    "hugin --ask could not answer: {}\n",
+                    self.error.as_deref().unwrap_or_default()
+                );
             }
             Status::Answered => format!("hugin: answered in {secs} s on {}\n", self.model),
             Status::Partial if self.stopped => {
-                format!("hugin: PARTIAL — stopped at the {} s time limit; this is what it had by then.\n", self.time)
+                format!(
+                    "hugin: PARTIAL — stopped at the {} s time limit; this is what it had by then.\n",
+                    self.time
+                )
             }
             Status::Partial => {
-                let why = self.notes.first().cloned().unwrap_or_else(|| "the model gave no answer".to_string());
+                let why = self
+                    .notes
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "the model gave no answer".to_string());
                 format!("hugin: PARTIAL — {why} ({secs} s).\n")
             }
         };
@@ -439,7 +469,10 @@ pub fn execute(job: &Job, model: &str, wire: impl FnOnce(&Ctx) -> Wired) -> Repo
         time: job.time.as_secs(),
         ..Report::default()
     };
-    let finish = |report: Report| Report { seconds: print::seconds(started.elapsed()), ..report };
+    let finish = |report: Report| Report {
+        seconds: print::seconds(started.elapsed()),
+        ..report
+    };
 
     let ws = match Workspace::open(&job.folder) {
         Ok(ws) => ws,
@@ -448,7 +481,10 @@ pub fn execute(job: &Job, model: &str, wire: impl FnOnce(&Ctx) -> Wired) -> Repo
     report.folder = ws.root_display();
     // The same rule that makes every read in such a folder ask: nothing could be read from it here.
     if tools::broad_root(ws.root(), std::env::var_os("USERPROFILE").map(PathBuf::from).as_deref()) {
-        let why = format!("{} holds a whole drive or profile, which is too broad to read from; name the project folder with --folder", report.folder);
+        let why = format!(
+            "{} holds a whole drive or profile, which is too broad to read from; name the project folder with --folder",
+            report.folder
+        );
         return finish(report.fail(why));
     }
     // One run at a time, with `-p`: two would both load the model.
@@ -456,8 +492,15 @@ pub fn execute(job: &Job, model: &str, wire: impl FnOnce(&Ctx) -> Wired) -> Repo
         Ok(lock) => lock,
         Err(e) => return finish(report.fail(e)),
     };
-    let env = Env { system: Some(prompt(&ws)), offered: Some(offered()), ..Env::default() };
-    let ctx = Ctx { root: ws.root_display(), env };
+    let env = Env {
+        system: Some(prompt(&ws)),
+        offered: Some(offered()),
+        ..Env::default()
+    };
+    let ctx = Ctx {
+        root: ws.root_display(),
+        env,
+    };
     let wired = wire(&ctx);
 
     // The turn, on a thread of its own: a request to the model cannot be cut short.
@@ -467,12 +510,18 @@ pub fn execute(job: &Job, model: &str, wire: impl FnOnce(&Ctx) -> Wired) -> Repo
     let (tx, rx) = mpsc::channel();
     let (question, turn_progress, turn_stopper) = (job.question.clone(), progress.clone(), stopper.clone());
     stopper.begin();
-    let worker = std::thread::Builder::new().name("hugin-ask-turn".into()).spawn(move || {
-        let mut fe = Scout { progress: turn_progress, stopper: turn_stopper, shown: 0 };
-        let mut convo = vec![Message::user(&question)];
-        let result = run_turn_with(&mut convo, None, unattended::ROUNDS, &mut *ask, &mut *run, &mut fe);
-        let _ = tx.send(result);
-    });
+    let worker = std::thread::Builder::new()
+        .name("hugin-ask-turn".into())
+        .spawn(move || {
+            let mut fe = Scout {
+                progress: turn_progress,
+                stopper: turn_stopper,
+                shown: 0,
+            };
+            let mut convo = vec![Message::user(&question)];
+            let result = run_turn_with(&mut convo, None, unattended::ROUNDS, &mut *ask, &mut *run, &mut fe);
+            let _ = tx.send(result);
+        });
     if let Err(e) = worker {
         return finish(report.fail(format!("could not start the turn: {e}")));
     }
@@ -527,9 +576,19 @@ pub fn run(args: Args) -> ExitCode {
     // The model loads while the folder is opened. A failure is not news here: the first request meets it.
     let _ = start::warm(model.clone(), cfg.num_ctx);
 
-    let job = Job { question, folder: args.folder, time: args.time, started, work: scratch::work_dir() };
+    let job = Job {
+        question,
+        folder: args.folder,
+        time: args.time,
+        started,
+        work: scratch::work_dir(),
+    };
     let report = execute(&job, &model, |ctx| trace::wired(trace, &model, real(&model, ctx)));
-    let text = if json { format!("{}\n", report.to_json_string()) } else { report.to_text() };
+    let text = if json {
+        format!("{}\n", report.to_json_string())
+    } else {
+        report.to_text()
+    };
     let mut stdout = std::io::stdout().lock();
     let _ = stdout.write_all(text.as_bytes());
     let _ = stdout.flush();

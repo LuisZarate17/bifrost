@@ -68,7 +68,9 @@ pub fn is_test_path(path: &str) -> bool {
 /// Files that are prose: a line in them that mentions `assert` is not an assertion.
 fn is_prose(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
-    [".md", ".markdown", ".txt", ".rst", ".adoc"].iter().any(|ext| lower.ends_with(ext))
+    [".md", ".markdown", ".txt", ".rst", ".adoc"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
 }
 
 /// Whether a removed line is an assertion or marks a test: `assert…` in any spelling
@@ -89,14 +91,18 @@ pub fn asserts(line: &str) -> bool {
 /// last word is `test`. `#[cfg(test)]` is not one.
 fn is_test_attribute(code: &str) -> bool {
     let Some(at) = code.find("#[") else { return false };
-    let name: String = code[at + 2..].chars().take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':').collect();
+    let name: String = code[at + 2..]
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == ':')
+        .collect();
     name.rsplit("::").next() == Some("test")
 }
 
 /// `expect(` that begins a call — jest's — and not a method called on something.
 fn has_expect(code: &str) -> bool {
     let bytes = code.as_bytes();
-    code.match_indices("expect(").any(|(i, _)| i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || matches!(bytes[i - 1], b'_' | b'.')))
+    code.match_indices("expect(")
+        .any(|(i, _)| i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || matches!(bytes[i - 1], b'_' | b'.')))
 }
 
 /// `assert` that begins a word and is followed by what an assertion is followed by: `!`, `(`, `_`,
@@ -119,7 +125,10 @@ fn has_assert(code: &str) -> bool {
 /// a name with a space in it, or the quotes it puts round a name it escapes. `/dev/null` as it is.
 fn named(rest: &str) -> String {
     let name = rest.split('\t').next().unwrap_or(rest).trim_matches('"');
-    name.strip_prefix("a/").or_else(|| name.strip_prefix("b/")).unwrap_or(name).to_string()
+    name.strip_prefix("a/")
+        .or_else(|| name.strip_prefix("b/"))
+        .unwrap_or(name)
+        .to_string()
 }
 
 /// The existing test lines `patch` removes or changes, file by file in the order the patch has
@@ -148,7 +157,10 @@ pub fn changed_tests(patch: &[u8]) -> Vec<Bent> {
             }
             match out.last_mut() {
                 Some(last) if last.path == *path => last.removed.push(removed.to_string()),
-                _ => out.push(Bent { path: path.clone(), removed: vec![removed.to_string()] }),
+                _ => out.push(Bent {
+                    path: path.clone(),
+                    removed: vec![removed.to_string()],
+                }),
             }
         }
     }
@@ -171,7 +183,12 @@ pub fn listing(bent: &[Bent]) -> String {
     let mut lines: Vec<String> = Vec::new();
     for b in bent.iter().take(SHOWN_FILES) {
         lines.push(format!("{} (-{}):", b.path, b.removed.len()));
-        lines.extend(b.removed.iter().take(SHOWN_LINES).map(|line| format!("    {}", cut(line.trim()))));
+        lines.extend(
+            b.removed
+                .iter()
+                .take(SHOWN_LINES)
+                .map(|line| format!("    {}", cut(line.trim()))),
+        );
         if b.removed.len() > SHOWN_LINES {
             lines.push(format!("    … and {} more", b.removed.len() - SHOWN_LINES));
         }
@@ -216,7 +233,10 @@ pub fn review_line(bent: &[Bent], check_passed: bool) -> String {
 /// The line above the rest when the check failed and the patch changes existing tests as well:
 /// the failure is the status, and this says the tests were touched too.
 pub fn warning_line(bent: &[Bent]) -> String {
-    format!("hugin: WARNING — the patch changes existing tests ({}); check they were not bent to fit.", files_named(bent))
+    format!(
+        "hugin: WARNING — the patch changes existing tests ({}); check they were not bent to fit.",
+        files_named(bent)
+    )
 }
 
 #[cfg(test)]
@@ -225,11 +245,16 @@ mod tests {
 
     /// A file's diff, as git writes it: `old` is what the lines before the change look like.
     fn modified(path: &str, hunk: &str) -> String {
-        format!("diff --git a/{path} b/{path}\nindex 111..222 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,3 +1,3 @@\n{hunk}")
+        format!(
+            "diff --git a/{path} b/{path}\nindex 111..222 100644\n--- a/{path}\n+++ b/{path}\n@@ -1,3 +1,3 @@\n{hunk}"
+        )
     }
 
     fn found(patch: &str) -> Vec<(String, usize)> {
-        changed_tests(patch.as_bytes()).into_iter().map(|b| (b.path, b.removed.len())).collect()
+        changed_tests(patch.as_bytes())
+            .into_iter()
+            .map(|b| (b.path, b.removed.len()))
+            .collect()
     }
 
     #[test]
@@ -242,13 +267,22 @@ mod tests {
         let bent = changed_tests(patch.as_bytes());
         assert_eq!(bent.len(), 1);
         assert_eq!(bent[0].path, "apps/hugin/src/print_tests.rs");
-        assert_eq!(bent[0].removed, ["    assert_eq!(parse_check(\"NPM run build\"), Ok(words(&[\"npm.cmd\", \"run\", \"build\"])));"]);
-        assert_eq!(bent[0].warning(), "changes existing tests: apps/hugin/src/print_tests.rs (-1)");
+        assert_eq!(
+            bent[0].removed,
+            ["    assert_eq!(parse_check(\"NPM run build\"), Ok(words(&[\"npm.cmd\", \"run\", \"build\"])));"]
+        );
+        assert_eq!(
+            bent[0].warning(),
+            "changes existing tests: apps/hugin/src/print_tests.rs (-1)"
+        );
     }
 
     #[test]
     fn tests_that_are_only_added_are_not_bent() {
-        let added = modified("apps/hugin/src/print_tests.rs", " fn a() {\n+    assert_eq!(1, 1);\n+    assert!(true);\n }\n");
+        let added = modified(
+            "apps/hugin/src/print_tests.rs",
+            " fn a() {\n+    assert_eq!(1, 1);\n+    assert!(true);\n }\n",
+        );
         assert!(changed_tests(added.as_bytes()).is_empty());
         let new_file = "diff --git a/tests/new.rs b/tests/new.rs\nnew file mode 100644\nindex 0000000..222\n--- /dev/null\n+++ b/tests/new.rs\n@@ -0,0 +1,2 @@\n+#[test]\n+fn t() { assert!(true); }\n";
         assert!(changed_tests(new_file.as_bytes()).is_empty());
@@ -268,18 +302,32 @@ mod tests {
         let bent = changed_tests(gone.as_bytes());
         assert_eq!(bent.len(), 1);
         assert_eq!(bent[0].path, "tests/it.rs");
-        assert_eq!(bent[0].removed.len(), 3, "the blank line is not counted: {:?}", bent[0].removed);
+        assert_eq!(
+            bent[0].removed.len(),
+            3,
+            "the blank line is not counted: {:?}",
+            bent[0].removed
+        );
     }
 
     #[test]
     fn any_removed_line_of_a_test_file_counts_and_any_other_file_only_when_it_asserts() {
         // A test file: a removed line that asserts nothing, such as a helper's body.
-        let helper = modified("crates/x/tests/common.rs", " fn words(list: &[&str]) -> Vec<String> {\n-    list.iter().map(|s| s.to_string()).collect()\n+    list.iter().map(ToString::to_string).collect()\n }\n");
+        let helper = modified(
+            "crates/x/tests/common.rs",
+            " fn words(list: &[&str]) -> Vec<String> {\n-    list.iter().map(|s| s.to_string()).collect()\n+    list.iter().map(ToString::to_string).collect()\n }\n",
+        );
         assert_eq!(found(&helper), [("crates/x/tests/common.rs".to_string(), 1)]);
         // Not a test file: ordinary code changes, and an inline test's assertion or marker does.
-        let code = modified("src/lib.rs", "-pub fn add(a: i32, b: i32) -> i32 { a + b }\n+pub fn add(a: i32, b: i32) -> i32 { b + a }\n fn x() {}\n");
+        let code = modified(
+            "src/lib.rs",
+            "-pub fn add(a: i32, b: i32) -> i32 { a + b }\n+pub fn add(a: i32, b: i32) -> i32 { b + a }\n fn x() {}\n",
+        );
         assert!(changed_tests(code.as_bytes()).is_empty());
-        let inline = modified("src/lib.rs", " mod tests {\n-    #[test] fn adds() { assert_eq!(add(1, 2), 3); }\n+    #[test] fn adds() { assert_eq!(add(1, 2), 4); }\n }\n");
+        let inline = modified(
+            "src/lib.rs",
+            " mod tests {\n-    #[test] fn adds() { assert_eq!(add(1, 2), 3); }\n+    #[test] fn adds() { assert_eq!(add(1, 2), 4); }\n }\n",
+        );
         assert_eq!(found(&inline), [("src/lib.rs".to_string(), 1)]);
     }
 
@@ -287,18 +335,30 @@ mod tests {
     fn each_file_is_named_once_with_its_own_count_in_the_order_of_the_patch() {
         let patch = format!(
             "{}{}{}",
-            modified("tests/a.rs", "-    assert_eq!(a(), 1);\n-    assert_eq!(b(), 2);\n+    assert_eq!(a(), 2);\n fn c() {}\n"),
+            modified(
+                "tests/a.rs",
+                "-    assert_eq!(a(), 1);\n-    assert_eq!(b(), 2);\n+    assert_eq!(a(), 2);\n fn c() {}\n"
+            ),
             modified("src/lib.rs", "-pub fn f() {}\n+pub fn f() { g() }\n fn x() {}\n"),
-            modified("web/app.test.ts", "-  expect(f()).toBe(1);\n+  expect(f()).toBe(2);\n it('x', () => {});\n"),
+            modified(
+                "web/app.test.ts",
+                "-  expect(f()).toBe(1);\n+  expect(f()).toBe(2);\n it('x', () => {});\n"
+            ),
         );
-        assert_eq!(found(&patch), [("tests/a.rs".to_string(), 2), ("web/app.test.ts".to_string(), 1)]);
+        assert_eq!(
+            found(&patch),
+            [("tests/a.rs".to_string(), 2), ("web/app.test.ts".to_string(), 1)]
+        );
     }
 
     #[test]
     fn a_second_hunk_of_the_same_file_adds_to_it() {
         let patch = format!(
             "{}@@ -40,2 +40,2 @@\n-    assert_eq!(b(), 2);\n+    assert_eq!(b(), 3);\n fn d() {{}}\n",
-            modified("tests/a.rs", "-    assert_eq!(a(), 1);\n+    assert_eq!(a(), 2);\n fn c() {}\n"),
+            modified(
+                "tests/a.rs",
+                "-    assert_eq!(a(), 1);\n+    assert_eq!(a(), 2);\n fn c() {}\n"
+            ),
         );
         assert_eq!(found(&patch), [("tests/a.rs".to_string(), 2)]);
     }
@@ -411,8 +471,14 @@ mod tests {
     #[test]
     fn what_the_model_is_told_names_the_files_and_the_lines_to_put_back() {
         let bent = vec![
-            Bent { path: "tests/a.rs".into(), removed: vec!["    assert_eq!(a(), 1);".into(), "    assert_eq!(b(), 2);".into()] },
-            Bent { path: "web/app.test.ts".into(), removed: vec!["  expect(f()).toBe(1);".into()] },
+            Bent {
+                path: "tests/a.rs".into(),
+                removed: vec!["    assert_eq!(a(), 1);".into(), "    assert_eq!(b(), 2);".into()],
+            },
+            Bent {
+                path: "web/app.test.ts".into(),
+                removed: vec!["  expect(f()).toBe(1);".into()],
+            },
         ];
         assert_eq!(
             follow_up(&bent),
@@ -425,22 +491,44 @@ mod tests {
 
     #[test]
     fn a_long_list_is_cut_to_what_fits_and_says_how_much_more() {
-        let many: Vec<Bent> = (0..7).map(|n| Bent { path: format!("tests/f{n}.rs"), removed: vec!["x".repeat(300); 9] }).collect();
+        let many: Vec<Bent> = (0..7)
+            .map(|n| Bent {
+                path: format!("tests/f{n}.rs"),
+                removed: vec!["x".repeat(300); 9],
+            })
+            .collect();
         let told = follow_up(&many);
-        assert!(told.contains("tests/f4.rs (-9):") && !told.contains("tests/f5.rs"), "{told}");
-        assert!(told.contains("\n    … and 3 more") && told.contains("\n… and 2 more files"), "{told}");
-        assert!(told.contains(&format!("{}…", "x".repeat(160))) && !told.contains(&"x".repeat(161)), "lines are cut at 160");
+        assert!(
+            told.contains("tests/f4.rs (-9):") && !told.contains("tests/f5.rs"),
+            "{told}"
+        );
+        assert!(
+            told.contains("\n    … and 3 more") && told.contains("\n… and 2 more files"),
+            "{told}"
+        );
+        assert!(
+            told.contains(&format!("{}…", "x".repeat(160))) && !told.contains(&"x".repeat(161)),
+            "lines are cut at 160"
+        );
         assert!(told.len() < 6000, "{} bytes", told.len());
     }
 
     #[test]
     fn the_warning_line_names_the_files() {
-        let one = vec![Bent { path: "tests/a.rs".into(), removed: vec!["x".into()] }];
+        let one = vec![Bent {
+            path: "tests/a.rs".into(),
+            removed: vec!["x".into()],
+        }];
         assert_eq!(
             warning_line(&one),
             "hugin: WARNING — the patch changes existing tests (tests/a.rs); check they were not bent to fit."
         );
-        let many: Vec<Bent> = (0..6).map(|n| Bent { path: format!("t{n}.rs"), removed: vec!["x".into()] }).collect();
+        let many: Vec<Bent> = (0..6)
+            .map(|n| Bent {
+                path: format!("t{n}.rs"),
+                removed: vec!["x".into()],
+            })
+            .collect();
         assert_eq!(
             warning_line(&many),
             "hugin: WARNING — the patch changes existing tests (t0.rs, t1.rs, t2.rs, t3.rs, and 2 more); check they were not bent to fit."
@@ -449,7 +537,10 @@ mod tests {
 
     #[test]
     fn the_review_line_says_it_is_not_done_and_claims_a_passing_check_only_when_there_was_one() {
-        let one = vec![Bent { path: "tests/a.rs".into(), removed: vec!["x".into()] }];
+        let one = vec![Bent {
+            path: "tests/a.rs".into(),
+            removed: vec!["x".into()],
+        }];
         assert_eq!(
             review_line(&one, true),
             "hugin: REVIEW — the check passed, but the patch changes existing tests (tests/a.rs); not done until someone confirms the change was asked for."
@@ -458,15 +549,26 @@ mod tests {
             review_line(&one, false),
             "hugin: REVIEW — the patch changes existing tests (tests/a.rs); not done until someone confirms the change was asked for."
         );
-        let many: Vec<Bent> = (0..6).map(|n| Bent { path: format!("t{n}.rs"), removed: vec!["x".into()] }).collect();
+        let many: Vec<Bent> = (0..6)
+            .map(|n| Bent {
+                path: format!("t{n}.rs"),
+                removed: vec!["x".into()],
+            })
+            .collect();
         assert!(review_line(&many, true).contains("(t0.rs, t1.rs, t2.rs, t3.rs, and 2 more); not done"));
     }
 
     #[test]
     fn the_listing_is_what_the_model_and_the_reader_are_shown() {
         let bent = vec![
-            Bent { path: "tests/a.rs".into(), removed: vec!["    assert_eq!(a(), 1);".into(), "    assert_eq!(b(), 2);".into()] },
-            Bent { path: "web/app.test.ts".into(), removed: vec!["  expect(f()).toBe(1);".into()] },
+            Bent {
+                path: "tests/a.rs".into(),
+                removed: vec!["    assert_eq!(a(), 1);".into(), "    assert_eq!(b(), 2);".into()],
+            },
+            Bent {
+                path: "web/app.test.ts".into(),
+                removed: vec!["  expect(f()).toBe(1);".into()],
+            },
         ];
         assert_eq!(
             listing(&bent),

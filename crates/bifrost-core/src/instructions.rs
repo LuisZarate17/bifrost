@@ -30,7 +30,12 @@ use std::io::Read;
 use crate::edit::{self, Workspace};
 
 /// The files looked for, in this order. The first that yields text wins.
-pub const CANDIDATES: [&str; 4] = ["AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md", ".cursorrules"];
+pub const CANDIDATES: [&str; 4] = [
+    "AGENTS.md",
+    "CLAUDE.md",
+    ".github/copilot-instructions.md",
+    ".cursorrules",
+];
 
 /// The most of a notes file that is sent.
 pub const MAX_NOTES_BYTES: usize = 4 * 1024;
@@ -115,7 +120,11 @@ fn read(ws: &Workspace, name: &str) -> Option<Notes> {
         }
         text.push_str(CUT_NOTE);
     }
-    Some(Notes { name: name.to_string(), text, cut })
+    Some(Notes {
+        name: name.to_string(),
+        text,
+        cut,
+    })
 }
 
 #[cfg(test)]
@@ -167,7 +176,14 @@ mod tests {
             let s = Sandbox::new("each");
             s.write(name, "Build with cargo.\r\n");
             let notes = find(&s.ws()).unwrap_or_else(|| panic!("{name} not found"));
-            assert_eq!(notes, Notes { name: name.to_string(), text: "Build with cargo.\n".into(), cut: false });
+            assert_eq!(
+                notes,
+                Notes {
+                    name: name.to_string(),
+                    text: "Build with cargo.\n".into(),
+                    cut: false
+                }
+            );
         }
     }
 
@@ -243,7 +259,10 @@ mod tests {
         let s = Sandbox::new("outside");
         std::fs::create_dir_all(s.dir.join("elsewhere")).unwrap();
         std::fs::write(s.dir.join("elsewhere").join("copilot-instructions.md"), "not yours").unwrap();
-        assert!(junction(&s.dir.join("project").join(".github"), &s.dir.join("elsewhere")), "mklink /J failed");
+        assert!(
+            junction(&s.dir.join("project").join(".github"), &s.dir.join("elsewhere")),
+            "mklink /J failed"
+        );
         assert_eq!(find(&s.ws()), None);
     }
 
@@ -253,7 +272,13 @@ mod tests {
     fn a_notes_file_reached_through_a_link_that_stays_inside_is_refused() {
         let s = Sandbox::new("inside");
         s.write("ghdocs/copilot-instructions.md", "found through a junction");
-        assert!(junction(&s.dir.join("project").join(".github"), &s.dir.join("project").join("ghdocs")), "mklink /J failed");
+        assert!(
+            junction(
+                &s.dir.join("project").join(".github"),
+                &s.dir.join("project").join("ghdocs")
+            ),
+            "mklink /J failed"
+        );
         assert_eq!(find(&s.ws()), None);
     }
 
