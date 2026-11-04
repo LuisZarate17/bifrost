@@ -107,10 +107,6 @@ tools/      shortcuts, screenshots, end-to-end scripts that drive Mimir
 docs/       shortcuts.md, HOW-IT-WAS-BUILT.md, and archive/ (the raw development log)
 ```
 
-## Built with AI
-
-Designed and directed by me; built with AI pair-programming (Claude Code).
-
 ## License
 
 [MIT](LICENSE)
