@@ -19,6 +19,8 @@ report after each.
 | | J1b | askprobe: 12 code questions | ✅ Built · local | 6 from I5, rechecked, plus 6 new; selfcheck holds. qwen3-coder: 6 right, 5 partly, 1 wrong |
 | | J1c | Speed and memory, measured the same way for every model | ✅ Built · local | speedprobe. qwen3-coder: 33.9% on the CPU, decode 73 tok/s at 2.7k, 64 at 22k; free RAM low 4.5 GB under a cargo build |
 | | Gate J1 | The harness frozen; the bars set before any run | Practice run done 2026-11-01; waiting on your OK to lock | The bars are in [J1](results/J1-results.md) |
+| **2. Runs** | J2 | Screen: one model per session | ✅ Done 2026-11-01→02 | 4 models: B 4/10, qwen3.6 7/10, ornith 6/10, gpt-oss out at the gate — [J2](results/J2-results.md) |
 | | Gate J2 | At most two finalists | ✅ Done | qwen3.6:35b-a3b and ornith-1.5:9b |
 | | J3 | Run of record: the baseline and the finalists | ⏹ Stopped by Luis 2026-11-02 06:34 | B 13/30; qwen3.6 19 of 25 run (2 false done); ornith 12 of 21, stopped early as worse. qwen3.6 is the best coder tested; J4 waits on Luis — [J3](results/J3-results.md) |
+| **3. Switch** | J4 | Switch the coding model, only on a clear win | ✅ Done 2026-11-02 | `coding_model` is now qwen3.6:35b-a3b (was qwen3-coder:30b). Kept: qwen3.6 and Vidar's qwen3-vl:8b q8. Removed: qwen3-coder:30b, ornith-1.5:9b, gpt-oss:20b, three spare qwen3-vl sizes and llama3.1:8b (53 GB freed). Mimir tags qwen3.6 and ornith as Coding (measured) |
 | | J5 | Tuning: KV cache and context size | Not started | |

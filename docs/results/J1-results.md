@@ -120,7 +120,7 @@ false dones, then the faster median Hugin time. If none qualifies, J3 is not run
 "keep qwen3-coder".
 
 **Screen order:** B = qwen3-coder:30b first, then gpt-oss:20b (think high), qwen3.6 35B-A3B (its own
-rules. flint:40b is left out until an Ollama fix.
+think default) and ornith-1.5:9b. flint:40b is left out until an Ollama fix.
 
 **Offline:** every cargo run the probes start, Hugin's own check included, has
 `CARGO_NET_OFFLINE=true`. A patch that adds a dependency fails to build; nothing is downloaded or

@@ -262,6 +262,14 @@ pub struct Config {
     /// whole file.
     #[serde(deserialize_with = "lenient_model_settings", skip_serializing_if = "BTreeMap::is_empty")]
     pub model_settings: BTreeMap<String, ModelSettings>,
+    /// Your own "best at" labels for a model, keyed by its tag, shown in Mimir's model picker
+    /// after the built-in ones. Look a model up with [`Config::tags_for`], which ignores case
+    /// and treats `name` and `name:latest` as one model.
+    ///
+    /// **Read leniently**: an entry that is not a list is dropped, a label that is not text or
+    /// is blank is dropped, and an entry left with no labels is dropped.
+    #[serde(deserialize_with = "lenient_model_tags", skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_tags: BTreeMap<String, Vec<String>>,
     /// Fields this build does not know — a newer build's, or a person's own notes —
     /// kept as they were so the next save does not drop them.
     #[serde(flatten)]
@@ -384,6 +392,41 @@ where
         .collect())
 }
 
+/// `model_tags`, keeping only the entries that are a tag mapped to a list with at least one
+/// non-blank string in it.
+fn lenient_model_tags<'de, D>(d: D) -> Result<BTreeMap<String, Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(d)?;
+    let Some(map) = value.as_object() else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(map
+        .iter()
+        .filter_map(|(tag, labels)| {
+            let labels: Vec<String> = labels
+                .as_array()?
+                .iter()
+                .filter_map(|l| l.as_str())
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect();
+            (!labels.is_empty()).then(|| (tag.clone(), labels))
+        })
+        .collect())
+}
+
+/// `llama3.1` and `llama3.1:latest` name the same model to Ollama, in any case.
+fn same_model(a: &str, b: &str) -> bool {
+    let bare = |s: &str| {
+        let s = s.to_lowercase();
+        s.strip_suffix(":latest").map(str::to_string).unwrap_or(s)
+    };
+    bare(a) == bare(b)
+}
+
 /// `instructions`, keeping only the strings.
 fn lenient_instructions<'de, D>(d: D) -> Result<BTreeSet<String>, D::Error>
 where
@@ -418,6 +461,18 @@ impl Config {
     /// lower case, but a tag typed by hand may not be.
     pub fn settings_for(&self, model: &str) -> Option<&ModelSettings> {
         self.model_settings.iter().find(|(k, _)| k.eq_ignore_ascii_case(model)).map(|(_, v)| v)
+    }
+
+    /// The labels the config gives this model, if any: the entries whose tag is this model,
+    /// ignoring case and a trailing `:latest`, in the config's order, without repeats.
+    pub fn tags_for(&self, model: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for label in self.model_tags.iter().filter(|(k, _)| same_model(k, model)).flat_map(|(_, v)| v) {
+            if !out.contains(label) {
+                out.push(label.clone());
+            }
+        }
+        out
     }
 
     /// Whether the project's notes are sent for this folder.
@@ -455,6 +510,7 @@ impl Default for Config {
             claude_checks: false,
             claude_command: None,
             model_settings: BTreeMap::new(),
+            model_tags: BTreeMap::new(),
             extra: serde_json::Map::new(),
             unsaved: false,
         }
@@ -726,6 +782,7 @@ mod tests {
             claude_checks: true,
             claude_command: Some(r"C:\tools\claude.exe".into()),
             model_settings: BTreeMap::from([("gpt-oss:20b".into(), ModelSettings { think: Some(Think::High) })]),
+            model_tags: BTreeMap::from([("qwen3.6:35b-a3b".into(), vec!["Favourite".into()])]),
             extra: serde_json::Map::new(),
             unsaved: false,
         };
@@ -921,6 +978,74 @@ mod tests {
         assert_eq!(Think::parse(" High "), Some(Think::High));
         assert_eq!(Think::parse("OFF").map(Think::name), Some("off"));
         assert_eq!((Think::parse("true"), Think::parse(""), Think::parse("max")), (None, None, None));
+    }
+
+    #[test]
+    fn model_tags_parse_and_a_model_without_an_entry_has_none() {
+        let c: Config = serde_json::from_str(
+            r#"{"model":"m","model_tags":{"qwen3.6:35b-a3b":["Favourite","Fast"],"llama3.1:8b":["Chat"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.model, "m");
+        assert_eq!(c.model_tags.len(), 2);
+        assert_eq!(c.tags_for("qwen3.6:35b-a3b"), ["Favourite", "Fast"]);
+        assert_eq!(c.tags_for("llama3.1:8b"), ["Chat"]);
+        assert!(c.tags_for("gpt-oss:20b").is_empty());
+        assert!(Config::default().tags_for("anything").is_empty());
+    }
+
+    /// A typo in a hand-typed entry costs that entry, or that label, and not the file.
+    #[test]
+    fn a_bad_model_tags_entry_or_label_is_dropped() {
+        let c: Config = serde_json::from_str(
+            r#"{"model":"mine","model_tags":{
+                "a":"Favourite",
+                "b":{"x":"y"},
+                "c":null,
+                "d":[],
+                "e":["", "  ", 3, null, true],
+                "f":["Good", "", 7, " Padded "]}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.model, "mine");
+        let tags: Vec<&str> = c.model_tags.keys().map(String::as_str).collect();
+        assert_eq!(tags, ["f"], "the entries with no usable label are dropped");
+        assert_eq!(c.tags_for("f"), ["Good", "Padded"]);
+        // Not even a map: no tags, and still no reset.
+        for bad in [r#""oops""#, "null", "[]", "7", "true"] {
+            let c: Config = serde_json::from_str(&format!(r#"{{"model":"x","model_tags":{bad}}}"#)).unwrap();
+            assert_eq!((c.model.as_str(), c.model_tags.len()), ("x", 0), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_models_tags_are_found_whatever_the_case_or_a_latest_suffix() {
+        let c: Config = serde_json::from_str(
+            r#"{"model_tags":{"Huge/Model:Latest":["One"],"plain":["Two"],"tagged:8b":["Three"]}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.tags_for("huge/model:latest"), ["One"]);
+        assert_eq!(c.tags_for("HUGE/MODEL"), ["One"]);
+        assert_eq!(c.tags_for("plain:latest"), ["Two"]);
+        assert_eq!(c.tags_for("PLAIN"), ["Two"]);
+        assert_eq!(c.tags_for("tagged:8B"), ["Three"]);
+        assert!(c.tags_for("tagged").is_empty(), "a different tag is a different model");
+        assert!(c.tags_for("plain:8b").is_empty());
+    }
+
+    #[test]
+    fn model_tags_survive_a_save_and_an_empty_map_is_not_written() {
+        let p = temp_file("model-tags");
+        std::fs::write(&p, r#"{"model":"mine","model_tags":{"qwen3.6:35b-a3b":["Favourite"]}}"#).unwrap();
+        let c = load_from(&p);
+        save_to(&p, &c).unwrap();
+        let after = std::fs::read_to_string(&p).unwrap();
+        assert!(after.contains(r#""model_tags""#), "{after}");
+        assert_eq!(load_from(&p).tags_for("qwen3.6:35b-a3b"), ["Favourite"]);
+        assert_eq!(load_from(&p), c);
+        // Nothing set is nothing written, so a config that never used it is unchanged on disk.
+        assert!(Config::default().model_tags.is_empty());
+        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("model_tags"));
     }
 
     /// A `config.json` path in a folder of its own, **removed when the test ends** —

@@ -245,6 +245,9 @@ struct ModelInfo {
     /// What the family is known for, from the tag alone — see [`ollama::best_at`].
     /// Empty for a family it does not recognise.
     best_at: Vec<String>,
+    /// The user's own labels for this tag, from `model_tags` in the shared config, minus any
+    /// the built-in `best_at` already shows.
+    custom_tags: Vec<String>,
     /// Which apps follow this tag: "Vidar" for the shared model, "Hugin" for the
     /// coding model (which is also Mimir's coding offer). Can be both.
     roles: Vec<String>,
@@ -286,8 +289,11 @@ async fn models() -> Result<Vec<ModelInfo>, String> {
                 if same_tag(&m.name, &cfg.coding_model) {
                     roles.push("Hugin".to_string());
                 }
+                let best_at: Vec<String> = ollama::best_at(&m.name).into_iter().map(String::from).collect();
+                let custom_tags = cfg.tags_for(&m.name).into_iter().filter(|t| !best_at.contains(t)).collect();
                 ModelInfo {
-                    best_at: ollama::best_at(&m.name).into_iter().map(String::from).collect(),
+                    best_at,
+                    custom_tags,
                     roles,
                     is_current: m.name == cfg.model,
                     is_resident: resident.is_some(),

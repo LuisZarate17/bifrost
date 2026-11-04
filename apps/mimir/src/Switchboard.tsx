@@ -13,6 +13,8 @@ export type ModelInfo = {
   capabilities: string[];
   /** What the family is known for, from the tag alone. Empty when unrecognised. */
   bestAt: string[];
+  /** The user's own labels, from `model_tags` in the shared config. */
+  customTags: string[];
   /** Which apps follow this tag: "Vidar" (the shared model), "Hugin" (the coding model). */
   roles: string[];
   maxContext: number | null;
@@ -83,7 +85,6 @@ export function gpuFit(m: ModelInfo, card: CardState | null): { fits: boolean; s
 
 /** A "best at" chip's tooltip: what it means, and where the claim comes from. */
 function bestTitle(name: string, best: string): string {
-  if (best === "Custom") return "variant: its refusals were removed. It codes like the model it was made from.";
   const n = name.toLowerCase();
   if (best === "Coding" && (n.includes("qwen3.6") || n.includes("ornith"))) {
     return "Best at: coding, measured on real tasks in this repo (Stage J bake-off).";
@@ -241,6 +242,11 @@ export function Switchboard({
                       {m.bestAt.map((b) => (
                         <span key={b} className="cap best" title={bestTitle(m.name, b)}>
                           {b}
+                        </span>
+                      ))}
+                      {m.customTags.map((t) => (
+                        <span key={t} className="cap best" title="Your own tag, from model_tags in the config.">
+                          {t}
                         </span>
                       ))}
                       {m.roles.map((r) => (

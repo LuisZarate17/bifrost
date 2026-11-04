@@ -212,7 +212,6 @@ on. A finished model is removed if it's out, on your OK.
 3. **gpt-oss:20b** at think `high`. The only strong model that fits fully on the GPU, so the fastest.
 4. **ornith-1.5:9b**. Small and cheap; its tool use is suspect.
 5. **flint:40b**, optional, last, after an Ollama fix release. A day old on Windows.
-   confirmed to exist when J2 gets there.
 
 - **Each screen:** pull, speed and memory, toolprobe, askprobe ×1, taskprobe propose ×1.
   **realprobe ×1** only if toolprobe ≥ 9/10 and taskprobe is no more than 3/16 below B.

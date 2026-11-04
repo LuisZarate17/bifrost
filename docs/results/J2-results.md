@@ -58,14 +58,6 @@ Run overnight 2026-11-01→02 on autopilot.
   against B's 51, with about 7 rounds per run.
 - **Speed:** it fits on the card, with decode 121–130 tok/s and prefill about 6,200 tok/s.
 
-
-  reports tools.
-- **realprobe 5/10, 1 false done (05):** PASS on 02, 03, 04, 06 and 09. FAIL on 01, 07 and 10 (it
-  doesn't compile) and on 08.
-- **askprobe:** 5 right, 5 partly, 2 wrong. **taskprobe:** 9/16 at app settings, 8/16 at t=0.
-- **Speed:** the same as B, decode 73 tok/s.
-  run, which is within the noise. Removing refusals didn't hurt its coding.
-
 ## Gate J2, by the rule fixed at the lock
 
 The rule: a finalist has more realprobe PASSes than B (4), or the same number with fewer false

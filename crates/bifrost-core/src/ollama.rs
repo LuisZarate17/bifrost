@@ -490,9 +490,6 @@ pub fn best_at(tag: &str) -> Vec<&'static str> {
     if any(&["coder", "coding", "devstral", "codestral", "codellama", "starcoder", "qwen3.6", "ornith"]) {
         out.push("Coding");
     }
-    if any(&["variant", "custom"]) {
-        out.push("Custom");
-    }
     if any(&["-vl", "llava", "vision", "minicpm-v", "moondream"]) {
         out.push("Screenshots");
     }
@@ -818,7 +815,6 @@ mod tests {
         // Measured in Stage J's bake-off, not read off the name.
         assert_eq!(best_at("qwen3.6:35b-a3b"), ["Coding"]);
         assert_eq!(best_at("ornith-1.5:9b"), ["Coding"]);
-        assert_eq!(best_at("example/qwen3-coder-variant:latest"), ["Coding", "Custom"]);
     }
 
     #[test]
