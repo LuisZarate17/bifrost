@@ -99,12 +99,11 @@ pub const DEFAULT_COMMAND_TIMEOUT_SECS: u64 = 120;
 /// installed Hugin uses PowerShell.
 pub const DEFAULT_HUGIN_SHELL: &str = "bash";
 
-/// Chosen at Gate 2 (2026-10-01) from the H4 benchmark: 25/48 against 6/48 for
-/// `DEFAULT_MODEL`, at 32s/task. Text-only — reports no `vision` capability — so
-/// it is never the model Vidar can use, and the two cannot be resident
-/// together on this card: 18 GB plus the 6 GB vision model does not fit in 16 GB.
-/// See `docs/archive/results/H4-results.md`.
-pub const DEFAULT_CODING_MODEL: &str = "qwen3-coder:30b";
+/// Chosen by the 2026-11 model bake-off: 19 of 25 real tasks against 13 of 30 for
+/// the previous default, `qwen3-coder:30b`, at about 1.5× its decode speed. At about
+/// 22 GB it does not fit on a 16 GB card beside the vision model, so the two take
+/// turns. See `docs/HOW-IT-WAS-BUILT.md`, "Choosing the model".
+pub const DEFAULT_CODING_MODEL: &str = "qwen3.6:35b-a3b";
 
 /// Ollama's `think` setting for a model (J0d): `off`, or how hard it reasons before it
 /// answers. A model with no levels takes any level other than `off` as on.

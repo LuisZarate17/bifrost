@@ -1405,7 +1405,8 @@ mod tests {
     // ── model_offer ─────────────────────────────────────────────────────────
 
     const VISION: &str = "qwen3-vl:8b-instruct-q4_K_M";
-    const CODER: &str = "qwen3-coder:30b";
+    // The default config's coding model, whatever it currently is.
+    const CODER: &str = config::DEFAULT_CODING_MODEL;
 
     fn cfg_with_folder() -> config::Config {
         config::Config { model: VISION.into(), workspace: Some(r"C:\work\demo".into()), ..Default::default() }

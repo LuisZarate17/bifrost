@@ -1,139 +1,116 @@
 # Bifrost
 
-Local AI tools that share one model and one machine. Nothing leaves the computer on its own.
+Local-first AI tools for Windows 11: a screen assistant, a code-aware chat app and a terminal coding agent, all running on one local model.
+
+![Rust](https://img.shields.io/badge/Rust-stable-orange?style=flat&logo=rust)
+![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?style=flat&logo=typescript&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react&logoColor=black)
+![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat&logo=tauri&logoColor=white)
+![Ollama](https://img.shields.io/badge/Ollama-local%20models-000000?style=flat&logo=ollama&logoColor=white)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green?style=flat)](LICENSE)
+
+![Mimir proposing an edit: the diff is shown first, and applying it writes exactly that and keeps a backup](docs/images/mimir-edit.png)
+
+## What's in it
 
 | | |
 |---|---|
-| **Vidar** | A summoned overlay. Press a hotkey, get an answer about whatever is on screen, in a corner popup. **Finished and in daily use.** Its process also carries the **Bifrost tray** — the model's switch and picker, Open Mimir, Open Hugin (Ctrl+Alt+H), Start at login. |
-| **Mimir** | The main workspace: a local chat app that reads, finds and edits code in a folder you pick, runs the folder's check, and decides which model is loaded. **Built through Stage H** |
-| **Hugin** | A coding agent in the terminal, in the spirit of Claude Code, on Mimir's engine. **Built** (I2–I5): full screen, reads, searches, edits, the folder's check and any shell command, each approved first; **Ctrl+Alt+H** opens it in the last folder, and `hugin` works in any terminal. **`hugin -p`** lets Claude Code hand it a task: it works in a throwaway copy of the folder and hands back an answer, a patch and the check's result — [docs/archive/I-status.md](docs/archive/I-status.md) |
-| **`bifrost`** | Vidar's pipeline from the command line, plus `warm` / `off` / `status` power control |
+| **Vidar** | A tray app: press `Ctrl+Alt+W`, a local vision model looks at a screenshot, and the answer streams into a small popup in the corner. It also carries the Bifrost tray menu (model switch and picker, shortcuts to the other apps). |
+| **Mimir** | A desktop chat app: in a project folder you choose, it finds code, reads and edits files (each change approved by you first), runs the folder's check, and can undo what it did. |
+| **Hugin** | A coding agent for the terminal. `hugin -p "task"` works unattended in a scratch copy of the repo and returns a patch and a report; `hugin --ask "question"` answers code questions and lists the files it read. |
+| **`bifrost`** | The command line: Vidar's screenshot pipeline without the popup, plus `warm`, `off` and `status` to load and unload the model. |
 
-Things with an icon get a name; things you type get a description (docs/archive/PLAN.md §0b). Bifrost is the
-bridge between them.
-
-**Status.** Stages A–C are complete — `Ctrl+Alt+W` anywhere captures the screen and streams an
-answer into the popup. What is left of the original plan is one afternoon of testing, see
-[docs/archive/BUILD.md](docs/archive/BUILD.md). **Stages G and H are built** — Mimir chats, edits files in a folder
-you pick, finds code, runs the folder's check and undoes a whole turn; Stage G's checks by hand
-still wait in [docs/archive/G-testing.md](docs/archive/G-testing.md). **Now: Stage I** — the rename is done, Mimir's turn loop
-is now the shared engine's, and Hugin runs on it in the terminal; see [docs/archive/I-status.md](docs/archive/I-status.md).
-
-## The apps
-
-```
-npm run app:vidar              # build Vidar
-npm run app:mimir              # build Mimir
-target/debug/vidar.exe         # or the Desktop / Start Menu shortcuts
-target/debug/mimir.exe
-cargo build -p hugin           # Hugin is a plain console app: cargo is right for it
-node tools/shortcuts.mjs       # shortcuts for all three; Hugin to %LOCALAPPDATA%\bifrost\bin and the PATH
-hugin                          # in any terminal, in the folder you are in — or Ctrl+Alt+H
-```
-
-**Build the apps with `npm run`, not `cargo build`.** Cargo alone bakes `devUrl` into the binary,
-so the window loads from `localhost:1420` and shows WebView2's "can't reach this" page unless a Vite
-dev server happens to be running. `npm run app:vidar` is `tauri build --debug --no-bundle`: same debug
-profile, but the frontend is embedded, so the app opens and works on its own. A bare `cargo build`
-at the root now skips both apps for exactly this reason (`default-members` in `Cargo.toml`) —
-`cargo build -p mimir` would still do it, so don't.
-
-Release builds are refused by Smart App Control on this machine; debug builds usually run, and when
-one is blocked, rebuilding for a fresh hash clears it. See [docs/archive/PLAN.md](docs/archive/PLAN.md) §3.
-
-**Every control Vidar has is in [docs/shortcuts.md](docs/shortcuts.md)** — there is no menu and no
-window chrome, so that file is the interface.
-
-## The CLI
-
-The same pipeline without the GUI in the way. It is also ahead of the app on controls: a capture
-delay and a model flag for one run.
-
-The binary is `bifrost`, the project's own name — a name you type rather than one that carries an
-icon (docs/archive/PLAN.md §0b).
-
-```
-cargo build                                       # builds the crates (not the apps) into target/
-target/debug/bifrost                              # answer about your screen, now
-target/debug/bifrost 12                           # wait 12s first
-target/debug/bifrost --model qwen3-vl:4b-instruct-q8_0
-
-target/debug/bifrost warm                         # load the model and pin it in VRAM
-target/debug/bifrost off                          # release it, give the card its memory back
-target/debug/bifrost status                       # what is loaded, per Ollama and per the card
-```
-
-The model, the prompt and `num_ctx` come from `%APPDATA%\bifrost\config.json`, the file every app
-shares; with no file, the built-in defaults apply. Ollama is started automatically if it is not
-already running.
-
-## Where your data lives
-
-Settings, conversations, attachments and undo records are in `%APPDATA%\bifrost`. Until the rename
-on 2026-10-12 they were in `%APPDATA%\odin`: the first app or CLI run after the rename moves that
-folder once, whole, and leaves a `MOVED.txt` behind saying where it went. If `bifrost` already
-exists while `odin` still holds data, nothing is moved, `bifrost` is used, and the apps log a warning.
-
-## How it works
-
-A global hotkey triggers a full-screen capture via Windows Graphics Capture, which gets sent with a
-default prompt to a local vision model running in Ollama. The answer streams into a small popup
-pinned to the bottom-right corner. The popup never takes focus.
-
-The model holds **~8 GB** while resident, so `warm` and `off` are explicit rather than on a timer —
-a timeout decides for you and leaves you guessing whether the next press is instant or a stall.
-Power state reads the card through NVML, not `ollama ps`: the two disagree by ~2,500 MiB, and only
-one of them is the truth.
-
-## Layout
-
-One Cargo workspace and one npm workspace, so there is a single `target/`, a single lockfile of
-each kind, and a single `node_modules`.
-
-```
-bifrost/
-├── apps/
-│   ├── vidar/          the overlay — hotkey, popup, tray (src-tauri/ + its React frontend)
-│   ├── mimir/          the chat app — conversations, models, reading and editing files
-│   └── hugin/          the terminal agent — inline in the terminal, on the same turn loop
-├── packages/
-│   └── ui/             @bifrost/ui — the Markdown renderer both apps share
-├── crates/
-│   ├── bifrost-core/   shared — Ollama, VRAM readout, config, chat, tools, safe file edits
-│   ├── bifrost-cli/    the CLI, binary `bifrost`
-│   └── bench/          benchmark harness, plus the tool-call and file-edit probes
-├── evals/              rubric, fixtures, saved runs
-├── tools/              shortcuts, icon, the end-to-end tests that drive Mimir, the practice folder
-└── docs/               shortcuts, how it was built, and the raw development log (docs/archive/)
-```
-
-*(Restructured at Before-G0 step 1 of Stage G, renamed at I0 of Stage I. The project is
-**Bifrost** (was ODIN); **Vidar** is the overlay (was Heimdall) and **Mimir** the chat app (was
-Mímir). `docs/archive/` keeps the names it was written with — PLAN.md §0b.)*
-
-## Docs
-
-**[docs/archive/NAVIGATOR.md](docs/archive/NAVIGATOR.md) is the index to the development log** — it says what each document is and when to reach
-for it. The four you will actually open:
-
-| | |
+|  |  |
 |---|---|
-| [docs/shortcuts.md](docs/shortcuts.md) | Every control. This is the interface |
-| [docs/archive/PLAN.md](docs/archive/PLAN.md) | Scope, the machine, decisions already closed, hard rules |
-| [docs/archive/BUILD.md](docs/archive/BUILD.md) | The build plan, chunk by chunk, and what is left |
-| [docs/archive/stages/STAGE-I.md](docs/archive/stages/STAGE-I.md) | The next thing — one engine, and Hugin in the terminal |
+| ![Mimir reading a file: the model asks, and nothing is read until you allow it](docs/images/mimir-chat.png) | ![Mimir's model picker, with sizes, capabilities and how much of each model fits on the GPU](docs/images/mimir-models.png) |
 
-## Stack
+## Highlights
 
-Rust, Tauri 2, React + TypeScript, Ollama, Windows Graphics Capture.
+- **Fully local.** Everything runs on one model served by Ollama. The one opt-in exception is Mimir's "Check with Claude" button: off by default, only on a click, and it shows exactly what it would send first.
+- **Per-call approval, exact and undoable edits.** An edit is rendered to its final bytes and shown as a diff before anything is written. Applying it writes those bytes only, and undo restores the file byte for byte.
+- **Unattended coding in a scratch copy.** `hugin -p` never touches your folder: it works in a throwaway copy and hands back a patch and the check's result.
+- **Guards against faked passes and edited tests.** A "done" that follows a failing check is pushed back, patches that remove lines from existing tests are flagged for review, and a check that could not give a verdict is never reported as a pass.
+- **Resource limits on model-written code.** Every run is placed in a Windows job object: 8 GB per process, 24 GB per run, a free-disk floor, a timeout and offline builds.
+- **Model choice backed by hidden-test benchmarks.** The coding model was picked by running candidates on real tasks from this repo, scored by tests the model never sees. See [how it was built](docs/HOW-IT-WAS-BUILT.md).
 
-## Hard rules
+A look at Hugin's read-only mode (the answer is the model's; the file list is built from the reads that actually ran):
 
-- Local. Bifrost never calls the cloud on its own, and if a local model is bad at something, the
-  fix is a different local model, not a fallback. **One exception, on purpose (2026-10-12):** Stage
-  I's *Check with Claude* button in Mimir — off by default, only on a click, and it says what it
-  sends before it sends it. Built in I6. (Claude Code calling `hugin -p` is Claude's side
-  reaching in: Hugin itself still calls nothing.)
-- Summoned, never ambient — it only runs when the hotkey is pressed.
-- This is a personal daily-use tool, not a portfolio project. Features only earn their keep if
-  Luis actually uses them.
+```
+$ hugin --ask "where are the run memory limits set?"
+hugin: answered in 14 s on qwen3.6:35b-a3b
+
+The limits are constants in crates/bifrost-core/src/check.rs: PROCESS_MEMORY_LIMIT is 8 GB for
+any one process, and RUN_MEMORY_LIMIT is 24 GB for all the processes of a run together. Both are
+enforced through a Windows job object that the check runner puts every process in.
+
+looked at:
+  crates/bifrost-core/src/check.rs (lines 50-60)
+```
+
+## Getting started
+
+You need Windows 11, [Rust](https://rustup.rs) stable with the MSVC toolchain, Node.js 20.19 or newer (22 LTS is fine) and [Ollama](https://ollama.com). Then pull the models:
+
+```
+ollama pull qwen3-vl:8b-instruct-q4_K_M   # Vidar and the CLI: a vision model
+ollama pull qwen3.6:35b-a3b               # Hugin and Mimir's coding model (the benchmark winner)
+```
+
+Both are set in `%APPDATA%\bifrost\config.json`, the one file every app shares. The coding model is large (about 22 GB); on the development machine's 16 GB GPU, the part that does not fit runs on the CPU.
+
+```
+git clone https://github.com/LuisZarate17/bifrost.git
+cd bifrost
+npm install
+npm run app:vidar        # builds Vidar to target/debug/vidar.exe
+npm run app:mimir        # builds Mimir to target/debug/mimir.exe
+cargo build -p hugin     # Hugin is a plain console app, so cargo is right for it
+node tools/shortcuts.mjs # Desktop and Start Menu shortcuts; puts hugin on your PATH
+hugin                    # in any terminal, in the folder you are in
+```
+
+> **Tip:** build the two Tauri apps with `npm run app:*`, not `cargo build`. Plain cargo leaves the dev-server URL baked into the binary, so the window shows a "can't reach this page" error unless a dev server happens to be running. `npm run app:*` embeds the frontend, so the app opens on its own. A bare `cargo build` at the repository root skips both apps for that reason.
+
+Every Vidar control is listed in [docs/shortcuts.md](docs/shortcuts.md).
+
+## Architecture
+
+Everything that matters lives in one Rust crate, `crates/bifrost-core`: the Ollama client, tools and edits with undo, search, the check runner, scratch copies, context compaction and the shared config. The apps are thin frontends that show things and ask questions; the engine decides what is allowed. Mimir and Hugin drive the same agent turn loop behind a small `Frontend` interface, so the benchmark probes measure the code that ships.
+
+```mermaid
+flowchart LR
+    V[Vidar] & C[bifrost CLI] --> O[Ollama client]
+    M[Mimir] & H[Hugin] & P[bench probes] --> A[agent turn loop]
+    A --> E[tools, edits and undo, search, check runner]
+    A --> O
+    O --> L[(Ollama)]
+```
+
+More in [docs/HOW-IT-WAS-BUILT.md](docs/HOW-IT-WAS-BUILT.md).
+
+## How it's evaluated
+
+- Over 1,100 Rust unit tests, plus ten Node scripts that drive the real Mimir app and assert on what is on screen and on disk.
+- Benchmark probes in `crates/bench` measure the model, not the code: can it emit a well-formed tool call, can it solve function-level tasks, can it solve ten real tasks in this repo given through `hugin -p`, and can it answer questions about the code correctly. All are scored by hidden tests or fact checks, and were frozen before any candidate was run.
+- Result: on the real tasks `qwen3.6:35b-a3b` passed 76% of the runs it completed against 43% for the `qwen3-coder:30b` baseline, and decoded about 1.5 times faster. The run was stopped early and the write-up says what that leaves unproven.
+
+Details and the full tables are in [docs/HOW-IT-WAS-BUILT.md](docs/HOW-IT-WAS-BUILT.md).
+
+## Repository layout
+
+```
+apps/       vidar/ (tray app), mimir/ (chat app), hugin/ (terminal agent)
+crates/     bifrost-core/ (shared engine), bifrost-cli/ (the bifrost command), bench/ (benchmark probes)
+packages/   ui/ (the Markdown renderer both GUI apps share)
+evals/      benchmark tasks, fixtures and saved runs
+tools/      shortcuts, screenshots, end-to-end scripts that drive Mimir
+docs/       shortcuts.md, HOW-IT-WAS-BUILT.md, and archive/ (the raw development log)
+```
+
+## Built with AI
+
+Designed and directed by me; built with AI pair-programming (Claude Code).
+
+## License
+
+[MIT](LICENSE)

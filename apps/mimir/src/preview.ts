@@ -49,14 +49,14 @@ const MODELS: ModelInfo[] = [
     error: null,
   },
   {
-    name: "qwen3-coder:30b",
-    size: 18_600_000_000,
-    parameterSize: "30.5B",
+    name: "qwen3.6:35b-a3b",
+    size: 22_570_000_000,
+    parameterSize: "36.0B",
     quantization: "Q4_K_M",
     isCurrent: false,
     isResident: true,
-    residentMib: 12_500,
-    capabilities: ["completion", "tools"],
+    residentMib: 12_250,
+    capabilities: ["completion", "vision", "tools", "thinking"],
     bestAt: ["Coding"],
     customTags: [],
     roles: ["Hugin"],
@@ -179,7 +179,7 @@ export function installPreviewIpc() {
   // the ordinary "nothing to offer yet" that a real run sees most of the time.
   const previewOffer =
     new URLSearchParams(location.search).get("preview") === "offer"
-      ? { kind: "coding" as const, from: "qwen3-vl:8b-instruct-q4_K_M", to: "qwen3-coder:30b" }
+      ? { kind: "coding" as const, from: "qwen3-vl:8b-instruct-q4_K_M", to: "qwen3.6:35b-a3b" }
       : null;
 
   mockIPC(async (cmd, payload) => {
