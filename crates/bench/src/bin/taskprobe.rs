@@ -12,6 +12,9 @@
 //!
 //! Only 8 of the repo's commits add tests, so this mixes two kinds of task:
 //!
+//! The tasks name `odin-core` and `odin_core` on purpose: the pinned commits come from before the
+//! project was renamed Bifrost, and the code the model works on still uses those names.
+//!
 //! - **Real commits** (kind A): a detached worktree at `<commit>^`, the task is
 //!   to make the change that commit made to one odin-core file, scored by that
 //!   commit's own test. Four of them, one per odin-core file touched with tests:

@@ -26,7 +26,7 @@ npm run app:mimir              # build Mimir
 target/debug/vidar.exe         # or the Desktop / Start Menu shortcuts
 target/debug/mimir.exe
 cargo build -p hugin           # Hugin is a plain console app: cargo is right for it
-node tools/shortcuts.mjs       # shortcuts for all three; Hugin to %LOCALAPPDATA%ifrostin and the PATH
+node tools/shortcuts.mjs       # shortcuts for all three; Hugin to %LOCALAPPDATA%\bifrost\bin and the PATH
 hugin                          # in any terminal, in the folder you are in — or Ctrl+Alt+H
 ```
 

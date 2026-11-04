@@ -6,7 +6,7 @@
 //! Until H2, `read_file` was only any use when someone named the file. H1's fix
 //! probe watched the model read an error that could only be in `main.rs` and go
 //! on editing `config.rs`. This measures whether `list_files` and `search` fix
-//! that — on a real codebase, odin itself, as a detached git worktree at a pinned
+//! that — on a real codebase, this one (then named odin), as a detached git worktree at a pinned
 //! commit so the answers cannot move.
 //!
 //! Eighteen questions, three kinds:
@@ -455,7 +455,7 @@ fn main() {
         eprintln!("could not start Ollama: {e}");
         std::process::exit(1);
     }
-    let tree = match Worktree::add(&scratch.join("odin")) {
+    let tree = match Worktree::add(&scratch.join("bifrost")) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("could not check out {PIN}: {e}");
@@ -468,7 +468,7 @@ fn main() {
     println!("H2 — find probe");
     println!("model:     {model}");
     println!("ctx:       {}", cfg.num_ctx);
-    println!("codebase:  odin at {PIN}, {} questions", questions.len());
+    println!("codebase:  bifrost at {PIN}, {} questions", questions.len());
     println!("runs:      {runs} at the app's own settings, plus 1 at temperature 0");
     println!("bound:     {PROBE_ROUNDS} rounds (the app stops at {})", tools::MAX_ROUNDS);
     if variants.contains(&Variant::Map) {
