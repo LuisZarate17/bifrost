@@ -51,7 +51,7 @@ export function splitName(name: string): { family: string; size: string; tag: st
  */
 const BADGES = [
   { key: "vision", label: "Vision", Icon: Eye, title: "Can be sent images. Vidar needs this for screenshots." },
-  { key: "tools", label: "Tools", Icon: Wrench, title: "Can emit structured tool calls (see docs/G0-results.md)." },
+  { key: "tools", label: "Tools", Icon: Wrench, title: "Can emit structured tool calls." },
   { key: "thinking", label: "Thinking", Icon: Bulb, title: "Can reason before it answers. Slower, often better on hard problems." },
 ] as const;
 
