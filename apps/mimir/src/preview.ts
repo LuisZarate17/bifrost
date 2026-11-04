@@ -156,7 +156,7 @@ function seedConversations(): Summary[] {
 
 const STREAMED = `Here is the short version of **docs/PLAN.md**:
 
-1. **Vidar** answers about whatever is on screen, in a popup no screen-share can see.
+1. **Vidar** answers about whatever is on screen, in a small popup in the corner.
 2. **Mimir** is the chat window, sharing Vidar's model and deciding which one is loaded.
 3. Both run on one machine, and nothing leaves it.
 
