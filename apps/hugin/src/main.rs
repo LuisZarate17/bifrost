@@ -30,6 +30,8 @@ mod print;
 mod print_tests;
 mod render;
 mod session;
+#[cfg(test)]
+mod shots_tests;
 mod start;
 mod stop;
 #[cfg(test)]

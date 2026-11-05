@@ -29,14 +29,14 @@ use crate::tests::{answer, edit, edited, header};
 
 /// A `TestBackend` that can be looked at while the interface owns it.
 #[derive(Clone)]
-struct Peek(Rc<RefCell<TestBackend>>);
+pub(crate) struct Peek(Rc<RefCell<TestBackend>>);
 
 impl Peek {
-    fn new(width: u16, height: u16) -> Self {
+    pub(crate) fn new(width: u16, height: u16) -> Self {
         Self(Rc::new(RefCell::new(TestBackend::new(width, height))))
     }
 
-    fn with<T>(&self, f: impl FnOnce(&mut TestBackend) -> T) -> T {
+    pub(crate) fn with<T>(&self, f: impl FnOnce(&mut TestBackend) -> T) -> T {
         f(&mut self.0.borrow_mut())
     }
 }
@@ -161,7 +161,7 @@ impl Keystrokes {
 }
 
 /// A session whose model says `asks` in turn, each after `delay`, and whose runner gives `runs`.
-fn session(
+pub(crate) fn session(
     asks: Vec<Result<Round, String>>,
     runs: Vec<Result<Ran, String>>,
     delay: Duration,

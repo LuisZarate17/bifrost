@@ -15,6 +15,7 @@
     "check:fixes": "node evals/fixcheck.mjs",
     "app:mimir": "npm run app -w apps/mimir",
     "dev:mimir": "npm run dev -w apps/mimir",
-    "shots:mimir": "node tools/mimir-shots.mjs"
+    "shots:mimir": "node tools/mimir-shots.mjs",
+    "shots:hugin": "node tools/hugin-shots.mjs"
   }
 }

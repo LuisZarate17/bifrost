@@ -34,19 +34,12 @@ Local-first AI tools for Windows 11: a screen assistant, a code-aware chat app a
 - **Resource limits on model-written code.** Every run is placed in a Windows job object: 8 GB per process, 24 GB per run, a free-disk floor, a timeout and offline builds.
 - **Model choice backed by hidden-test benchmarks.** The coding model was picked by running candidates on real tasks from this repo, scored by tests the model never sees. See [how it was built](docs/HOW-IT-WAS-BUILT.md).
 
-A look at Hugin's read-only mode (the answer is the model's; the file list is built from the reads that actually ran):
+A look at Hugin. These are drawn by Hugin's own rendering code from a scripted session (`npm run shots:hugin`), so no model ran for them, except that the `--ask` answer is a real one from `qwen3.6:35b-a3b`, and its file list is built from the reads that actually ran.
 
-```
-$ hugin --ask "where are the run memory limits set?"
-hugin: answered in 14 s on qwen3.6:35b-a3b
-
-The limits are constants in crates/bifrost-core/src/check.rs: PROCESS_MEMORY_LIMIT is 8 GB for
-any one process, and RUN_MEMORY_LIMIT is 24 GB for all the processes of a run together. Both are
-enforced through a Windows job object that the check runner puts every process in.
-
-looked at:
-  crates/bifrost-core/src/check.rs (lines 50-60)
-```
+|  |  |
+|---|---|
+| ![Hugin's start screen: the raven, the folder and its git state, the model and the shell](docs/images/hugin-start.png) | ![Hugin mid-task: it searched and read check.rs, and now asks before making a one-line edit, shown as a diff](docs/images/hugin-session.png) |
+| ![hugin -p: an unattended run that ends with the check's result and a patch to apply](docs/images/hugin-run.png) | ![hugin --ask: a read-only answer and the files it looked at](docs/images/hugin-ask.png) |
 
 ## Getting started
 
