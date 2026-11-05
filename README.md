@@ -2,6 +2,7 @@
 
 Local-first AI tools for Windows 11: a screen assistant, a code-aware chat app and a terminal coding agent, all running on one local model.
 
+[![CI](https://github.com/LuisZarate17/bifrost/actions/workflows/ci.yml/badge.svg)](https://github.com/LuisZarate17/bifrost/actions/workflows/ci.yml)
 ![Rust](https://img.shields.io/badge/Rust-stable-orange?style=flat&logo=rust)
 ![TypeScript](https://img.shields.io/badge/TypeScript-6-3178C6?style=flat&logo=typescript&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react&logoColor=black)
@@ -90,6 +91,7 @@ More in [docs/HOW-IT-WAS-BUILT.md](docs/HOW-IT-WAS-BUILT.md).
 
 ## How it's evaluated
 
+- CI runs fmt, clippy and the full unit suite on Windows on every push; model-dependent and memory-heavy tests are excluded with `#[ignore]`.
 - Over 1,100 Rust unit tests, plus ten Node scripts that drive the real Mimir app and assert on what is on screen and on disk.
 - Benchmark probes in `crates/bench` measure the model, not the code: can it emit a well-formed tool call, can it solve function-level tasks, can it solve ten real tasks in this repo given through `hugin -p`, and can it answer questions about the code correctly. All are scored by hidden tests or fact checks, and were frozen before any candidate was run.
 - Result: on the real tasks `qwen3.6:35b-a3b` passed 76% of the runs it completed against 43% for the `qwen3-coder:30b` baseline, and decoded about 1.5 times faster. The run was stopped early and the write-up says what that leaves unproven.
