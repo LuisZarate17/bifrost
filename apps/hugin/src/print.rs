@@ -251,7 +251,9 @@ pub fn resolve_check(
     let use_instead = "name it relative to the folder (such as .\\verify.cmd), which runs the copy's version, \
                        or use a program on PATH";
     let resolved = if given.is_absolute() {
-        let at = lexical(given);
+        // As the file system has it, like the roots: a short name (`C:\Users\RUNNER~1`) or a
+        // junction must not slip a file in the repository past the comparison.
+        let at = real_path(&lexical(given));
         if inside(&at, repo_root) {
             return Err(format!(
                 "--check names {program}, a file in your repository ({}); hugin runs the copy's, not yours: {use_instead}",
